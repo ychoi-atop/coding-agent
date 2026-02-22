@@ -3,6 +3,7 @@ llm:
   api_key: "lm-studio"
   model: "openai/gpt-oss-20b"
   timeout_sec: 600
+  max_tokens: 2048
 
 run:
   max_role_retries: 1
