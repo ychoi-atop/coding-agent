@@ -31,7 +31,13 @@ class Validators:
             result = self.kernel.run(self.kernel.module_cmd("pytest", "-q"))
         elif name == "pip_audit":
             result = self.kernel.run(
-                self.kernel.module_cmd("pip_audit", "-r", "requirements.txt")
+                self.kernel.module_cmd(
+                    "pip_audit",
+                    "-r",
+                    "requirements.txt",
+                    "--cache-dir",
+                    ".pip_audit_cache",
+                )
             )
         elif name == "bandit":
             result = self.kernel.run(self.kernel.module_cmd("bandit", "-q", "-r", "src"))

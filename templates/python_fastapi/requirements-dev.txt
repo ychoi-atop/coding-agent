@@ -1,0 +1,6 @@
+pytest
+httpx
+ruff
+mypy
+pip-audit
+bandit

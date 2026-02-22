@@ -41,6 +41,7 @@ def cli() -> None:
         api_key=llm_cfg.get("api_key", ""),
         model=llm_cfg["model"],
         timeout_sec=int(llm_cfg.get("timeout_sec", 180)),
+        max_tokens=int(llm_cfg["max_tokens"]) if llm_cfg.get("max_tokens") is not None else None,
     )
 
     workspace = Workspace(args.out)

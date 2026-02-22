@@ -42,6 +42,7 @@ async def run_enterprise_autodev(
     max_fix_loops: int,
     max_role_retries: int = 1,
 ) -> dict[str, Any]:
+    forbidden_paths = {"ruff.py", "mypy.py", "pip_audit.py", "bandit.py", "docker"}
     ws.apply_template(template_dir)
 
     prompt_map = prompts()
@@ -94,6 +95,19 @@ async def run_enterprise_autodev(
             }
 
         writes = [FileWrite(path=item["path"], content=item["content"]) for item in data["writes"]]
+        invalid_paths = [
+            write.path
+            for write in writes
+            if write.path.strip().lstrip("./").replace("\\", "/") in forbidden_paths
+        ]
+        if invalid_paths:
+            return {
+                "ok": False,
+                "reason": "forbidden_generated_file",
+                "role": role,
+                "paths": invalid_paths,
+                "last_validation": last_validation,
+            }
         ws.write_files(writes)
         role = data["next_role"]
 
