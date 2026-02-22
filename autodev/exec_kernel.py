@@ -29,12 +29,16 @@ class ExecKernel:
     def __init__(self, cwd: str, timeout_sec: int = 600):
         self.cwd = cwd
         self.timeout = timeout_sec
-        self.python_executable = shutil.which("python") or shutil.which("python3") or sys.executable
+        venv_python = os.path.join(cwd, ".venv", "bin", "python")
+        if os.path.isfile(venv_python) and os.access(venv_python, os.X_OK):
+            self.python_executable = venv_python
+        else:
+            self.python_executable = shutil.which("python") or shutil.which("python3") or sys.executable
 
     def _allowed(self, cmd: list[str]) -> bool:
-        if len(cmd) >= 3 and cmd[1] == "-m":
+        if len(cmd) >= 4 and cmd[1] == "-I" and cmd[2] == "-m":
             exe = os.path.basename(cmd[0])
-            if exe.startswith("python") and cmd[2] in self.ALLOWED_PY_MODULES:
+            if exe.startswith("python") and cmd[3] in self.ALLOWED_PY_MODULES:
                 return True
         for prefix in self.ALLOWLIST_PREFIXES:
             if cmd[: len(prefix)] == prefix:
@@ -44,7 +48,8 @@ class ExecKernel:
     def module_cmd(self, module: str, *args: str) -> list[str]:
         if module not in self.ALLOWED_PY_MODULES:
             raise ValueError(f"Module not allowlisted: {module}")
-        return [self.python_executable, "-m", module, *args]
+        # Use isolated mode to avoid local module shadowing (e.g., ruff.py in repo root).
+        return [self.python_executable, "-I", "-m", module, *args]
 
     def run(self, cmd: list[str]) -> CmdResult:
         if not self._allowed(cmd):

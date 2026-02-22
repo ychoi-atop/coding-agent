@@ -16,6 +16,7 @@ You MUST output ONLY JSON (no markdown fences) with this schema:
 Rules:
 - writes must be complete file contents (not diffs).
 - Never suggest dangerous commands.
+- Never create fake tool modules or wrappers that bypass validation (e.g. ruff.py, mypy.py, pip_audit.py, bandit.py, docker script stubs).
 - Keep changes minimal and focused.
 """
 
@@ -69,4 +70,3 @@ Writes usually empty here.
 """,
         },
     }
-
