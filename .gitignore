@@ -1,14 +1,6 @@
 __pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-build/
-dist/
-generated_repo/
-
+*.pyc
 .venv/
 tmp/
-
+autodev_agent.egg-info/
+generated_repo/
