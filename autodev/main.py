@@ -1,15 +1,41 @@
 from __future__ import annotations
-import argparse, os
+import argparse
+import os
+import re
+from datetime import datetime
+from pathlib import Path
 from .config import load_config
 from .llm_client import LLMClient
 from .workspace import Workspace
 from .loop import run_autodev_enterprise
 from .report import write_report
 
+def _slugify_prd_stem(prd_path: str) -> str:
+    stem = Path(prd_path).stem.strip()
+    if not stem:
+        return "prd"
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-._")
+    return slug or "prd"
+
+def _resolve_output_dir(prd_path: str, out_root: str) -> str:
+    prd_slug = _slugify_prd_stem(prd_path)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    root = Path(out_root).expanduser()
+    candidate = root / f"{prd_slug}_{ts}"
+    suffix = 1
+    while candidate.exists():
+        candidate = root / f"{prd_slug}_{ts}_{suffix:02d}"
+        suffix += 1
+    return str(candidate)
+
 def cli():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prd", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--out",
+        required=True,
+        help="Output root directory. A run folder named '<prd-file-stem>_<timestamp>' is created inside it.",
+    )
     ap.add_argument("--profile", default="enterprise")
     ap.add_argument("--config", default="config.yaml")
     args = ap.parse_args()
@@ -28,7 +54,8 @@ def cli():
         timeout_sec=int(llm_cfg.get("timeout_sec", 240)),
     )
 
-    ws = Workspace(args.out)
+    run_out = _resolve_output_dir(args.prd, args.out)
+    ws = Workspace(run_out)
     template_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "templates"))
 
     import asyncio
@@ -49,7 +76,7 @@ def cli():
     )
 
     write_report(ws.root, prd_struct, plan, last_validation, ok)
-    print({"ok": ok, "out": os.path.abspath(args.out)})
+    print({"ok": ok, "out": os.path.abspath(run_out)})
     if not ok:
         raise SystemExit(1)
 

@@ -9,7 +9,7 @@
 5) 로컬에서 **실제 실행 검증**: ruff / mypy / pytest / bandit / pip-audit / semgrep / SBOM / docker build
 6) 실패 시 로그 기반 **자동 수정 루프(Self-healing)**
 7) 최종 산출물:
-   - `generated_repo/` (동작하는 소프트웨어)
+   - `generated_runs/<prd파일명>_<timestamp>/` (동작하는 소프트웨어)
    - `.autodev/` (prd_struct.json, plan.json, task별 검증 로그, REPORT.md)
 
 ---
@@ -42,8 +42,9 @@ pip install -r requirements.txt
 ## 실행
 예시 PRD:
 ```bash
-python -m autodev.main --prd examples/PRD.md --out ./generated_repo --profile enterprise
+python -m autodev.main --prd examples/PRD.md --out ./generated_runs --profile enterprise
 ```
+위 명령은 예를 들어 `generated_runs/PRD_20260223_153045/` 같은 실행별 디렉터리를 생성합니다.
 
 ---
 
