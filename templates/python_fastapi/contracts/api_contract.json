@@ -1,10 +1,41 @@
 {
   "title": "AutoDev API Contract",
+  "schemas": {
+    "ErrorResponse": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"type": "string"},
+            "message": {"type": "string"},
+            "details": {"type": "object"}
+          }
+        }
+      }
+    },
+    "HealthResponse": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": {"type": "boolean"}
+      }
+    }
+  },
   "endpoints": [
     {
       "method": "get",
       "path": "/health",
-      "responses": ["200"]
+      "request": null,
+      "responses": {
+        "200": {
+          "content_type": "application/json",
+          "schema_ref": "HealthResponse",
+          "example": {"ok": true}
+        }
+      }
     }
   ]
 }

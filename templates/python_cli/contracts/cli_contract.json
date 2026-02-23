@@ -1,6 +1,11 @@
 {
   "title": "AutoDev CLI Contract",
+  "prog": "autodev-cli",
   "args": [
-    {"flag": "--hello", "required": false}
+    {"flag": "--hello", "required": false, "type": "string", "default": "world"}
+  ],
+  "examples": [
+    {"argv": ["--hello", "agent"], "exit_code": 0, "stdout": "hello agent\n"},
+    {"argv": [], "exit_code": 0, "stdout": "hello world\n"}
   ]
 }
