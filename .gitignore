@@ -4,3 +4,4 @@ __pycache__/
 tmp/
 autodev_agent.egg-info/
 generated_repo/
+runs/

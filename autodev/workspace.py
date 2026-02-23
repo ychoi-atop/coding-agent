@@ -82,9 +82,12 @@ class Workspace:
                 if c.content is None:
                     raise ValueError("patch op requires content(diff)")
                 if not self.exists(c.path):
-                    raise FileNotFoundError(f"Cannot patch missing file: {c.path}")
-                original = self.read_text(c.path)
-                updated = apply_unified_diff(original, c.content)
-                self.write_text(c.path, updated)
+                    # fallback: if patch is requested on missing file, treat as write (full rewrite)
+                    updated = apply_unified_diff("", c.content)
+                    self.write_text(c.path, updated)
+                else:
+                    original = self.read_text(c.path)
+                    updated = apply_unified_diff(original, c.content)
+                    self.write_text(c.path, updated)
             else:
                 raise ValueError(f"Unknown op: {c.op}")
