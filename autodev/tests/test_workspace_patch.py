@@ -71,7 +71,7 @@ def test_workspace_apply_changes_rolls_back_partial_apply_on_failure(tmp_path: P
     assert ws.read_text("before.txt") == "keep\n"
 
 
-def test_workspace_apply_changes_skips_unchanged_write(tmp_path: Path):
+def test_workspace_apply_changes_skips_unchanged_write(tmp_path: Path, monkeypatch):
     ws = Workspace(tmp_path)
     ws.write_text("app.py", "a = 1\n")
 
@@ -82,7 +82,7 @@ def test_workspace_apply_changes_skips_unchanged_write(tmp_path: Path):
         writes["count"] += 1
         return original_write_text(path, content)
 
-    ws.write_text = tracked_write_text
+    monkeypatch.setattr(ws, "write_text", tracked_write_text)
 
     ws.apply_changes([Change(op="write", path="app.py", content="a = 1\n")])
 

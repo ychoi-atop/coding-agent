@@ -709,8 +709,9 @@ async def run_autodev_enterprise(
     )
 
     if use_cached:
-        prd_struct = cast(Dict[str, Any], cache_payload["prd_struct"])
-        plan = cast(Dict[str, Any], cache_payload["plan"])
+        cached = cast(Dict[str, Any], cache_payload)
+        prd_struct = cast(Dict[str, Any], cached["prd_struct"])
+        plan = cast(Dict[str, Any], cached["plan"])
         _log_event(
             "run.cache_hit",
             run_id=run_id,
@@ -1206,10 +1207,11 @@ async def run_autodev_enterprise(
     ):
         final_perf_attempts += 1
         total_fix_loops += 1
-        perf_targets = performance_context
-        perf_hotspots = []
-        if isinstance(perf_targets.get("latency_sensitive_paths"), list):
-            perf_hotspots = perf_targets["latency_sensitive_paths"]
+        perf_targets = performance_context if isinstance(performance_context, dict) else {}
+        perf_hotspots: list[str] = []
+        latency_paths = perf_targets.get("latency_sensitive_paths")
+        if isinstance(latency_paths, list):
+            perf_hotspots = [str(p) for p in latency_paths]
 
         perf_retry_set = _targeted_perf_validator_set(
             failed_perf_rows=failed_perf_rows,
@@ -1233,7 +1235,7 @@ async def run_autodev_enterprise(
         perf_payload = _build_task_payload(plan, perf_task, performance_context=performance_context)
         perf_payload["validation"] = last_validation
         perf_payload["performance_failures"] = failed_perf_rows
-        perf_payload["files_context"] = _build_files_context(ws, perf_task["files"])
+        perf_payload["files_context"] = _build_files_context(ws, cast(List[str], perf_task["files"]))
         perf_payload["guidance"] = "Target only performance-flagged hotspots. Keep edits minimal and path-specific."
 
         _log_event(

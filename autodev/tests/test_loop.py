@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import json
 import asyncio
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 import pytest
 
@@ -103,7 +103,7 @@ class _FakeValidation:
         self.note = ""
         self.duration_ms = 0
         self.tool_version = "1.0"
-        self.error_classification = None
+        self.error_classification: Optional[str] = None
 
 
 class _FakeValidators:
@@ -273,7 +273,7 @@ class _FakePassingValidation:
         self.note = ""
         self.duration_ms = 0
         self.tool_version = "1.0"
-        self.error_classification = None
+        self.error_classification: Optional[str] = None
 
 
 class _FakePassingValidators:
