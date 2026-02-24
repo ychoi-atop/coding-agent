@@ -25,7 +25,7 @@
     },
     "EchoRequest": {
       "type": "object",
-      "required": ["payload", "repeat"],
+      "required": ["payload"],
       "properties": {
         "payload": {"type": "string"},
         "repeat": {"type": "integer", "minimum": 1, "maximum": 3}

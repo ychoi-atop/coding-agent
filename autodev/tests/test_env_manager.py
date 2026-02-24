@@ -4,10 +4,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT))  # noqa: E402
 
-from autodev.env_manager import EnvManager
-from autodev.exec_kernel import CmdResult
+from autodev.env_manager import EnvManager  # noqa: E402
+from autodev.exec_kernel import CmdResult  # noqa: E402
 
 
 class FakeKernel:

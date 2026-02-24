@@ -130,6 +130,12 @@ Inside each run folder:
 - `.autodev/REPORT.md`: final summary with pass/fail status and last validation output.
 - `sbom/` artifacts (from `scripts/generate_sbom.py`), including CycloneDX JSON and license reports.
 
+## Supply-chain and dependency lock guidance (templates)
+Generated templates now keep pinned dependency locks:
+- Runtime/development requirements are pinned in `requirements.txt` and `requirements-dev.txt`.
+- Direct lock files are maintained in `requirements.lock` and `requirements-dev.lock`.
+- For refresh and verification guidance, see `docs/ops/requirements-locking.md`.
+
 ## Validators
 Supported validator names:
 - `ruff`

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+from uuid import uuid4
 import os
 import re
 from datetime import datetime
@@ -14,6 +16,26 @@ from .workspace import Workspace
 from .loop import run_autodev_enterprise
 from .report import write_report
 from .json_utils import json_dumps
+
+logger = logging.getLogger("autodev")
+
+
+def _configure_logging() -> None:
+    if logger.handlers:
+        return
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+
+def _log_event(event: str, **fields: object) -> None:
+    payload = {
+        "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "event": event,
+        **fields,
+    }
+    if logger.handlers:
+        logger.info(json_dumps(payload))
+    else:
+        print(json_dumps(payload))
 
 
 def _coerce_optional_str_list(value: Any) -> list[str] | None:
@@ -87,6 +109,7 @@ def _resolve_profile_name(requested: str | None, profiles: dict[str, Any]) -> st
 
 
 def cli():
+    _configure_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("--prd", required=True)
     ap.add_argument(
@@ -118,6 +141,7 @@ def cli():
     quality_profile = dict(prof.get("quality_profile", {}))
     per_task_soft = _coerce_optional_str_list(quality_profile.get("per_task_soft"))
     final_soft = _coerce_optional_str_list(quality_profile.get("final_soft"))
+    disable_docker_build = bool(prof.get("disable_docker_build", False))
 
     prd_md = _read_text_file(args.prd, "PRD file")
 
@@ -139,14 +163,19 @@ def cli():
         raise SystemExit(f"Invalid llm config: {e}") from e
 
     run_out = _resolve_output_dir(args.prd, args.out)
+    run_id = uuid4().hex
+    request_id = uuid4().hex
     ws = Workspace(run_out)
     template_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "templates"))
     run_metadata = {
+        "run_id": run_id,
+        "request_id": request_id,
         "requested_profile": profile_name,
         "quality_profile": quality_profile,
         "template_candidates": template_candidates,
         "per_task_soft_validators": per_task_soft,
         "final_soft_validators": final_soft,
+        "disable_docker_build": disable_docker_build,
         "validators_enabled": validators_enabled,
         "resolved_from": quality_profile.get("name", "balanced"),
         "quality_payload_files": {
@@ -157,6 +186,15 @@ def cli():
             "final_last_validation": ".autodev/task_final_last_validation.json",
         },
     }
+    _log_event(
+        "autodev.run_cli_start",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile_name,
+        prd=args.prd,
+        out_root=args.out,
+        run_out=run_out,
+    )
     ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
 
     import asyncio
@@ -177,10 +215,21 @@ def cli():
                 task_soft_validators=per_task_soft,
                 final_soft_validators=final_soft,
                 quality_profile=quality_profile,
+                disable_docker_build=disable_docker_build,
                 verbose=bool(cfg["run"].get("verbose", True)),
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile_name,
             )
         )
     except ValueError as e:
+        _log_event(
+            "autodev.run_cli_error",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile_name,
+            error=str(e),
+        )
         raise SystemExit(f"Workflow failed during structured generation or runtime validation: {e}") from e
 
     quality_profile_path = os.path.join(run_out, ".autodev", "quality_profile.json")
@@ -195,6 +244,20 @@ def cli():
         run_metadata["quality_profile"] = quality_profile
 
     ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
+
+    run_metadata["result_ok"] = ok
+    run_metadata["run_completed_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
+
+    _log_event(
+        "autodev.run_cli_complete",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile_name,
+        ok=ok,
+        output_dir=os.path.abspath(run_out),
+        validators_enabled=validators_enabled,
+    )
 
     write_report(ws.root, prd_struct, plan, last_validation, ok)
     print({"ok": ok, "out": os.path.abspath(run_out)})

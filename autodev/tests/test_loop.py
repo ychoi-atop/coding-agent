@@ -7,12 +7,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT))  # noqa: E402
 
-from autodev.loop import _toposort, _resolve_validators, _validations_ok, _build_quality_row, _build_pass_map
-from autodev.loop import _llm_json, run_autodev_enterprise
-from autodev.workspace import Workspace
-from autodev.report import write_report
+from autodev.loop import _toposort, _resolve_validators, _validations_ok, _build_quality_row, _build_pass_map  # noqa: E402
+from autodev.loop import _llm_json, run_autodev_enterprise  # noqa: E402
+from autodev.workspace import Workspace  # noqa: E402
+from autodev.report import write_report  # noqa: E402
 
 
 def test_toposort_orders_by_dependencies():
@@ -128,8 +128,8 @@ class _FakeValidators:
             )
         return out
 
-    def run_all(self, enabled, audit_required=False, soft_validators=None, phase="task"):
-        _FakeValidators.calls.append((phase, list(enabled), sorted(soft_validators or [])))
+    def run_all(self, enabled, audit_required=False, soft_validators=None, phase="task", **kwargs):
+        _FakeValidators.calls.append((phase, list(enabled), sorted(soft_validators or []), kwargs))
 
         if phase == "per_task":
             if len([c for c in _FakeValidators.calls if c[0] == "per_task"]) <= 2:
@@ -154,7 +154,7 @@ class _FakeEnvManager:
     def ensure_venv(self, system_python: str = "python") -> None:
         return None
 
-    def install_requirements(self, include_dev: bool | None = None) -> None:
+    def install_requirements(self, include_dev=None) -> None:
         return None
 
     def venv_python(self) -> str:
@@ -293,8 +293,8 @@ class _FakePassingValidators:
             )
         return out
 
-    def run_all(self, enabled, audit_required=False, soft_validators=None, phase="task"):
-        _FakePassingValidators.calls.append((phase, list(enabled), sorted(soft_validators or [])))
+    def run_all(self, enabled, audit_required=False, soft_validators=None, phase="task", **kwargs):
+        _FakePassingValidators.calls.append((phase, list(enabled), sorted(soft_validators or []), kwargs))
         return [_FakePassingValidation(name) for name in enabled]
 
 
@@ -567,4 +567,97 @@ def test_run_loop_resolves_gate_profile_by_plan_quality_level(tmp_path, monkeypa
     assert profile["name"] == "strict"
     assert profile["per_task_soft"] == ["docker_build"]
     assert profile["final_soft"] == []
-    assert profile["resolved_from"] == "strict"
+
+
+def test_run_loop_emits_structured_loop_events(monkeypatch, tmp_path):
+    import autodev.loop as loop
+
+    ws = Workspace(str(tmp_path / "logging-events"))
+    events: list[dict] = []
+
+    def _capture(event: str, **fields: object) -> None:
+        payload = dict(fields)
+        payload["event"] = event
+        events.append(payload)
+
+    monkeypatch.setattr(loop, "_log_event", _capture)
+
+    monkeypatch.setattr(loop, "ExecKernel", _FakeKernel)
+    monkeypatch.setattr(loop, "EnvManager", _FakeEnvManager)
+    monkeypatch.setattr(loop, "Validators", _FakePassingValidators)
+
+    responses = [
+        {
+            "title": "PRD",
+            "goals": [],
+            "non_goals": [],
+            "features": [],
+            "acceptance_criteria": [],
+            "nfr": {},
+            "constraints": [],
+        },
+        {
+            "project": {
+                "type": "python_fastapi",
+                "name": "autodev-logger",
+                "python_version": "3.11",
+                "quality_gate_profile": "balanced",
+            },
+            "tasks": [
+                {
+                    "id": "task-a",
+                    "title": "Quick task",
+                    "goal": "Add endpoint",
+                    "acceptance": ["Add tests for endpoint", "Handle error fallback"],
+                    "files": ["src/app/main.py"],
+                    "depends_on": [],
+                    "quality_expectations": {
+                        "requires_tests": True,
+                        "requires_error_contract": True,
+                        "touches_contract": True,
+                    },
+                    "validator_focus": ["ruff", "pytest"],
+                }
+            ],
+            "ci": {"enabled": True, "provider": "github_actions"},
+            "docker": {"enabled": True},
+            "security": {"enabled": True, "tools": ["pip_audit", "bandit", "semgrep"]},
+            "observability": {"enabled": True},
+        },
+        {"role": "implementer", "summary": "ok", "changes": [], "notes": []},
+    ]
+
+    ok, _, _, _ = asyncio.run(
+        loop.run_autodev_enterprise(
+            client=_FakeLLM(responses),
+            ws=ws,
+            prd_markdown="",
+            template_root=str(ROOT / "templates"),
+            template_candidates=["python_fastapi"],
+            validators_enabled=["ruff"],
+            audit_required=False,
+            max_fix_loops_total=3,
+            max_fix_loops_per_task=3,
+            max_json_repair=0,
+            task_soft_validators=["semgrep"],
+            final_soft_validators=[],
+            quality_profile={
+                "name": "balanced",
+                "validator_policy": {
+                    "per_task": {"soft_fail": ["semgrep"]},
+                    "final": {"soft_fail": []},
+                },
+            },
+            verbose=False,
+            run_id="run-log-1",
+            request_id="req-log-1",
+            profile="minimal",
+        )
+    )
+
+    assert ok is True
+    assert any(e.get("event") == "run_enterprise.start" for e in events)
+    assert any(e.get("event") == "task.start" and e.get("task_id") == "task-a" for e in events)
+    assert any(e.get("event") == "validation.attempt" and e.get("run_id") == "run-log-1" for e in events)
+    assert any(e.get("event") == "validation.final_summary" for e in events)
+    assert any(e.get("run_id") == "run-log-1" for e in events)

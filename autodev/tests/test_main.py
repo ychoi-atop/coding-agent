@@ -5,9 +5,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT))  # noqa: E402
 
-import autodev.main as main
+import autodev.main as main  # noqa: E402
 
 
 def _build_fake_args(tmp_path: Path, cfg_name: str = "config.yaml"):
@@ -133,3 +133,57 @@ profiles:
 
     assert "Profile was not provided" in str(exc.value)
     assert "Available profiles: minimal, strict" in str(exc.value)
+
+
+def test_cli_emits_run_and_request_identifiers(tmp_path, monkeypatch):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: fake-model
+profiles:
+  minimal:
+    validators:
+      - ruff
+      - pytest
+    template_candidates:
+      - python_fastapi
+    quality_profile:
+      name: balanced
+"""
+    cfg_path, prd_path = _build_fake_args(tmp_path)
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    async def _fake_run_autodev_enterprise(*_args, **kwargs):
+        captured["run_id"] = kwargs.get("run_id")
+        captured["request_id"] = kwargs.get("request_id")
+        captured["profile"] = kwargs.get("profile")
+        return True, {"project": {}}, {"project": {}}, []
+
+    monkeypatch.setattr(main, "run_autodev_enterprise", _fake_run_autodev_enterprise)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "autodev",
+            "--prd",
+            str(prd_path),
+            "--out",
+            str(tmp_path / "runs"),
+            "--config",
+            str(cfg_path),
+            "--profile",
+            "minimal",
+        ],
+    )
+
+    main.cli()
+
+    assert isinstance(captured.get("run_id"), str)
+    assert isinstance(captured.get("request_id"), str)
+    assert captured.get("profile") == "minimal"
+    assert len(captured["run_id"]) == 32
+    assert len(captured["request_id"]) == 32

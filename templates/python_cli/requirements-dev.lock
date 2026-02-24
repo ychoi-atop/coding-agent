@@ -1,0 +1,8 @@
+# Generated lock snapshot for this template dev requirements (direct dependencies + hashes)
+# Regenerate when requirements-dev.txt changes. Keep in sync with requirements-dev.txt.
+pytest==8.4.2 --hash=sha256:86c0d0b93306b961d58d62a4db4879f27fe25513d4b969df351abdddb3c30e01
+ruff==0.15.2 --hash=sha256:14b965afee0969e68bb871eba625343b8673375f457af4abe98553e8bbb98342
+mypy==1.19.1 --hash=sha256:19d88bb05303fe63f71dd2c6270daca27cb9401c4ca8255fe50d1d920e0eb9ba
+pip-audit==2.9.0 --hash=sha256:0b998410b58339d7a231e5aa004326a294e4c7c6295289cdc9d5e1ef07b1f44d
+bandit==1.8.6 --hash=sha256:dbfe9c25fc6961c2078593de55fd19f2559f9e45b99f1272341f5b95dea4e56b
+semgrep==1.136.0 --hash=sha256:e6be1750a08756bc2b626372ec95b10c857c36de6fafccd21b1065187626b440

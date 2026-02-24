@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any, Dict, List
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from .schemas import VALIDATORS
 
@@ -23,11 +23,12 @@ _PROFILE_OPTIONAL_KEYS = {
     "security",
     "validator_policy",
     "quality_profile",
+    "disable_docker_build",
 }
 _PROFILE_ALLOWED_KEYS = _PROFILE_REQUIRED_KEYS | _PROFILE_OPTIONAL_KEYS
 _AUTODEV_API_KEY_ENV = "AUTODEV_LLM_API_KEY"
 _AUTODEV_API_KEY_PLACEHOLDER = f"${{{_AUTODEV_API_KEY_ENV}}}"
-_DEFAULT_PROFILE_QUALITY_PROFILE = {"validator_policy": {"per_task": {}, "final": {}}}
+_DEFAULT_PROFILE_QUALITY_PROFILE: Dict[str, Any] = {"validator_policy": {"per_task": {}, "final": {}}}
 
 
 def _resolve_api_key(value: Any) -> Any:
@@ -102,6 +103,12 @@ def _normalize_profile_defaults(profile_name: str, profile: dict[str, Any], erro
         security["audit_required"] = False
     elif not isinstance(security.get("audit_required"), bool):
         errors.append(f"profiles.{profile_name}.security.audit_required must be a boolean.")
+
+    disable_docker_build = profile.get("disable_docker_build")
+    if disable_docker_build is None:
+        profile["disable_docker_build"] = False
+    elif not isinstance(disable_docker_build, bool):
+        errors.append(f"profiles.{profile_name}.disable_docker_build must be a boolean.")
 
     quality_profile = profile.get("quality_profile")
     if quality_profile is None:

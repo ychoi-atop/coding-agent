@@ -9,6 +9,8 @@
 
 ```bash
 python -m pip install -r requirements.txt
+# Optional hash verification path (direct deps):
+python -m pip install --require-hashes -r requirements.lock --dry-run
 python -m pytest -q
 python -m ruff check src tests
 python -m mypy src

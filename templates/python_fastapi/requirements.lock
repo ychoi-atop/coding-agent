@@ -1,3 +1,5 @@
+# Generated lock snapshot for this template (direct dependencies + hashes)
+# Regenerate when requirements.txt changes. Keep in sync with requirements.txt.
 fastapi==0.111.0
 uvicorn[standard]==0.30.0
 pydantic==2.9.2

@@ -1,4 +1,8 @@
-VALIDATORS = ["ruff", "mypy", "pytest", "pip_audit", "bandit", "semgrep", "sbom", "docker_build"]
+from __future__ import annotations
+
+from .validators import DEFAULT_VALIDATOR_NAMES
+
+VALIDATORS = list(DEFAULT_VALIDATOR_NAMES)
 QUALITY_LEVELS = ["minimal", "balanced", "strict"]
 
 NONEMPTY_STRING = {"type": "string", "minLength": 1}
@@ -71,8 +75,8 @@ PLAN_SCHEMA = {
           "id":{"type":"string","minLength": 1},
           "title":{"type":"string","minLength": 5},
           "goal":{"type":"string","minLength": 8},
-          "acceptance":{"type":"array","minItems": 1,"uniqueItems": True,"items":{"type":"string","minLength": 5}},
-          "files":{"type":"array","minItems": 1,"uniqueItems": True,"items":{"type":"string","minLength": 1}},
+          "acceptance":{"type":"array","items":{"type":"string","minLength": 5},"minItems": 1,"uniqueItems": True},
+          "files":{"type":"array","items":{"type":"string","minLength": 1},"minItems": 1,"uniqueItems": True},
           "depends_on":{"type":"array","items":{"type":"string","minLength": 1}},
             "quality_expectations": QUALITY_EXPECTATION_SCHEMA,
           "validator_focus":{"type":"array","items":{"type":"string", "enum": VALIDATORS}},

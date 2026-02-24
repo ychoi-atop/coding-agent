@@ -1,0 +1,3 @@
+# Generated lock snapshot for template runtime dependencies.
+# Runtime requirements are intentionally empty for this template.
+# Keep this file in sync with templates/python_library/requirements.txt and treat it as a placeholder lock.

@@ -1,7 +1,7 @@
-pytest
-httpx
-ruff
-mypy
-pip-audit
-bandit
-semgrep
+pytest==8.4.2
+httpx==0.28.1
+ruff==0.15.2
+mypy==1.19.1
+pip-audit==2.9.0
+bandit==1.8.6
+semgrep==1.136.0

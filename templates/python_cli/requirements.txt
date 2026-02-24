@@ -1,7 +1,7 @@
-rich
-pytest
-ruff
-mypy
-pip-audit
-bandit
-semgrep
+rich==13.10.4
+pytest==8.3.3
+ruff==0.5.4
+mypy==1.11.2
+pip-audit==2.7.3
+bandit==1.7.10
+semgrep==1.91.0

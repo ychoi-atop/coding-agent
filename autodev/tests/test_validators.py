@@ -1,6 +1,8 @@
 import pytest
 
-from autodev.validators import Validators
+
+from autodev.validators import Validators, register_validator, get_validator_definition
+from autodev import validators as validators_module
 from autodev.exec_kernel import ExecKernel, CmdResult
 
 
@@ -8,6 +10,7 @@ class _FakeKernel:
     def __init__(self, command_results=None, available=True):
         self.command_results = dict(command_results or {})
         self._available = available
+        self.cwd = "."
 
     def run(self, cmd):
         cmd_key = tuple(cmd)
@@ -117,3 +120,92 @@ def test_disallowed_command_exception_maps_to_failed_validation():
     assert result.status == "failed"
     assert result.ok is False
     assert result.error_classification == "tool_error"
+
+
+def test_validator_result_events_include_context(monkeypatch):
+    kernel = _FakeKernel()
+    validators = Validators(kernel=kernel, env=_FakeEnvManager(kernel))
+    events: list[dict[str, object]] = []
+
+    def _capture(event: str, **fields: object) -> None:
+        payload = dict(fields)
+        payload["event"] = event
+        events.append(payload)
+
+    import autodev.validators as vmod
+
+    monkeypatch.setattr(vmod, "_log_event", _capture)
+
+    validators.run_one("ruff", run_id="run-log", request_id="req-log", profile="minimal", task_id="task-1", iteration=2)
+    validators._version = lambda _v, python_executable="python": "1.2.3"
+
+    assert any(evt.get("event") == "validator.result" for evt in events)
+    evt = next(evt for evt in events if evt.get("event") == "validator.result")
+    assert evt.get("run_id") == "run-log"
+    assert evt.get("request_id") == "req-log"
+    assert evt.get("task_id") == "task-1"
+    assert evt.get("iteration") == 2
+    assert evt.get("validator") == "ruff"
+
+
+def test_run_one_uses_registered_validator_lookup(monkeypatch):
+    fake_kernel = _FakeKernel(command_results={"/fake/custom": 0, "/fake/custom-version": 0}, available=True)
+
+    register_validator(
+        "custom_check",
+        lambda py: ["/fake/custom"],
+        version_builder=lambda py: ["/fake/custom-version"],
+    )
+    validator = Validators(kernel=fake_kernel, env=_FakeEnvManager(fake_kernel))
+
+    try:
+        result = validator.run_one("custom_check")
+    finally:
+        validators_module._VALIDATOR_REGISTRY.pop("custom_check", None)
+
+    assert result.name == "custom_check"
+    assert result.result.cmd == ["/fake/custom"]
+
+
+def test_run_one_raises_for_unknown_validator():
+    kernel = _FakeKernel()
+    validators = Validators(kernel=kernel, env=_FakeEnvManager(kernel))
+
+    with pytest.raises(ValueError, match="Unknown validator: missing_validator"):
+        validators.run_one("missing_validator")
+
+
+def test_dependency_lock_validator_flags_unpinned_requirements(tmp_path):
+    (tmp_path / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    kernel = _FakeKernel()
+    kernel.cwd = str(tmp_path)
+    validator = Validators(kernel=kernel, env=_FakeEnvManager(kernel))
+
+    result = validator.run_one("dependency_lock")
+
+    assert result.name == "dependency_lock"
+    assert result.ok is False
+    assert result.status == "failed"
+    assert result.error_classification == "policy_violation"
+    assert "unpinned" in result.result.stdout
+
+
+def test_dependency_lock_validator_allows_pinned_requirements_with_lock_file(tmp_path):
+    (tmp_path / "requirements.txt").write_text("fastapi==0.111.0\n", encoding="utf-8")
+    (tmp_path / "requirements.lock").write_text("{}", encoding="utf-8")
+    kernel = _FakeKernel()
+    kernel.cwd = str(tmp_path)
+    validator = Validators(kernel=kernel, env=_FakeEnvManager(kernel))
+
+    result = validator.run_one("dependency_lock")
+
+    assert result.ok is True
+    assert result.status == "passed"
+    assert result.error_classification is None
+
+
+def test_configured_default_validator_names_match_registry():
+    assert get_validator_definition("ruff") is not None
+    from autodev.schemas import VALIDATORS
+
+    assert set(VALIDATORS) == set(["ruff", "mypy", "pytest", "pip_audit", "bandit", "semgrep", "sbom", "docker_build", "dependency_lock"])

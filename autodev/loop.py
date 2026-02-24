@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
+from datetime import datetime
+from pathlib import PurePosixPath
 import os
 import time
-from pathlib import PurePosixPath
 from typing import Any, Dict, List, Set, Tuple
+from uuid import uuid4
 
-from jsonschema import validate
+from jsonschema import validate  # type: ignore[import-untyped]
 
 from .llm_client import LLMClient
 from .json_utils import strict_json_loads, json_dumps
@@ -16,6 +19,31 @@ from .workspace import Workspace, Change
 from .exec_kernel import ExecKernel
 from .env_manager import EnvManager
 from .validators import Validators
+
+logger = logging.getLogger("autodev")
+
+
+def _log_event(event: str, run_id: str, request_id: str, profile: str | None = None, **fields: object) -> None:
+    payload = {
+        "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "event": event,
+        "run_id": run_id,
+        "request_id": request_id,
+        "run_profile": profile,
+        **fields,
+    }
+
+    if logger.handlers:
+        logger.info(json_dumps(payload))
+    else:
+        print(json_dumps(payload))
+
+
+def _safe_short_text(value: str, limit: int = 200) -> str:
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 DEFAULT_TASK_SOFT_VALIDATORS = {"docker_build", "pip_audit", "sbom", "semgrep"}
 DEFAULT_VALIDATOR_FALLBACK = [
@@ -159,7 +187,7 @@ def _build_quality_row(
 def _toposort(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_id = {t["id"]: t for t in tasks}
     indeg = {t["id"]: 0 for t in tasks}
-    graph = {t["id"]: [] for t in tasks}
+    graph: Dict[str, List[str]] = {t["id"]: [] for t in tasks}
 
     for t in tasks:
         for dep in t["depends_on"]:
@@ -370,21 +398,51 @@ async def _llm_json(
     user: str,
     schema: Dict[str, Any],
     max_repair: int = 2,
+    *,
+    run_id: str | None = None,
+    request_id: str | None = None,
+    profile: str | None = None,
+    component: str = "llm",
 ) -> Dict[str, Any]:
+    run_id = run_id or uuid4().hex
+    request_id = request_id or uuid4().hex
     prompt_user = user
     last_raw = ""
     last_error: Exception | None = None
 
     for attempt in range(max_repair + 1):
+        retry_count = attempt + 1
+        _log_event(
+            "llm.parse_attempt",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            component=component,
+            attempt=retry_count,
+            max_attempts=max_repair + 1,
+            safe_payload=_safe_short_text(prompt_user, limit=220),
+        )
+
         try:
             raw = await client.chat(_msg(system, prompt_user), temperature=0.2)
             last_raw = raw
         except Exception as e:
-            raise ValueError(f"LLM call failed while generating structured output (attempt {attempt + 1}/{max_repair + 1}): {e}") from e
+            raise ValueError(
+                "LLM call failed while generating structured output "
+                f"(attempt {retry_count}/{max_repair + 1}): {e}"
+            ) from e
 
         try:
             data = strict_json_loads(raw)
             validate(instance=data, schema=schema)
+            _log_event(
+                "llm.parse_success",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                component=component,
+                attempts=retry_count,
+            )
             return data
         except Exception as e:
             last_error = e
@@ -396,6 +454,16 @@ Error: {e}
 Return ONLY a corrected JSON object that matches the schema.
 Do not include markdown fences or additional text.
 """
+            _log_event(
+                "llm.parse_retry_requested",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                component=component,
+                attempt=retry_count,
+                raw_preview=_safe_short_text(last_raw),
+                error=str(e),
+            )
             prompt_user = repair_user
 
     if last_error is None:
@@ -422,8 +490,30 @@ async def run_autodev_enterprise(
     task_soft_validators: List[str] | None = None,
     final_soft_validators: List[str] | None = None,
     quality_profile: Dict[str, Any] | None = None,
+    disable_docker_build: bool = False,
     verbose: bool = True,
+    *,
+    run_id: str | None = None,
+    request_id: str | None = None,
+    profile: str | None = None,
 ) -> Tuple[bool, Dict[str, Any], Dict[str, Any], Any]:
+    run_id = run_id or uuid4().hex
+    request_id = request_id or uuid4().hex
+
+    _log_event(
+        "run_enterprise.start",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        event_scope="run",
+        validators_enabled=validators_enabled,
+        disable_docker_build=disable_docker_build,
+        template_candidates=template_candidates,
+        max_fix_loops_total=max_fix_loops_total,
+        max_fix_loops_per_task=max_fix_loops_per_task,
+        max_json_repair=max_json_repair,
+    )
+
     p = prompts()
 
     quality_profile = quality_profile or {}
@@ -434,6 +524,10 @@ async def run_autodev_enterprise(
         f"PRD_MARKDOWN:\n{prd_markdown}\n\nTASK:\n{p['prd_normalizer']['task']}",
         PRD_SCHEMA,
         max_repair=max_json_repair,
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        component="prd_normalizer",
     )
 
     # 2) Plan
@@ -447,18 +541,40 @@ async def run_autodev_enterprise(
         }),
         PLAN_SCHEMA,
         max_repair=max_json_repair,
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        component="planner",
     )
 
     # 3) Scaffold
     project_type = plan["project"]["type"]
     template_dir = os.path.join(template_root, project_type)
     ws.apply_template(template_dir)
+    _log_event(
+        "run.scaffolded",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        project_type=project_type,
+        template_dir=template_dir,
+    )
 
     repo_files_for_plan = ws.list_context_files(max_files=None)
     try:
         plan = _canonicalize_task_files(plan, repo_files_for_plan)
     except ValueError as e:
-        repair_payload = {
+        _log_event(
+            "task_file_resolution.rejected",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            project_type=project_type,
+            error=str(e),
+            candidate_count=len(repo_files_for_plan),
+            unresolved_globs=_safe_short_text(json_dumps(plan), limit=700),
+        )
+        repair_payload: Dict[str, Any] = {
             "task": "Repair ONLY tasks[].files in the PLAN so each glob matches existing repo files.",
             "constraints": [
                 f"Keep project.type unchanged: {project_type}",
@@ -476,10 +592,21 @@ async def run_autodev_enterprise(
             json_dumps(repair_payload),
             PLAN_SCHEMA,
             max_repair=max_json_repair,
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            component="planner_repair",
         )
         if repaired_plan["project"]["type"] != project_type:
             raise ValueError("Planner repair changed project.type; refusing to continue.")
         plan = _canonicalize_task_files(repaired_plan, repo_files_for_plan)
+        _log_event(
+            "task_file_resolution.repaired",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            project_type=project_type,
+        )
 
     quality_profile = _resolve_gate_profile(
         quality_profile=quality_profile,
@@ -509,6 +636,22 @@ async def run_autodev_enterprise(
     if final_soft_validators is None and not final_soft:
         final_soft = set(final_soft_validators or [])
 
+    _log_event(
+        "run.quality_profile_resolved",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        resolved_from=quality_profile.get("resolved_from"),
+        task_soft_fail=sorted(task_soft),
+        final_soft_fail=sorted(final_soft),
+    )
+
+    effective_validators_enabled = list(dict.fromkeys(validators_enabled))
+    if disable_docker_build and "docker_build" in effective_validators_enabled:
+        effective_validators_enabled = [
+            v for v in effective_validators_enabled if v != "docker_build"
+        ]
+
     # 4) Prepare env
     kernel = ExecKernel(cwd=ws.root, timeout_sec=1800)
     env = EnvManager(kernel)
@@ -524,7 +667,7 @@ async def run_autodev_enterprise(
             "per_task": sorted(task_soft),
             "final": sorted(final_soft),
         },
-        "validator_enabled": validators_enabled,
+        "validator_enabled": effective_validators_enabled,
         "resolved_quality_profile": quality_profile,
         "tasks": [],
     }
@@ -534,11 +677,23 @@ async def run_autodev_enterprise(
     last_validation = None
     unresolved: List[str] = []
 
-    for t in tasks:
+    for iteration, t in enumerate(tasks, start=1):
         if verbose:
             print(f"\n== TASK {t['id']} == {t['title']}")
 
-        run_set = _resolve_validators(t.get("validator_focus"), validators_enabled)
+        run_set = _resolve_validators(t.get("validator_focus"), effective_validators_enabled)
+        _log_event(
+            "task.start",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            iteration=iteration,
+            task_id=t["id"],
+            task_title=t["title"],
+            validator_focus=run_set,
+            file_count=len(t["files"]),
+        )
+
         files_ctx = _build_files_context(ws, t["files"])
         attempt_records: List[Dict[str, Any]] = []
         loops = 0
@@ -558,6 +713,10 @@ async def run_autodev_enterprise(
             json_dumps(impl_payload),
             CHANGESET_SCHEMA,
             max_repair=max_json_repair,
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            component="implementer",
         )
         quality_trace = [_quality_metadata_from_changeset(changeset, t["id"], run_set)]
 
@@ -573,6 +732,11 @@ async def run_autodev_enterprise(
                 audit_required=audit_required,
                 soft_validators=task_soft,
                 phase="per_task",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                task_id=t["id"],
+                iteration=loops + 1,
             )
             last_validation = Validators.serialize(validation_results)
             signature = _failure_signature(last_validation)
@@ -591,7 +755,40 @@ async def run_autodev_enterprise(
             )
             attempt_records.append(row)
 
+            failures = [
+                {"name": v["name"], "status": v["status"], "error": v.get("error_classification")}
+                for v in last_validation
+                if not v["ok"]
+            ]
+            _log_event(
+                "validation.attempt",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                iteration=iteration,
+                task_id=t["id"],
+                attempt=loops + 1,
+                phase="per_task",
+                duration_ms=duration_ms,
+                validation_status=row["status"],
+                failures=failures,
+                validator_count=len(last_validation),
+                hard_failures=row["hard_failures"],
+                soft_failures=row["soft_failures"],
+                repair_used=repair_used,
+            )
+
             if row["status"] == "passed":
+                _log_event(
+                    "task.attempt_passed",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    iteration=iteration,
+                    task_id=t["id"],
+                    attempt=loops + 1,
+                    total_task_attempts=len(attempt_records),
+                )
                 break
 
             loops += 1
@@ -633,10 +830,26 @@ async def run_autodev_enterprise(
                     "record_count": len(attempt_records),
                 })
                 _write_json(ws, QUALITY_SUMMARY_FILE, quality_summary)
+                _log_event(
+                    "task.failed",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    iteration=iteration,
+                    task_id=t["id"],
+                    attempts=len(attempt_records),
+                    reason="validator_limit_exceeded",
+                    hard_failures=attempt_records[-1]["hard_failures"],
+                    soft_failures=attempt_records[-1]["soft_failures"],
+                    unresolved_count=len(unresolved),
+                    total_fix_loops=total_fix_loops,
+                )
                 return False, prd_struct, plan, last_validation
 
             files_ctx = _build_files_context(ws, t["files"])
+            repair_mode = "normal"
             if signature == last_failure_signature and not repair_used:
+                repair_mode = "targeted"
                 repair_payload = {
                     "mode": "repair",
                     "plan": plan,
@@ -658,12 +871,28 @@ async def run_autodev_enterprise(
                 }
             last_failure_signature = signature
 
+            _log_event(
+                "task.repair_requested",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                iteration=iteration,
+                task_id=t["id"],
+                attempt=loops + 1,
+                repair_mode=repair_mode,
+                failure_signature=str(signature)[:200],
+            )
+
             fix = await _llm_json(
                 client,
                 p["fixer"]["system"],
                 json_dumps(repair_payload),
                 CHANGESET_SCHEMA,
                 max_repair=max_json_repair,
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                component="fixer",
             )
             quality_trace.append(_quality_metadata_from_changeset(fix, t["id"], run_set))
             fix_changes: List[Change] = []
@@ -708,11 +937,24 @@ async def run_autodev_enterprise(
         })
 
     # 5) Final enterprise validation (all enabled)
+    _log_event(
+        "validation.phase_start",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        phase="final",
+        validator_count=len(effective_validators_enabled),
+    )
     final_res = validators.run_all(
-        validators_enabled,
+        effective_validators_enabled,
         audit_required=audit_required,
         soft_validators=final_soft,
         phase="final",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        task_id="final",
+        iteration=0,
     )
     last_validation = Validators.serialize(final_res)
     final_ok = _validations_ok(last_validation, final_soft)
@@ -724,12 +966,25 @@ async def run_autodev_enterprise(
         "status": "passed" if final_ok else "failed",
         "soft_failures": sum(1 for r in last_validation if r["status"] == "soft_fail"),
         "hard_failures": sum(1 for r in last_validation if r["status"] == "failed"),
-        "validator_focus": validators_enabled,
+        "validator_focus": effective_validators_enabled,
         "validations": last_validation,
         "blocking_failures": sum(
             1 for r in last_validation if r["name"] not in final_soft and not r["ok"]
         ),
     }
+
+    _log_event(
+        "validation.final_summary",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        phase="final",
+        status="passed" if final_ok else "failed",
+        validation_count=len(last_validation),
+        blocking_failures=quality_summary["final"]["blocking_failures"],
+        soft_failures=quality_summary["final"]["soft_failures"],
+        hard_failures=quality_summary["final"]["hard_failures"],
+    )
 
     final_phase_passed = final_ok
     if not final_phase_passed:
@@ -773,14 +1028,26 @@ async def run_autodev_enterprise(
         "quality_profile": quality_profile,
         "task_soft_fail": sorted(task_soft),
         "final_soft_fail": sorted(final_soft),
-        "task_validator_budget": validators_enabled,
+        "task_validator_budget": effective_validators_enabled,
     })
 
     _write_json(ws, QUALITY_TASK_LAST_FILE_TMPL.format(task_id="final"), {
         "validation": last_validation,
-        "validator_focus": validators_enabled,
+        "validator_focus": effective_validators_enabled,
         "run_level": "final",
     })
+
+    _log_event(
+        "run.completed",
+        run_id=run_id,
+        request_id=request_id,
+        profile=profile,
+        status="passed" if (final_ok and task_failures == 0) else "failed",
+        final_ok=final_ok,
+        task_failures=task_failures,
+        total_fix_loops=total_fix_loops,
+        unresolved_count=len(unresolved),
+    )
 
     return (
         final_ok and task_failures == 0,

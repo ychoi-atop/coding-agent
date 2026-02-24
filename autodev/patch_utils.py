@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from typing import List
 
+
 @dataclass
 class Hunk:
     orig_start: int
@@ -10,6 +11,7 @@ class Hunk:
     new_start: int
     new_len: int
     lines: List[str]  # includes leading ' ', '+', '-'
+
 
 _HUNK_RE = re.compile(r'^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?(?:\s+@@)?$')
 
@@ -47,20 +49,20 @@ def parse_unified_diff(diff_text: str) -> List[Hunk]:
             i += 1
             hlines: List[str] = []
             while i < len(lines):
-                l = lines[i]
-                if l.startswith('@@'):
+                line_text = lines[i]
+                if line_text.startswith('@@'):
                     break
-                if l.startswith('diff --git') or l.startswith('index ') or l.startswith('---') or l.startswith('+++'):
+                if line_text.startswith('diff --git') or line_text.startswith('index ') or line_text.startswith('---') or line_text.startswith('+++'):
                     i += 1
                     continue
-                if l.startswith('\\ No newline at end of file'):
+                if line_text.startswith('\\ No newline at end of file'):
                     i += 1
                     continue
-                if l[:1] in (' ', '+', '-'):
-                    hlines.append(l)
+                if line_text[:1] in (' ', '+', '-'):
+                    hlines.append(line_text)
                 else:
                     # allow empty? treat as context line with no prefix is invalid
-                    raise ValueError(f'Invalid diff line (missing prefix): {l!r}')
+                    raise ValueError(f'Invalid diff line (missing prefix): {line_text!r}')
                 i += 1
             hunks.append(Hunk(ostart, olen, nstart, nlen, hlines))
             continue
@@ -74,15 +76,22 @@ def validate_unified_diff(diff_text: str) -> None:
     parse_unified_diff(diff_text)
 
 
-def apply_unified_diff(original: str, diff_text: str) -> str:
+def apply_unified_diff(
+    original: str,
+    diff_text: str,
+    *,
+    dry_run: bool = False,
+) -> str | None:
     text = _strip_diff_fence(diff_text)
 
     try:
         hunks = parse_unified_diff(text)
     except ValueError as e:
         if str(e) == 'No hunks found in diff':
-            # fallback: treat as full rewrite
-            return text
+            # fallback: treat as full rewrite only when creating a new file
+            if original == '':
+                return None if dry_run else text
+            raise e
         raise e
 
     orig_lines = original.splitlines(keepends=True)
@@ -122,4 +131,6 @@ def apply_unified_diff(original: str, diff_text: str) -> str:
                 raise ValueError(f'Unknown prefix: {prefix!r}')
 
     out.extend(orig_lines[orig_idx:])
+    if dry_run:
+        return None
     return ''.join(out)

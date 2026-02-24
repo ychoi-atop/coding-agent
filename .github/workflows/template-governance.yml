@@ -1,0 +1,15 @@
+name: Template Governance
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce template CI contract
+        run: bash docs/ops/check_template_ci_drift.sh
+      - name: Enforce template dependency locks
+        run: bash docs/ops/check_template_dependency_locks.sh

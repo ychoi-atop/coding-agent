@@ -1,0 +1,29 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      RUFF_VERSION: "0.5.7"
+      MYPY_VERSION: "1.11.1"
+      PIP_AUDIT_VERSION: "2.7.3"
+      BANDIT_VERSION: "1.7.10"
+      SEMGREP_VERSION: "1.90.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Pin CI validation toolchain versions
+        run: |
+          python -m pip install "ruff==${{ env.RUFF_VERSION }}" "mypy==${{ env.MYPY_VERSION }}" "pip-audit==${{ env.PIP_AUDIT_VERSION }}" "bandit==${{ env.BANDIT_VERSION }}" "semgrep==${{ env.SEMGREP_VERSION }}"
+      - run: python -m ruff check .
+      - run: python -m mypy src
+      - run: PYTHONPATH=src python -m pytest -q
+      - run: python -m pip_audit -r requirements.txt
+      - run: python -m bandit -q -r src
+      - run: python -m semgrep --config .semgrep.yml --error
+      - run: python scripts/generate_sbom.py

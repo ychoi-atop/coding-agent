@@ -16,6 +16,8 @@ COPY contracts ./contracts
 COPY scripts ./scripts
 COPY .semgrep.yml ./.semgrep.yml
 
+RUN chown -R appuser:appuser /app
+
 ENV PYTHONPATH=/app/src
 
 EXPOSE 8000

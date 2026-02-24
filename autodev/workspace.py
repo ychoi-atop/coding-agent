@@ -2,14 +2,17 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List
+from os import PathLike
 from .patch_utils import apply_unified_diff, validate_unified_diff
+
 
 @dataclass
 class Change:
     op: str   # write|delete|patch
     path: str
     content: str | None = None
+
 
 class Workspace:
     CONTEXT_EXCLUDED_DIRS = {
@@ -26,7 +29,7 @@ class Workspace:
     }
     CONTEXT_EXCLUDED_SUFFIXES = {".pyc"}
 
-    def __init__(self, root: str):
+    def __init__(self, root: str | PathLike[str]):
         self.root = os.path.abspath(root)
         os.makedirs(self.root, exist_ok=True)
 
@@ -44,9 +47,9 @@ class Workspace:
                     continue
                 shutil.copy2(src, dst)
 
-    def _abs(self, rel_path: str) -> str:
+    def _abs(self, rel_path: str | PathLike[str]) -> str:
         # strip leading slash so os.path.join treats it strictly as relative
-        rel_path = rel_path.lstrip("/\\")
+        rel_path = os.fspath(rel_path).lstrip("/\\")
         abs_path = os.path.abspath(os.path.join(self.root, rel_path))
         try:
             common = os.path.commonpath([self.root, abs_path])
@@ -56,23 +59,23 @@ class Workspace:
             raise ValueError(f"Path escapes workspace root: {rel_path}")
         return abs_path
 
-    def write_text(self, rel_path: str, content: str) -> None:
+    def write_text(self, rel_path: str | PathLike[str], content: str) -> None:
         abs_path = self._abs(rel_path)
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
 
-    def delete(self, rel_path: str) -> None:
+    def delete(self, rel_path: str | PathLike[str]) -> None:
         abs_path = self._abs(rel_path)
         if os.path.exists(abs_path):
             os.remove(abs_path)
 
-    def read_text(self, rel_path: str) -> str:
+    def read_text(self, rel_path: str | PathLike[str]) -> str:
         abs_path = self._abs(rel_path)
         with open(abs_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def exists(self, rel_path: str) -> bool:
+    def exists(self, rel_path: str | PathLike[str]) -> bool:
         return os.path.exists(self._abs(rel_path))
 
     def list_files(self, max_files: int = 1200) -> List[str]:
@@ -110,27 +113,84 @@ class Workspace:
                     return sorted(out)
         return sorted(out)
 
-    def apply_changes(self, changes: List[Change]) -> None:
+    def apply_changes(self, changes: List[Change], dry_run: bool = False) -> None:
+        # Validate and compute every change before mutating anything, so we can
+        # fail early and keep behavior atomic.
+        pending: List[dict[str, Any]] = []
+
         for c in changes:
             if c.op == "write":
                 if c.content is None:
                     raise ValueError("write op requires content")
-                self.write_text(c.path, c.content)
+                existed = self.exists(c.path)
+                backup = self.read_text(c.path) if existed else None
+                pending.append({
+                    "op": "write",
+                    "path": c.path,
+                    "backup": backup,
+                    "backup_exists": existed,
+                    "next_content": c.content,
+                })
             elif c.op == "delete":
-                self.delete(c.path)
+                existed = self.exists(c.path)
+                backup = self.read_text(c.path) if existed else None
+                pending.append({
+                    "op": "delete",
+                    "path": c.path,
+                    "backup": backup,
+                    "backup_exists": existed,
+                })
             elif c.op == "patch":
                 if c.content is None:
-                    raise ValueError("patch op requires content(diff)")
+                    raise ValueError("patch op requires content")
                 if c.content == "":
                     raise ValueError("patch content must not be empty")
+
                 if self.exists(c.path):
-                    # ensure this is a valid unified diff before attempting apply
                     validate_unified_diff(c.content)
                     original = self.read_text(c.path)
                     updated = apply_unified_diff(original, c.content)
+                    backup = original
+                    backup_exists = True
                 else:
-                    # fallback: if patch is requested on missing file, treat as write (full rewrite)
                     updated = apply_unified_diff("", c.content)
-                self.write_text(c.path, updated)
+                    backup = None
+                    backup_exists = False
+
+                pending.append({
+                    "op": "patch",
+                    "path": c.path,
+                    "backup": backup,
+                    "backup_exists": backup_exists,
+                    "next_content": updated,
+                })
             else:
                 raise ValueError(f"Unknown op: {c.op}")
+
+        if dry_run:
+            return
+
+        applied = []
+        try:
+            for p in pending:
+                if p["op"] == "write":
+                    self.write_text(p["path"], p["next_content"])
+                    applied.append(p)
+                elif p["op"] == "delete":
+                    self.delete(p["path"])
+                    applied.append(p)
+                elif p["op"] == "patch":
+                    self.write_text(p["path"], p["next_content"])
+                    applied.append(p)
+        except Exception:
+            for p in reversed(applied):
+                if p["op"] in ("write", "patch"):
+                    if p["backup_exists"]:
+                        self.write_text(p["path"], p["backup"])
+                    else:
+                        if self.exists(p["path"]):
+                            self.delete(p["path"])
+                elif p["op"] == "delete":
+                    if p["backup_exists"]:
+                        self.write_text(p["path"], p["backup"])
+            raise

@@ -1,4 +1,4 @@
-from jsonschema import validate
+from jsonschema import validate  # type: ignore[import-untyped]
 from autodev.schemas import PLAN_SCHEMA, CHANGESET_SCHEMA
 
 

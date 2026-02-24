@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -30,11 +31,19 @@ class ExecKernel:
     }
     ALLOWED_PY_SCRIPTS = {"scripts/generate_sbom.py"}
     ALLOWED_DOCKER_CMDS = {"version", "build"}
+    _DOCKERFILE_POLICY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+        ("ADD instruction", re.compile(r"^\s*ADD\s+", re.IGNORECASE)),
+        ("APT package-manager execution", re.compile(r"^\s*RUN\s+.*\bapt(\-get)?\b", re.IGNORECASE)),
+        ("network tool execution", re.compile(r"^\s*RUN\s+.*\b(curl|wget|nc|ncat|ssh)\b", re.IGNORECASE)),
+        ("root user declaration", re.compile(r"^\s*USER\s+root\b", re.IGNORECASE)),
+    )
+    _DOCKERFILE_POLICY_CONTEXT_DEFAULT = "."
 
-    def __init__(self, cwd: str, timeout_sec: int = 1200):
+    def __init__(self, cwd: str, timeout_sec: int = 1200, *, strict_dockerfile_policy: bool = True):
         self.cwd = cwd
         self.timeout = timeout_sec
         self._reject_reason: str | None = None
+        self.strict_dockerfile_policy = strict_dockerfile_policy
 
     def _is_python(self, exe: str) -> bool:
         b = os.path.basename(exe).lower()
@@ -93,6 +102,116 @@ class ExecKernel:
             return cmd[1:4] == ["-I", "-m", "semgrep"]
         return False
 
+    @staticmethod
+    def _looks_like_docker_build(cmd: List[str]) -> bool:
+        return len(cmd) >= 2 and cmd[0] in {"docker", "docker.exe"} and cmd[1] == "build"
+
+    @staticmethod
+    def _is_option_with_argument(token: str) -> bool:
+        return token in {
+            "--file",
+            "-f",
+            "--tag",
+            "-t",
+            "--network",
+            "--platform",
+            "--build-arg",
+            "--label",
+            "--secret",
+            "--cache-from",
+            "--progress",
+            "--volume",
+            "--add-host",
+        }
+
+    @staticmethod
+    def _extract_dockerfile_and_context(args: List[str]) -> tuple[str | None, str]:
+        dockerfile: str | None = None
+        context: str = ExecKernel._DOCKERFILE_POLICY_CONTEXT_DEFAULT
+
+        i = 2
+        while i < len(args):
+            token = args[i]
+            if token == "--file" or token == "-f":
+                if i + 1 < len(args):
+                    dockerfile = args[i + 1]
+                    i += 2
+                    continue
+            elif token.startswith("--file="):
+                dockerfile = token.split("=", 1)[1]
+            elif token.startswith("--network"):
+                # guard against host networking and skip network argument pair/value
+                if token == "--network" and i + 1 < len(args):
+                    i += 2
+                    continue
+            elif token.startswith("--network="):
+                pass
+
+            if token.startswith("-"):
+                if ExecKernel._is_option_with_argument(token):
+                    i += 2
+                    continue
+                i += 1
+                continue
+
+            context = token
+            i += 1
+
+        return dockerfile, context
+
+    def _scan_dockerfile_policy(self, dockerfile_path: str) -> tuple[bool, str | None]:
+        if not self.strict_dockerfile_policy:
+            return True, None
+        if not os.path.exists(dockerfile_path):
+            return False, f"Dockerfile not found: {dockerfile_path}"
+
+        try:
+            with open(dockerfile_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError as exc:
+            return False, f"Unable to read Dockerfile: {dockerfile_path}: {exc}"
+
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            for msg, pattern in self._DOCKERFILE_POLICY_PATTERNS:
+                if pattern.search(line):
+                    return False, f"{msg}: {line}"
+
+        return True, None
+
+    def _ensure_safe_docker_build(self, cmd: List[str]) -> bool:
+        if not self.strict_dockerfile_policy:
+            return True
+
+        args = cmd[2:]
+        if "--network=host" in args:
+            self._reject_reason = "docker build with --network=host is blocked by policy"
+            return False
+
+        for i, token in enumerate(args):
+            if token == "--network" and i + 1 < len(args) and args[i + 1] == "host":
+                self._reject_reason = "docker build with --network host is blocked by policy"
+                return False
+
+        dockerfile_rel, context = self._extract_dockerfile_and_context(cmd)
+        dockerfile = dockerfile_rel or "Dockerfile"
+        dockerfile_path = dockerfile
+        if not os.path.isabs(dockerfile_path):
+            dockerfile_path = os.path.join(context, dockerfile)
+            if not os.path.isabs(context) and context != self._DOCKERFILE_POLICY_CONTEXT_DEFAULT:
+                dockerfile_path = os.path.join(self.cwd, context, dockerfile)
+            else:
+                dockerfile_path = os.path.join(self.cwd, dockerfile_path)
+
+        allowed, reason = self._scan_dockerfile_policy(dockerfile_path)
+        if not allowed:
+            self._reject_reason = reason or "dockerfile violates policy"
+            return False
+
+        return True
+
     def _allowed(self, cmd: List[str]) -> bool:
         self._reject_reason = None
         if not cmd:
@@ -100,6 +219,13 @@ class ExecKernel:
             return False
 
         normalized = self._normalize_cmd(cmd)
+
+        if self._looks_like_docker_build(normalized):
+            if not self._ensure_safe_docker_build(normalized):
+                if self._reject_reason:
+                    return False
+                self._reject_reason = f"docker build blocked by policy: {normalized}"
+                return False
 
         if normalized[0] == "docker":
             if len(normalized) >= 2 and normalized[1] in self.ALLOWED_DOCKER_CMDS:
