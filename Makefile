@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks benchmark-generate
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks benchmark-generate perf-smoke perf-strict
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
@@ -49,6 +49,14 @@ ci: ci-strict
 # Generate timing benchmark (baseline vs optimized).
 benchmark-generate:
 	$(PYTHON) docs/ops/benchmark_generate_cycle.py
+
+# Parse generated .autodev validation traces and compare against previous perf run.
+perf-smoke:
+	$(PYTHON) docs/ops/perf_smoke.py
+
+# Strict perf gate with conservative regression thresholds.
+perf-strict:
+	$(PYTHON) docs/ops/perf_strict.py
 
 # Validate template CI workflow and docs parity against shared contract.
 check-template:

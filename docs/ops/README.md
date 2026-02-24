@@ -8,6 +8,9 @@ This folder contains SDLC/운영 governance scripts and checks used by `coding-a
 - `run_template_tests.sh`
 - `checklist.md`
 - `benchmark_generate_cycle.py` (baseline vs optimized generate timing smoke)
+- `perf_validation.py` (validator timing extraction + regression comparison)
+- `perf_smoke.py` (collect current run perf to `.autodev/perf.json`)
+- `perf_strict.py` (perf regression gate against previous `.autodev/perf.json`)
 
 Use `make` for standard lanes:
 
@@ -19,4 +22,6 @@ make strict      # release-ready lane: mypy + tests + contract checks + release 
 make ci-fast
 make ci
 make benchmark-generate
+make perf-smoke      # collect lightweight performance telemetry from generated run
+make perf-strict     # compare against prior `.autodev/perf.json` with conservative thresholds
 ```

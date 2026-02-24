@@ -47,9 +47,13 @@ make check-release      # same as strict
 
 ```bash
 make benchmark-generate
+make perf-smoke
+make perf-strict
 ```
 
-Runs `docs/ops/benchmark_generate_cycle.py` with a tiny smoke PRD, then prints baseline vs optimized timing. Outputs are skipped (safe exit) if LLM key is unresolved.
+- `benchmark-generate`: baseline vs optimized generation timing smoke with `docs/ops/benchmark_generate_cycle.py`.
+- `perf-smoke`: parses latest `.autodev/task_quality_index.json` (or task quality snapshots), persists `generated_dir/.autodev/perf.json`, and prints summary.
+- `perf-strict`: compares `perf.json` against previous run, failing on conservative regressions.
 
 ## 3) Release-readiness (Go/No-Go)
 

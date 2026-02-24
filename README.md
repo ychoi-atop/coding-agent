@@ -157,7 +157,9 @@ run:
 ### Performance knobs (generate cycles)
 - `make fast` for quick iteration
 - `make strict` (or `make ci`) before pushing/release
-- `make benchmark-generate` for baseline vs optimized timing smoke
+- `make benchmark-generate` for baseline vs optimized generation timing smoke
+- `make perf-smoke` for lightweight performance snapshot from a generated run
+- `make perf-strict` for conservative regression gate against previous `generated_dir/.autodev/perf.json`
 
 ```yaml
 profiles:
