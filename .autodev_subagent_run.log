@@ -1,0 +1,101 @@
+{
+  "ts": "2026-02-25T12:40:59Z",
+  "event": "autodev.run_cli_start",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "profile": "enterprise",
+  "prd": "docs/ops/benchmark_smoke_prd.md",
+  "out_root": "generated_runs",
+  "run_out": "generated_runs/benchmark_smoke_prd_20260225_214059"
+}
+{
+  "ts": "2026-02-25T12:40:59Z",
+  "event": "run_enterprise.start",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "run_profile": "enterprise",
+  "event_scope": "run",
+  "validators_enabled": [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pip_audit",
+    "bandit",
+    "semgrep",
+    "sbom",
+    "docker_build"
+  ],
+  "disable_docker_build": false,
+  "template_candidates": [
+    "python_fastapi",
+    "python_cli",
+    "python_library"
+  ],
+  "max_fix_loops_total": 10,
+  "max_fix_loops_per_task": 4,
+  "max_json_repair": 2
+}
+{
+  "ts": "2026-02-25T12:40:59Z",
+  "event": "llm.parse_attempt",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer",
+  "attempt": 1,
+  "max_attempts": 3,
+  "safe_payload": "PRD_MARKDOWN:\n# AutoDev Smoke PRD\n\n## Goals\n- Verify a minimal generation path is healthy after an LLM provider swap.\n- Keep the run short enough for iterative local benchmarking.\n\n## Features\n- Create a helper functi..."
+}
+HTTP Request: POST http://127.0.0.1:11434/v1/chat/completions "HTTP/1.1 200 OK"
+{
+  "ts": "2026-02-25T12:42:26Z",
+  "event": "llm.parse_retry_requested",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer",
+  "attempt": 1,
+  "raw_preview": "{\"title\":\"AutoDev Smoke PRD\",\"goals\":[\"Verify a minimal generation path is healthy after an LLM provider swap.\",\"Keep the run short enough for iterative local benchmarking.\"],\"features\":[{\"name\":\"C...",
+  "error": "'non_goals' is a required property\n\nFailed validating 'required' in schema:\n    {'type': 'object',\n     'required': ['title',\n                  'goals',\n                  'non_goals',\n                  'features',\n                  'acceptance_criteria',\n                  'nfr',\n                  'constraints'],\n     'properties': {'title': {'type': 'string'},\n                    'goals': {'type': 'array', 'items': {'type': 'string'}},\n                    'non_goals': {'type': 'array',\n                                  'items': {'type': 'string'}},\n                    'personas': {'type': 'array',\n                                 'items': {'type': 'string'}},\n                    'features': {'type': 'array',\n                                 'items': {'type': 'object',\n                                           'required': ['name',\n                                                        'description',\n                                                        'requirements'],\n                                           'properties': {'name': {'type': 'string'},\n                                                          'description': {'type': 'string'},\n                                                          'requirements': {'type': 'array',\n                                                                           'items': {'type': 'string'}},\n                                                          'api_surface': {'type': 'array',\n                                                                          'items': {'type': 'string'}}},\n                                           'additionalProperties': False}},\n                    'acceptance_criteria': {'type': 'array',\n                                            'items': {'type': 'string'}},\n                    'nfr': {'type': 'object'},\n                    'constraints': {'type': 'array',\n                                    'items': {'type': 'string'}},\n                    'performance_targets': {'type': 'object'},\n                    'expected_load': {'type': 'object'},\n                    'latency_sensitive_paths': {'type': 'array',\n                                                'items': {'type': 'string'}},\n                    'cost_priority': {'type': 'string'}},\n     'additionalProperties': False}\n\nOn instance:\n    {'title': 'AutoDev Smoke PRD',\n     'goals': ['Verify a minimal generation path is healthy after an LLM '\n               'provider swap.',\n               'Keep the run short enough for iterative local '\n               'benchmarking.'],\n     'features': [{'name': 'Create helper function add',\n                   'requirements': ['Create a helper function `add(a: int, '\n                                    'b: int) -> int`.']},\n                  {'name': 'Add unit test for integer addition',\n                   'requirements': ['Add one unit test for integer '\n                                    'addition.']}],\n     'acceptance_criteria': ['Generate a runnable Python CLI project.',\n                             'Include at least one passing unit test.',\n                             'Exit with success and write '\n                             '`.autodev/REPORT.md`.']}"
+}
+{
+  "ts": "2026-02-25T12:42:26Z",
+  "event": "llm.parse_attempt",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer",
+  "attempt": 2,
+  "max_attempts": 3,
+  "safe_payload": "Your previous output did not match the required JSON schema.\nError: 'non_goals' is a required property\n\nFailed validating 'required' in schema:\n    {'type': 'object',\n     'required': ['title',\n                  'goal..."
+}
+HTTP Request: POST http://127.0.0.1:11434/v1/chat/completions "HTTP/1.1 200 OK"
+{
+  "ts": "2026-02-25T12:43:12Z",
+  "event": "llm.parse_success",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer._post_process",
+  "attempts": 2,
+  "repaired_fields": [
+    "title",
+    "goals",
+    "non_goals",
+    "features",
+    "acceptance_criteria",
+    "constraints",
+    "nfr"
+  ]
+}
+{
+  "ts": "2026-02-25T12:43:12Z",
+  "event": "llm.parse_attempt",
+  "run_id": "85b043a30a0f48acae79840be6673766",
+  "request_id": "adaa70fd66f9426a998755dfb8f0bde4",
+  "run_profile": "enterprise",
+  "component": "planner",
+  "attempt": 1,
+  "max_attempts": 3,
+  "safe_payload": "{\n  \"template_candidates\": [\n    \"python_fastapi\",\n    \"python_cli\",\n    \"python_library\"\n  ],\n  \"prd_struct\": {\n    \"title\": \"AutoDev Smoke PRD\",\n    \"goals\": [\n      \"Verify a minimal generation path is healthy afte..."
+}

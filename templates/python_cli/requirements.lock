@@ -1,6 +1,6 @@
 # Generated lock snapshot for this template (direct dependencies + hashes)
 # Regenerate when requirements.txt changes. Keep in sync with requirements.txt.
-rich==13.10.4
+rich==13.5.2
 pytest==8.3.3
 ruff==0.5.4
 mypy==1.11.2

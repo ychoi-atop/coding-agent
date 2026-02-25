@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404  # Legitimate stdlib subprocess usage with bounded allowlist + no shell
 from dataclasses import dataclass
 from typing import List
 
@@ -132,7 +132,7 @@ class ExecKernel:
         i = 2
         while i < len(args):
             token = args[i]
-            if token == "--file" or token == "-f":
+            if token == "--file" or token == "-f":  # nosec B105
                 if i + 1 < len(args):
                     dockerfile = args[i + 1]
                     i += 2
@@ -141,7 +141,7 @@ class ExecKernel:
                 dockerfile = token.split("=", 1)[1]
             elif token.startswith("--network"):
                 # guard against host networking and skip network argument pair/value
-                if token == "--network" and i + 1 < len(args):
+                if token == "--network" and i + 1 < len(args):  # nosec B105
                     i += 2
                     continue
             elif token.startswith("--network="):
@@ -191,7 +191,7 @@ class ExecKernel:
             return False
 
         for i, token in enumerate(args):
-            if token == "--network" and i + 1 < len(args) and args[i + 1] == "host":
+            if token == "--network" and i + 1 < len(args) and args[i + 1] == "host":  # nosec B105
                 self._reject_reason = "docker build with --network host is blocked by policy"
                 return False
 
@@ -330,7 +330,7 @@ class ExecKernel:
             reason = self._reject_reason or "unknown"
             raise RuntimeError(f"Command not allowed: {cmd}. reason={reason}")
         try:
-            p = subprocess.run(
+            p = subprocess.run(  # nosec B603  # allowlist validated command list only
                 cmd,
                 cwd=self.cwd,
                 capture_output=True,

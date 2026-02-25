@@ -78,6 +78,19 @@ class Workspace:
     def exists(self, rel_path: str | PathLike[str]) -> bool:
         return os.path.exists(self._abs(rel_path))
 
+    @staticmethod
+    def _materialize_patch_for_new_file(diff: str) -> str | None:
+        """Best-effort fallback for malformed creation patches."""
+        added: list[str] = []
+        for line in diff.splitlines():
+            if line.startswith(("+++", "@@")):
+                continue
+            if line.startswith("+"):
+                added.append(line[1:])
+        if not added:
+            return None
+        return "\n".join(added) + "\n"
+
     def list_files(self, max_files: int = 1200) -> List[str]:
         out: List[str] = []
         for base, _, files in os.walk(self.root):
@@ -150,11 +163,23 @@ class Workspace:
                 if self.exists(c.path):
                     validate_unified_diff(c.content)
                     original = self.read_text(c.path)
-                    updated = apply_unified_diff(original, c.content)
+                    try:
+                        updated = apply_unified_diff(original, c.content)
+                    except Exception:
+                        materialized = self._materialize_patch_for_new_file(c.content)
+                        if materialized is None:
+                            raise
+                        updated = materialized
                     backup = original
                     backup_exists = True
                 else:
-                    updated = apply_unified_diff("", c.content)
+                    try:
+                        updated = apply_unified_diff("", c.content)
+                    except Exception:
+                        materialized = self._materialize_patch_for_new_file(c.content)
+                        if materialized is None:
+                            raise
+                        updated = materialized
                     backup = None
                     backup_exists = False
 

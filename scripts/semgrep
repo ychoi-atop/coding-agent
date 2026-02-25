@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prefer an existing semgrep on PATH.
+if command -v semgrep >/dev/null 2>&1; then
+  exec semgrep "$@"
+fi
+
+# Fallback to common user-local installs where package entrypoints live.
+USER_VER=$(python3 - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)
+
+declare -a CANDIDATE_BINS=(
+  "$HOME/.local/bin/semgrep"
+  "$HOME/Library/Python/${USER_VER}/bin/semgrep"
+)
+
+for candidate in "${CANDIDATE_BINS[@]}"; do
+  if [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+# Final fallback: ask python for a local site path (covers nonstandard layouts).
+USER_SITE_BIN=$(python3 - <<'PY'
+import site
+import os
+site_base = site.getuserbase()
+print(os.path.join(site_base, "bin", "semgrep"))
+PY
+)
+if [ -x "$USER_SITE_BIN" ]; then
+  exec "$USER_SITE_BIN" "$@"
+fi
+
+cat <<EOF >&2
+semgrep not found. Install it in PATH or ensure the user site-packages bin is available.
+Tried:
+ - $(command -v semgrep 2>/dev/null || echo unavailable)
+ - $HOME/.local/bin/semgrep
+ - $HOME/Library/Python/${USER_VER}/bin/semgrep
+ - $USER_SITE_BIN
+EOF
+exit 127

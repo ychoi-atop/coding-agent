@@ -33,6 +33,10 @@ def _strip_diff_fence(diff_text: str) -> str:
 
 def parse_unified_diff(diff_text: str) -> List[Hunk]:
     text = _strip_diff_fence(diff_text)
+    # Some models emit unified diffs as a single JSON-escaped line ("\\n" literals).
+    # Normalize that form so hunk parsing still works.
+    if "\\n" in text and "\n" not in text:
+        text = text.replace("\\n", "\n")
     lines = text.splitlines(keepends=True)
     hunks: List[Hunk] = []
     i = 0

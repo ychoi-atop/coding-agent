@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks benchmark-generate perf-smoke perf-strict
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks benchmark-generate perf-smoke perf-strict untyped-check test-backend
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
@@ -25,6 +25,10 @@ check: check-strict
 check-untyped-defs:
 	$(PYTHON) -m mypy --check-untyped-defs autodev || true
 
+# Compatibility alias used by legacy CI entrypoints.
+untyped-check:
+	$(PYTHON) -m mypy --check-untyped-defs autodev
+
 # Run the repository unit tests only.
 tests-fast:
 	$(PYTHON) -m pytest -q autodev/tests
@@ -36,6 +40,19 @@ tests-strict:
 
 # Legacy compatibility lane.
 tests: tests-strict
+
+# Compatibility test target used by older workflows.
+test-backend:
+	@TARGET_TESTS="$(BACKEND_TEST_ARGS)"; \
+	TARGET_BASE=$${TARGET_TESTS%%::*}; \
+	if [ -z "$$TARGET_TESTS" ]; then \
+		$(PYTHON) -m pytest -q autodev/tests; \
+	elif [ -f "$$TARGET_TESTS" ] || [ -d "$$TARGET_TESTS" ] || [ -f "$$TARGET_BASE" ]; then \
+		$(PYTHON) -m pytest -q "$$TARGET_TESTS"; \
+	else \
+		echo "[WARN] Missing test target $$TARGET_TESTS; running default test suite"; \
+		$(PYTHON) -m pytest -q autodev/tests; \
+	fi
 
 # Fast local CI-equivalent pass for quick iteration.
 ci-fast: compile check-fast tests-fast

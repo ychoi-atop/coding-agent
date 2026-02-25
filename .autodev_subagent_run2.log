@@ -1,0 +1,182 @@
+{
+  "ts": "2026-02-25T12:45:41Z",
+  "event": "autodev.run_cli_start",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "profile": "enterprise",
+  "prd": "docs/ops/benchmark_smoke_prd.md",
+  "out_root": "generated_runs",
+  "run_out": "generated_runs/benchmark_smoke_prd_20260225_214541"
+}
+{
+  "ts": "2026-02-25T12:45:41Z",
+  "event": "run_enterprise.start",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "event_scope": "run",
+  "validators_enabled": [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pip_audit",
+    "bandit",
+    "semgrep",
+    "sbom",
+    "docker_build"
+  ],
+  "disable_docker_build": false,
+  "template_candidates": [
+    "python_fastapi",
+    "python_cli",
+    "python_library"
+  ],
+  "max_fix_loops_total": 10,
+  "max_fix_loops_per_task": 4,
+  "max_json_repair": 2
+}
+{
+  "ts": "2026-02-25T12:45:41Z",
+  "event": "llm.parse_attempt",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer",
+  "attempt": 1,
+  "max_attempts": 3,
+  "safe_payload": "PRD_MARKDOWN:\n# AutoDev Smoke PRD\n\n## Goals\n- Verify a minimal generation path is healthy after an LLM provider swap.\n- Keep the run short enough for iterative local benchmarking.\n\n## Features\n- Create a helper functi..."
+}
+HTTP Request: POST http://127.0.0.1:11434/v1/chat/completions "HTTP/1.1 200 OK"
+{
+  "ts": "2026-02-25T12:46:19Z",
+  "event": "llm.parse_retry_requested",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer",
+  "attempt": 1,
+  "raw_preview": "{\"title\":\"AutoDev Smoke PRD\",\"goals\":[\"Verify a minimal generation path is healthy after an LLM provider swap.\",\"Keep the run short enough for iterative local benchmarking.\"],\"features\":[{\"name\":\"H...",
+  "error": "'non_goals' is a required property\n\nFailed validating 'required' in schema:\n    {'type': 'object',\n     'required': ['title',\n                  'goals',\n                  'non_goals',\n                  'features',\n                  'acceptance_criteria',\n                  'nfr',\n                  'constraints'],\n     'properties': {'title': {'type': 'string'},\n                    'goals': {'type': 'array', 'items': {'type': 'string'}},\n                    'non_goals': {'type': 'array',\n                                  'items': {'type': 'string'}},\n                    'personas': {'type': 'array',\n                                 'items': {'type': 'string'}},\n                    'features': {'type': 'array',\n                                 'items': {'type': 'object',\n                                           'required': ['name',\n                                                        'description',\n                                                        'requirements'],\n                                           'properties': {'name': {'type': 'string'},\n                                                          'description': {'type': 'string'},\n                                                          'requirements': {'type': 'array',\n                                                                           'items': {'type': 'string'}},\n                                                          'api_surface': {'type': 'array',\n                                                                          'items': {'type': 'string'}}},\n                                           'additionalProperties': False}},\n                    'acceptance_criteria': {'type': 'array',\n                                            'items': {'type': 'string'}},\n                    'nfr': {'type': 'object'},\n                    'constraints': {'type': 'array',\n                                    'items': {'type': 'string'}},\n                    'performance_targets': {'type': 'object'},\n                    'expected_load': {'type': 'object'},\n                    'latency_sensitive_paths': {'type': 'array',\n                                                'items': {'type': 'string'}},\n                    'cost_priority': {'type': 'string'}},\n     'additionalProperties': False}\n\nOn instance:\n    {'title': 'AutoDev Smoke PRD',\n     'goals': ['Verify a minimal generation path is healthy after an LLM '\n               'provider swap.',\n               'Keep the run short enough for iterative local '\n               'benchmarking.'],\n     'features': [{'name': 'Helper function add',\n                   'requirements': [{'description': 'Implement a helper '\n                                                    'function add(a: int, '\n                                                    'b: int) -> int that '\n                                                    'returns the sum of a '\n                                                    'and b.'}]},\n                  {'name': 'Unit test for addition',\n                   'requirements': [{'description': 'Add a unit test that '\n                                                    'verifies the add '\n                                                    'function correctly '\n                                                    'adds two integers, '\n                                                    'e.g., add(2, 3) == '\n                                                    '5.'}]}],\n     'acceptance_criteria': ['Generate a runnable Python CLI project.',\n                             'Include at least one passing unit test.',\n                             'Exit with success and write '\n                             '\".autodev/REPORT.md\".']}"
+}
+{
+  "ts": "2026-02-25T12:46:19Z",
+  "event": "llm.parse_attempt",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer",
+  "attempt": 2,
+  "max_attempts": 3,
+  "safe_payload": "Your previous output did not match the required JSON schema.\nError: 'non_goals' is a required property\n\nFailed validating 'required' in schema:\n    {'type': 'object',\n     'required': ['title',\n                  'goal..."
+}
+HTTP Request: POST http://127.0.0.1:11434/v1/chat/completions "HTTP/1.1 200 OK"
+{
+  "ts": "2026-02-25T12:47:15Z",
+  "event": "llm.parse_success",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "prd_normalizer._post_process",
+  "attempts": 2,
+  "repaired_fields": [
+    "title",
+    "goals",
+    "non_goals",
+    "features",
+    "acceptance_criteria",
+    "nfr",
+    "constraints"
+  ]
+}
+{
+  "ts": "2026-02-25T12:47:15Z",
+  "event": "llm.parse_attempt",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "planner",
+  "attempt": 1,
+  "max_attempts": 3,
+  "safe_payload": "{\n  \"template_candidates\": [\n    \"python_fastapi\",\n    \"python_cli\",\n    \"python_library\"\n  ],\n  \"prd_struct\": {\n    \"title\": \"AutoDev Smoke PRD\",\n    \"goals\": [\n      \"Verify a minimal generation path is healthy afte..."
+}
+HTTP Request: POST http://127.0.0.1:11434/v1/chat/completions "HTTP/1.1 200 OK"
+{
+  "ts": "2026-02-25T12:50:03Z",
+  "event": "llm.parse_success",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "planner._post_process",
+  "attempts": 1,
+  "repaired_fields": [
+    "project",
+    "tasks",
+    "ci",
+    "docker",
+    "security",
+    "observability",
+    "runtime_dependencies",
+    "dev_dependencies"
+  ]
+}
+{
+  "ts": "2026-02-25T12:50:03Z",
+  "event": "run.scaffolded",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "project_type": "python_cli",
+  "template_dir": "/Users/ychoi/Documents/GitHub/coding-agent/templates/python_cli"
+}
+{
+  "ts": "2026-02-25T12:50:03Z",
+  "event": "run.quality_profile_resolved",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "resolved_from": "balanced",
+  "task_soft_fail": [
+    "docker_build",
+    "pip_audit",
+    "sbom"
+  ],
+  "final_soft_fail": [
+    "pip_audit",
+    "sbom",
+    "semgrep"
+  ]
+}
+
+== TASK task1 == Create project scaffold
+{
+  "ts": "2026-02-25T12:50:14Z",
+  "event": "task.start",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "iteration": 1,
+  "task_id": "task1",
+  "task_title": "Create project scaffold",
+  "validator_focus": [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pip_audit",
+    "bandit",
+    "semgrep",
+    "sbom",
+    "docker_build"
+  ],
+  "file_count": 6
+}
+{
+  "ts": "2026-02-25T12:50:14Z",
+  "event": "llm.parse_attempt",
+  "run_id": "aadc4fc6cb1d42d6b7b133d4df853eaa",
+  "request_id": "4e1058a09f34443ebd105cf2132dcbc1",
+  "run_profile": "enterprise",
+  "component": "implementer",
+  "attempt": 1,
+  "max_attempts": 3,
+  "safe_payload": "{\n  \"plan\": {\n    \"project\": {\n      \"type\": \"python_cli\",\n      \"name\": \"autodev-bench\",\n      \"quality_gate_profile\": null,\n      \"default_artifacts\": []\n    },\n    \"performance_hints\": {}\n  },\n  \"task\": {\n    \"id\":..."
+}

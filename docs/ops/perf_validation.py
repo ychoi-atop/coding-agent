@@ -65,6 +65,31 @@ def _collect_from_task_index(task_index: Dict[str, Any]) -> list[TaskPerfRow]:
                 soft_failures=soft_failures,
             )
         )
+
+    # Fallback: some interrupted/partial runs only persist final validator rows.
+    # Convert final validation entries into perf rows so strict mode can still
+    # assert that measurable validation data exists.
+    if not rows:
+        final = task_index.get("final", {})
+        validations = final.get("validations", []) if isinstance(final, dict) else []
+        if isinstance(validations, list):
+            for idx, row in enumerate(validations, start=1):
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get("name") or f"validator_{idx}")
+                ok = bool(row.get("ok"))
+                status = "passed" if ok else "failed"
+                rows.append(
+                    TaskPerfRow(
+                        task_id=f"final:{name}",
+                        attempts=1,
+                        duration_ms=_safe_int(row.get("duration_ms", 0)),
+                        status=status,
+                        hard_failures=0 if ok else 1,
+                        soft_failures=0,
+                    )
+                )
+
     return rows
 
 

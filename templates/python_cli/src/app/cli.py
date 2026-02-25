@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, List
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
         exit_on_error=False,
     )
     p.add_argument("--hello", default="world", help="Greeting name to print")
-    p.add_argument("--repeat", type=int, default=1, help="How many times to print the greeting (1-3)")
+    p.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="How many times to print the greeting (1-3)",
+    )
     p.add_argument("--json", action="store_true", help="Emit JSON response instead of plain text")
     return p
 
@@ -61,7 +66,7 @@ def _serialize_payload(payload: dict[str, Any]) -> str:
     return str(payload)
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("cli.args", extra={"argv": argv or []})
 

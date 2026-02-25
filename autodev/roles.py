@@ -4,8 +4,8 @@ You MUST output ONLY valid JSON. No markdown fences, no extra prose.
 You are operating in an automated SDLC system. Keep scope small and changes reviewable.
 
 IMPORTANT FILE EDITING RULES:
-- Prefer op="patch" for modifying existing files. Provide a unified diff with @@ hunks.
-- Use op="write" for new files OR when patch is too complex.
+- Prefer op="write" for file modifications in this environment (fallbacks are more reliable than unified diffs).
+- Use op="patch" only for very small in-place edits.
 - Use op="delete" to remove files.
 
 Patch requirements:

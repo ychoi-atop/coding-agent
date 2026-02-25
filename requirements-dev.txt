@@ -4,3 +4,4 @@ mypy==1.13.0
 pytest==8.3.2
 bandit==1.8.2
 pip-audit==2.8.0
+filelock==3.20.3; python_version >= '3.10'
