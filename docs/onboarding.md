@@ -114,8 +114,22 @@ AutoDev의 클라이언트는 OpenAI 형식이므로, Claude를 바로 쓰려면
 llm:
   base_url: "https://openrouter.ai/api/v1"  # 또는 자체 게이트웨이 주소
   api_key: "<gateway-key>"
-  model: "anthropic/claude-3.5-sonnet"
+  model: "anthropic/claude-sonnet-4-6"
 ```
+
+#### 런타임 모델 오버라이드 (config 수정 없이)
+
+Claude Sonnet 4.6을 기본값으로 두고, 실행 시점에만 모델을 바꾸고 싶다면 아래 우선순위를 사용하세요.
+
+```bash
+# 1) 환경변수 오버라이드
+export AUTODEV_LLM_MODEL="anthropic/claude-sonnet-4-6"
+
+# 2) CLI 오버라이드 (최우선)
+autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --model "anthropic/claude-sonnet-4-6"
+```
+
+우선순위: `--model` > `AUTODEV_LLM_MODEL` > `config.yaml` (`llm.model`)
 
 #### Codex 계열 모델(게이트웨이 경유)
 
