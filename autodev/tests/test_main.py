@@ -135,6 +135,100 @@ profiles:
     assert "Available profiles: minimal, strict" in str(exc.value)
 
 
+def test_cli_prefers_cli_model_overrides_over_env_and_config(tmp_path, monkeypatch):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: config-model
+profiles:
+  minimal:
+    validators:
+      - ruff
+      - pytest
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path, prd_path = _build_fake_args(tmp_path)
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    async def _fake_run_autodev_enterprise(*_args, **kwargs):
+        captured["model"] = kwargs["client"].model
+        return True, {"project": {}}, {"project": {}}, []
+
+    monkeypatch.setattr(main, "run_autodev_enterprise", _fake_run_autodev_enterprise)
+    monkeypatch.setenv("AUTODEV_LLM_MODEL", "env-model")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "autodev",
+            "--prd",
+            str(prd_path),
+            "--out",
+            str(tmp_path / "runs"),
+            "--config",
+            str(cfg_path),
+            "--profile",
+            "minimal",
+            "--model",
+            "cli-model",
+        ],
+    )
+
+    main.cli()
+
+    assert captured["model"] == "cli-model"
+
+
+def test_cli_uses_env_model_override_when_cli_model_is_missing(tmp_path, monkeypatch):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: config-model
+profiles:
+  minimal:
+    validators:
+      - ruff
+      - pytest
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path, prd_path = _build_fake_args(tmp_path)
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    async def _fake_run_autodev_enterprise(*_args, **kwargs):
+        captured["model"] = kwargs["client"].model
+        return True, {"project": {}}, {"project": {}}, []
+
+    monkeypatch.setattr(main, "run_autodev_enterprise", _fake_run_autodev_enterprise)
+    monkeypatch.setenv("AUTODEV_LLM_MODEL", "env-model")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "autodev",
+            "--prd",
+            str(prd_path),
+            "--out",
+            str(tmp_path / "runs"),
+            "--config",
+            str(cfg_path),
+            "--profile",
+            "minimal",
+        ],
+    )
+
+    main.cli()
+
+    assert captured["model"] == "env-model"
+
+
 def test_cli_emits_run_and_request_identifiers(tmp_path, monkeypatch):
     cfg = """\
 llm:

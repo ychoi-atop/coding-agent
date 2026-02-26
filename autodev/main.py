@@ -166,6 +166,11 @@ def cli():
         help="Pause after plan generation and ask for confirmation before implementation starts.",
     )
     ap.add_argument("--config", default="config.yaml")
+    ap.add_argument(
+        "--model",
+        default=None,
+        help="Override llm.model at runtime (highest precedence; then AUTODEV_LLM_MODEL env, then config).",
+    )
     args = ap.parse_args()
 
     try:
@@ -209,11 +214,18 @@ def cli():
             "Missing LLM API key. Set llm.api_key in config.yaml (or as ${AUTODEV_LLM_API_KEY}) "
             "or define AUTODEV_LLM_API_KEY in the environment."
         )
+
+    llm_model = (args.model or os.getenv("AUTODEV_LLM_MODEL") or llm_cfg.get("model") or "").strip()
+    if not llm_model:
+        raise SystemExit(
+            "Missing LLM model. Set llm.model in config.yaml, define AUTODEV_LLM_MODEL, or pass --model."
+        )
+
     try:
         client = LLMClient(
             base_url=llm_cfg["base_url"],
             api_key=llm_api_key,
-            model=llm_cfg["model"],
+            model=llm_model,
             timeout_sec=int(llm_cfg.get("timeout_sec", 240)),
             max_total_tokens=max_token_budget,
         )
@@ -238,8 +250,15 @@ def cli():
         "disable_docker_build": disable_docker_build,
         "validators_enabled": validators_enabled,
         "resolved_from": quality_profile.get("name", "balanced"),
-        "llm_budget": {
-            "max_total_tokens": max_token_budget,
+        "llm": {
+            "model": llm_model,
+            "model_override": {
+                "cli": args.model,
+                "env": os.getenv("AUTODEV_LLM_MODEL"),
+            },
+            "budget": {
+                "max_total_tokens": max_token_budget,
+            },
         },
         "role_temperatures": role_temperatures,
         "quality_payload_files": {
@@ -258,6 +277,7 @@ def cli():
         prd=args.prd,
         out_root=args.out,
         run_out=run_out,
+        llm_model=llm_model,
         llm_max_total_tokens=max_token_budget,
         role_temperatures=role_temperatures,
     )

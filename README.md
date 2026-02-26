@@ -46,9 +46,9 @@ Edit `config.yaml` for your model endpoint and run profile. Set `AUTODEV_LLM_API
 
 ```yaml
 llm:
-  base_url: "http://127.0.0.1:1234/v1"
+  base_url: "https://openrouter.ai/api/v1"
   api_key: ${AUTODEV_LLM_API_KEY}
-  model: "qwen3-coder-30b-a3b-instruct-mlx"
+  model: "anthropic/claude-sonnet-4-6"
   timeout_sec: 240
   role_temperatures:
     prd_normalizer: 0.2
@@ -67,9 +67,9 @@ AutoDev is OpenAI-compatible transport only. To switch providers, only the `llm`
 
   ```yaml
   llm:
-    base_url: "http://127.0.0.1:1234/v1"
+    base_url: "https://openrouter.ai/api/v1"
     api_key: ${AUTODEV_LLM_API_KEY}
-    model: "qwen3-coder-30b-a3b-instruct-mlx"
+    model: "anthropic/claude-sonnet-4-6"
   ```
 
 - Ollama:
@@ -129,7 +129,7 @@ AutoDev is OpenAI-compatible transport only. To switch providers, only the `llm`
   llm:
     base_url: "https://openrouter.ai/api/v1"  # or your proxy URL
     api_key: "<proxy-or-service-key>"
-    model: "anthropic/claude-3.5-sonnet"
+    model: "anthropic/claude-sonnet-4-6"
   ```
 
 - Codex-style models (via compatible gateway)
@@ -160,6 +160,14 @@ run:
 - Update only `llm.base_url`, `llm.api_key`, and `llm.model`
 - Ensure backend is running (`ollama serve` / gateway health endpoint)
 - Run a dry-check (e.g. `autodev --help` or a small sample PRD run)
+
+### Runtime model override (without editing config)
+- Environment variable override:
+  - `export AUTODEV_LLM_MODEL="anthropic/claude-sonnet-4-6"`
+- CLI override (highest precedence):
+  - `autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --model "anthropic/claude-sonnet-4-6"`
+
+Precedence: `--model` > `AUTODEV_LLM_MODEL` > `config.yaml` (`llm.model`).
 
 ### Performance knobs (generate cycles)
 - `make fast` for quick iteration
