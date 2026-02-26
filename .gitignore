@@ -6,3 +6,5 @@ autodev_agent.egg-info/
 generated_repo/
 runs/
 generated_runs/
+
+.env
