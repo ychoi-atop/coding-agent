@@ -87,6 +87,12 @@ from .adaptive_gate import (
     resolve_adaptive_gate_config,
     select_validators,
 )
+from .parallel_fixer import (
+    find_disjoint_groups,
+    merge_changesets as _merge_fixer_changesets,
+    partition_failures,
+    resolve_parallel_fixer_config,
+)
 from .context_cache import IncrementalContextCache
 from .perf_baseline import record_and_check as _perf_baseline_check
 from .task_scheduler import (
@@ -987,6 +993,9 @@ async def run_autodev_enterprise(
         except Exception:
             logger.debug("adaptive_gate: failed to load validator stats", exc_info=True)
 
+    # -- Parallel fixer: concurrent repair of independent failure categories ----
+    _parallel_fixer_config = resolve_parallel_fixer_config(quality_profile)
+
     def _cached_files_context(task_id: str, files: List[str], goal: str = "") -> Dict[str, str]:
         cache_key = f"{task_id}:{'|'.join(files)}"
         cached = task_context_cache.get(cache_key)
@@ -1469,56 +1478,8 @@ async def run_autodev_enterprise(
                 repair_mode = "targeted"
                 repair_used = True
 
-            repair_payload = _build_task_payload(plan, task, performance_context=performance_context)
-            repair_payload["files_context"] = files_ctx
-            repair_payload["validation"] = task_last_validation
-
-            # Build escalated guidance with failure analysis
-            base_guidance = p["fixer"]["task"]
-            repair_payload["guidance"] = build_escalated_guidance(
-                level=escalation_level,
-                analyses=failure_analyses,
-                base_guidance=base_guidance,
-                validation_rows=task_last_validation,
-            )
-
-            # Deduplicated error summary for fixer
-            _dedup_summary = deduplicate_for_guidance(fingerprinted)
-            if _dedup_summary:
-                repair_payload["guidance"] += "\n\n" + _dedup_summary
-
-            # Persistent error warnings (3-strike)
-            _persistent_warning = build_persistent_error_warnings(fingerprint_iteration_counts)
-            if _persistent_warning:
-                repair_payload["guidance"] += "\n\n" + _persistent_warning
-
-            # Cross-task hints from repair history (category + fingerprint level)
-            cross_hints: List[str] = []
-            for fa in failure_analyses:
-                cross_hints.extend(repair_history.get_hints_for_category(fa.category))
-            for ff in fingerprinted:
-                for _fp in ff.fingerprints:
-                    cross_hints.extend(repair_history.get_hints_for_fingerprint(_fp.digest))
-            # Deduplicate hints
-            _seen_hints: set[str] = set()
-            _unique_hints: List[str] = []
-            for _h in cross_hints:
-                if _h not in _seen_hints:
-                    _seen_hints.add(_h)
-                    _unique_hints.append(_h)
-            if _unique_hints:
-                repair_payload["guidance"] += (
-                    "\n\nCross-task hints:\n" + "\n".join(f"- {h}" for h in _unique_hints[:5])
-                )
-
             last_failure_signature = signature
-            # Gather tool context for fixer
-            try:
-                _fixer_tool_results = tool_executor.gather_context(task)
-                if _fixer_tool_results:
-                    repair_payload["tool_context"] = ToolExecutor.serialize(_fixer_tool_results)
-            except Exception:
-                pass
+            base_guidance = p["fixer"]["task"]
 
             progress.repair_start(task["id"], attempt=loops + 1)
             _log_event(
@@ -1544,20 +1505,157 @@ async def run_autodev_enterprise(
                 from .roles import INCREMENTAL_FIXER_ADDENDUM
                 _fixer_system += "\n" + INCREMENTAL_FIXER_ADDENDUM
 
-            fix = await _llm_json(
-                client,
-                _fixer_system,
-                json_dumps(repair_payload),
-                CHANGESET_SCHEMA,
-                max_repair=max_json_repair,
-                run_id=run_id,
-                request_id=request_id,
-                profile=profile,
-                component="fixer",
-                semantic_validator=_validate_handoff_fields,
-                temperature=_role_temperature("fixer"),
-                role_hint="fixer",
+            # -- Helper: build a repair payload for a set of analyses/rows -----
+            def _build_repair_payload_for(
+                _analyses: List[Any],
+                _validation_rows: List[Dict[str, Any]],
+                _fingerprinted_subset: List[Any],
+            ) -> Dict[str, Any]:
+                _rp = _build_task_payload(plan, task, performance_context=performance_context)
+                _rp["files_context"] = files_ctx
+                _rp["validation"] = _validation_rows
+                _rp["guidance"] = build_escalated_guidance(
+                    level=escalation_level,
+                    analyses=_analyses,
+                    base_guidance=base_guidance,
+                    validation_rows=_validation_rows,
+                )
+                _ds = deduplicate_for_guidance(_fingerprinted_subset)
+                if _ds:
+                    _rp["guidance"] += "\n\n" + _ds
+                _pw = build_persistent_error_warnings(fingerprint_iteration_counts)
+                if _pw:
+                    _rp["guidance"] += "\n\n" + _pw
+                _ch: List[str] = []
+                for _fa in _analyses:
+                    _ch.extend(repair_history.get_hints_for_category(_fa.category))
+                for _ff in _fingerprinted_subset:
+                    for _fp in _ff.fingerprints:
+                        _ch.extend(repair_history.get_hints_for_fingerprint(_fp.digest))
+                _sh: set[str] = set()
+                _uh: List[str] = []
+                for _h in _ch:
+                    if _h not in _sh:
+                        _sh.add(_h)
+                        _uh.append(_h)
+                if _uh:
+                    _rp["guidance"] += "\n\nCross-task hints:\n" + "\n".join(f"- {h}" for h in _uh[:5])
+                try:
+                    _ftr = tool_executor.gather_context(task)
+                    if _ftr:
+                        _rp["tool_context"] = ToolExecutor.serialize(_ftr)
+                except Exception:
+                    pass
+                return _rp
+
+            # -- Parallel fixer decision point ---------------------------------
+            _pf_groups = partition_failures(failure_analyses, task_last_validation)
+            _pf_disjoint = find_disjoint_groups(_pf_groups)
+            _use_parallel = (
+                _parallel_fixer_config.enabled
+                and len(_pf_disjoint) >= _parallel_fixer_config.min_groups
             )
+
+            if _use_parallel:
+                # Parallel path: concurrent fixer calls per category group
+                _log_event(
+                    "parallel_fixer.planned",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    task_id=task["id"],
+                    attempt=loops + 1,
+                    total_groups=len(_pf_groups),
+                    disjoint_groups=len(_pf_disjoint),
+                    categories=[g.category.value for g in _pf_disjoint],
+                )
+                trace.record(
+                    EventType.PARALLEL_FIXER_PLANNED,
+                    task_id=task["id"],
+                    groups=len(_pf_disjoint),
+                )
+
+                _pf_coros = []
+                for _pf_group in _pf_disjoint[:_parallel_fixer_config.max_parallel]:
+                    _pf_fp = [ff for ff in fingerprinted if ff.analysis.category == _pf_group.category]
+                    _pf_payload = _build_repair_payload_for(
+                        _pf_group.analyses, _pf_group.validator_rows, _pf_fp,
+                    )
+                    _pf_coros.append(
+                        _llm_json(
+                            client,
+                            _fixer_system,
+                            json_dumps(_pf_payload),
+                            CHANGESET_SCHEMA,
+                            max_repair=max_json_repair,
+                            run_id=run_id,
+                            request_id=request_id,
+                            profile=profile,
+                            component=f"fixer_{_pf_group.category.value}",
+                            semantic_validator=_validate_handoff_fields,
+                            temperature=_role_temperature("fixer"),
+                            role_hint="fixer",
+                        )
+                    )
+
+                _pf_results = await asyncio.gather(*_pf_coros, return_exceptions=True)
+
+                _pf_changesets = [
+                    (grp.category, res)
+                    for grp, res in zip(_pf_disjoint, _pf_results)
+                    if not isinstance(res, Exception)
+                ]
+
+                if _pf_changesets:
+                    _pf_merge = _merge_fixer_changesets(_pf_changesets)
+                    fix = _pf_merge.merged_changeset
+                    if _pf_merge.conflicts:
+                        _log_event(
+                            "parallel_fixer.conflicts",
+                            run_id=run_id,
+                            request_id=request_id,
+                            profile=profile,
+                            task_id=task["id"],
+                            conflict_count=len(_pf_merge.conflicts),
+                        )
+                    trace.record(
+                        EventType.PARALLEL_FIXER_MERGED,
+                        task_id=task["id"],
+                        merge_count=_pf_merge.stats["merge_count"],
+                        conflict_count=_pf_merge.stats["conflict_count"],
+                    )
+                else:
+                    # All parallel calls failed → sequential fallback
+                    _seq_payload = _build_repair_payload_for(
+                        failure_analyses, task_last_validation, fingerprinted,
+                    )
+                    fix = await _llm_json(
+                        client, _fixer_system, json_dumps(_seq_payload),
+                        CHANGESET_SCHEMA, max_repair=max_json_repair,
+                        run_id=run_id, request_id=request_id, profile=profile,
+                        component="fixer", semantic_validator=_validate_handoff_fields,
+                        temperature=_role_temperature("fixer"), role_hint="fixer",
+                    )
+            else:
+                # Sequential path (original behaviour)
+                repair_payload = _build_repair_payload_for(
+                    failure_analyses, task_last_validation, fingerprinted,
+                )
+                fix = await _llm_json(
+                    client,
+                    _fixer_system,
+                    json_dumps(repair_payload),
+                    CHANGESET_SCHEMA,
+                    max_repair=max_json_repair,
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    component="fixer",
+                    semantic_validator=_validate_handoff_fields,
+                    temperature=_role_temperature("fixer"),
+                    role_hint="fixer",
+                )
+
             quality_trace.append(_quality_metadata_from_changeset(fix, task["id"], run_set))
             fix_changes: List[Change] = []
             for c in fix["changes"]:

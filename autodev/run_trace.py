@@ -63,6 +63,10 @@ class EventType(str, Enum):
     CONTEXT_CACHE_HIT = "context_cache.hit"
     CONTEXT_CACHE_SUMMARY = "context_cache.summary"
 
+    # Parallel fixer
+    PARALLEL_FIXER_PLANNED = "parallel_fixer.planned"
+    PARALLEL_FIXER_MERGED = "parallel_fixer.merged"
+
 
 # ---------------------------------------------------------------------------
 # Data classes
