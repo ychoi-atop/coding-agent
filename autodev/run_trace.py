@@ -59,6 +59,10 @@ class EventType(str, Enum):
     SNAPSHOT_CREATED = "snapshot.created"
     SNAPSHOT_ROLLBACK = "snapshot.rollback"
 
+    # Context cache
+    CONTEXT_CACHE_HIT = "context_cache.hit"
+    CONTEXT_CACHE_SUMMARY = "context_cache.summary"
+
 
 # ---------------------------------------------------------------------------
 # Data classes

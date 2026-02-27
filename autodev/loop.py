@@ -81,6 +81,7 @@ from .loop_validators import (  # noqa: F401
     _quality_metadata_from_changeset,
     _extract_fingerprint_digests,
 )
+from .context_cache import IncrementalContextCache
 from .perf_baseline import record_and_check as _perf_baseline_check
 from .task_scheduler import (
     TaskTimingStore,
@@ -937,6 +938,21 @@ async def run_autodev_enterprise(
     except Exception:
         logger.debug("task_scheduler: failed to load timing store", exc_info=True)
 
+    # -- Incremental context cache: stub unchanged files in repair loops ------
+    _icc_cfg = quality_profile.get("incremental_context_cache") if isinstance(quality_profile, dict) else None
+    _icc_enabled = True
+    _icc_stub_fmt = "structural"
+    if isinstance(_icc_cfg, dict):
+        if _icc_cfg.get("enabled") is False:
+            _icc_enabled = False
+        if _icc_cfg.get("stub_format") in ("structural", "hash_only"):
+            _icc_stub_fmt = _icc_cfg["stub_format"]
+    _incremental_cache = IncrementalContextCache(
+        code_index=code_index if code_index.files else None,
+        enabled=_icc_enabled,
+        stub_format=_icc_stub_fmt,
+    )
+
     def _cached_files_context(task_id: str, files: List[str], goal: str = "") -> Dict[str, str]:
         cache_key = f"{task_id}:{'|'.join(files)}"
         cached = task_context_cache.get(cache_key)
@@ -947,6 +963,19 @@ async def run_autodev_enterprise(
             ctx = context_selector.select_for_task(goal=goal, seed_files=files)
         else:
             ctx = _build_files_context(ws, files)
+        # Incremental context transform: stub unchanged files
+        ctx, _icc_savings = _incremental_cache.record_and_transform(task_id, ctx)
+        if _icc_savings.chars_saved > 0:
+            _log_event(
+                "context_cache.hit",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                task_id=task_id,
+                files_unchanged=_icc_savings.files_unchanged,
+                chars_saved=_icc_savings.chars_saved,
+                savings_pct=round(_icc_savings.savings_pct, 1),
+            )
         task_context_cache[cache_key] = ctx
         return ctx
 
@@ -2097,6 +2126,16 @@ async def run_autodev_enterprise(
     )
     trace_data = trace.to_dict()
     _write_json(ws, RUN_TRACE_FILE, trace_data)
+
+    # -- Context cache summary -------------------------------------------------
+    _cache_savings = _incremental_cache.get_cumulative_savings()
+    if _cache_savings.chars_saved > 0:
+        trace.record(
+            EventType.CONTEXT_CACHE_SUMMARY,
+            total_chars_saved=_cache_savings.chars_saved,
+            total_savings_pct=round(_cache_savings.savings_pct, 1),
+            files_stubbed=_cache_savings.files_unchanged,
+        )
 
     # -- Performance baseline tracking ----------------------------------------
     _task_timings = collect_task_timings(quality_summary)
