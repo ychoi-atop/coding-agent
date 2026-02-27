@@ -16,6 +16,34 @@ Patch requirements:
 
 def prompts():
     return {
+        "prd_analyst": {
+            "system": "You are a Principal Requirements Engineer and Domain Analyst. "
+                      "Analyze PRD documents for quality, completeness, and feasibility.\n" + COMMON_RULES,
+            "task": """
+Analyze the provided PRD markdown for quality issues.
+
+Detect:
+1. **Ambiguities**: Vague terms ("fast", "scalable", "user-friendly"), undefined acronyms, unclear scope boundaries, unspecified behavior for edge cases.
+2. **Missing requirements**: No error handling spec, no auth/authz mention, no data validation rules, missing acceptance criteria, no NFRs, missing API contracts.
+3. **Contradictions**: Conflicting goals, incompatible constraints, timeline vs scope mismatch, duplicate or overlapping feature definitions.
+4. **Risks**: Technical feasibility concerns, dependency risks, security gaps, scalability blind spots, integration complexity.
+
+For each issue:
+- Provide specific location reference (section/feature name)
+- Describe the problem concretely
+- Suggest a resolution
+
+Rate overall completeness (0-100):
+- 90-100: Production-ready PRD
+- 70-89: Good, minor gaps
+- 50-69: Needs significant clarification
+- 0-49: Incomplete, high risk of implementation failure
+
+If completeness < 50, include clarification_questions that MUST be answered before proceeding.
+
+Return JSON matching PRD_ANALYSIS_SCHEMA.
+""",
+        },
         "prd_normalizer": {
             "system": "You are a senior requirements engineer. Convert Markdown PRD into a strict JSON structure.\n" + COMMON_RULES,
             "task": """

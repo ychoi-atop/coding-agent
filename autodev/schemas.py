@@ -162,6 +162,74 @@ PLAN_SCHEMA = {
   "additionalProperties": False
 }
 
+PRD_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "required": ["ambiguities", "missing_requirements", "contradictions", "risks", "completeness_score", "summary"],
+    "properties": {
+        "ambiguities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["location", "description", "suggestion"],
+                "properties": {
+                    "location": {"type": "string", "minLength": 1},
+                    "description": {"type": "string", "minLength": 5},
+                    "suggestion": {"type": "string", "minLength": 1},
+                    "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "missing_requirements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["area", "description"],
+                "properties": {
+                    "area": {"type": "string", "minLength": 1},
+                    "description": {"type": "string", "minLength": 5},
+                    "impact": {"type": "string", "enum": ["blocking", "significant", "minor"]},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["items", "description"],
+                "properties": {
+                    "items": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+                    "description": {"type": "string", "minLength": 5},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "risks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["description", "mitigation"],
+                "properties": {
+                    "description": {"type": "string", "minLength": 5},
+                    "mitigation": {"type": "string", "minLength": 1},
+                    "likelihood": {"type": "string", "enum": ["high", "medium", "low"]},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "completeness_score": {
+            "type": "number", "minimum": 0, "maximum": 100,
+        },
+        "clarification_questions": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "summary": {"type": "string", "minLength": 10},
+    },
+    "additionalProperties": False,
+}
+
 ARCHITECTURE_SCHEMA = {
     "type": "object",
     "required": ["components", "data_models", "api_contracts", "technology_decisions", "constraints"],

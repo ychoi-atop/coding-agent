@@ -16,7 +16,7 @@ from jsonschema import validate  # type: ignore[import-untyped]
 from .llm_client import LLMClient
 from .json_utils import strict_json_loads, json_dumps
 from .roles import prompts
-from .schemas import PRD_SCHEMA, PLAN_SCHEMA, CHANGESET_SCHEMA, ARCHITECTURE_SCHEMA, REVIEW_SCHEMA
+from .schemas import PRD_SCHEMA, PLAN_SCHEMA, CHANGESET_SCHEMA, ARCHITECTURE_SCHEMA, REVIEW_SCHEMA, PRD_ANALYSIS_SCHEMA
 from .workspace import Workspace, Change
 from .exec_kernel import ExecKernel
 from .env_manager import EnvManager
@@ -225,6 +225,7 @@ def _write_generation_cache(
     prd_struct: Dict[str, Any],
     plan: Dict[str, Any],
     architecture: Dict[str, Any] | None = None,
+    prd_analysis: Dict[str, Any] | None = None,
 ) -> None:
     payload: Dict[str, Any] = {
         "version": PLAN_CACHE_VERSION,
@@ -235,6 +236,8 @@ def _write_generation_cache(
     }
     if architecture is not None:
         payload["architecture"] = architecture
+    if prd_analysis is not None:
+        payload["prd_analysis"] = prd_analysis
     ws.write_text(PLAN_CACHE_FILE, json_dumps(payload))
 
 
@@ -1142,13 +1145,15 @@ async def run_autodev_enterprise(
     )
 
     architecture: Dict[str, Any] | None = None
+    prd_analysis: Dict[str, Any] | None = None
 
     if use_cached:
         cached = cast(Dict[str, Any], cache_payload)
         prd_struct = cast(Dict[str, Any], cached["prd_struct"])
         plan = cast(Dict[str, Any], cached["plan"])
-        # Restore cached architecture if present.
+        # Restore cached architecture and prd_analysis if present.
         architecture = cached.get("architecture")
+        prd_analysis = cached.get("prd_analysis")
         _log_event(
             "run.cache_hit",
             run_id=run_id,
@@ -1157,11 +1162,61 @@ async def run_autodev_enterprise(
             cache_key=cache_key,
         )
     else:
+        # 0) Analyze PRD quality (optional — skipped if role not defined)
+        if "prd_analyst" in p:
+            prd_analysis = await _llm_json(
+                client,
+                p["prd_analyst"]["system"],
+                f"PRD_MARKDOWN:\n{prd_markdown}\n\nTASK:\n{p['prd_analyst']['task']}",
+                PRD_ANALYSIS_SCHEMA,
+                max_repair=max_json_repair,
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                component="prd_analyst",
+                temperature=_role_temperature("prd_analyst"),
+                role_hint="prd_analyst",
+            )
+            _write_json(ws, ".autodev/prd_analysis.json", prd_analysis)
+            _log_event(
+                "run.prd_analysis_complete",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                completeness_score=prd_analysis.get("completeness_score"),
+                ambiguities=len(prd_analysis.get("ambiguities", [])),
+                missing=len(prd_analysis.get("missing_requirements", [])),
+                contradictions=len(prd_analysis.get("contradictions", [])),
+                risks=len(prd_analysis.get("risks", [])),
+            )
+
+            # Interactive mode: pause if PRD has significant issues
+            if interactive and prd_analysis.get("completeness_score", 100) < 70:
+                questions = prd_analysis.get("clarification_questions", [])
+                print(f"[interactive] PRD completeness: {prd_analysis.get('completeness_score')}/100")
+                if questions:
+                    print("[interactive] Clarification questions:")
+                    for i, q in enumerate(questions, 1):
+                        print(f"  {i}. {q}")
+                decision = input("Continue despite PRD quality issues? [Y/n] ").strip().lower()
+                if decision in {"n", "no"}:
+                    _log_event(
+                        "run.prd_analysis_aborted",
+                        run_id=run_id,
+                        request_id=request_id,
+                        profile=profile,
+                        completeness_score=prd_analysis.get("completeness_score"),
+                    )
+                    return False, {}, {}, []
+
         # 1) Normalize PRD with LLM (strict schema)
+        prd_norm_input = f"PRD_MARKDOWN:\n{prd_markdown}\n\nTASK:\n{p['prd_normalizer']['task']}"
+        if prd_analysis is not None:
+            prd_norm_input += f"\n\nPRD_ANALYSIS (detected issues — use to improve normalization):\n{json_dumps(prd_analysis)}"
         prd_struct = await _llm_json(
             client,
             p["prd_normalizer"]["system"],
-            f"PRD_MARKDOWN:\n{prd_markdown}\n\nTASK:\n{p['prd_normalizer']['task']}",
+            prd_norm_input,
             PRD_SCHEMA,
             max_repair=max_json_repair,
             run_id=run_id,
@@ -1224,7 +1279,7 @@ async def run_autodev_enterprise(
             temperature=_role_temperature("planner"),
             role_hint="planner",
         )
-        _write_generation_cache(ws, cache_key, prd_struct, plan, architecture)
+        _write_generation_cache(ws, cache_key, prd_struct, plan, architecture, prd_analysis)
 
     # 3) Scaffold
     project_type = plan["project"]["type"]

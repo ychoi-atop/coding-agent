@@ -5,6 +5,7 @@ llm:
   model: "anthropic/claude-sonnet-4-6"
   timeout_sec: 600
   role_temperatures:
+    prd_analyst: 0.2
     prd_normalizer: 0.2
     planner: 0.4
     implementer: 0.1

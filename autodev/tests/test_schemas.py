@@ -1,5 +1,5 @@
 from jsonschema import validate  # type: ignore[import-untyped]
-from autodev.schemas import CHANGESET_SCHEMA, PLAN_SCHEMA, PRD_SCHEMA
+from autodev.schemas import CHANGESET_SCHEMA, PLAN_SCHEMA, PRD_SCHEMA, PRD_ANALYSIS_SCHEMA
 
 
 def test_plan_schema_rejects_task_without_quality_expectations():
@@ -238,3 +238,73 @@ def test_prd_schema_remains_backward_compatible_without_performance_fields():
     }
 
     validate(instance=payload, schema=PRD_SCHEMA)
+
+
+def test_prd_analysis_schema_accepts_valid_analysis():
+    payload = {
+        "ambiguities": [
+            {
+                "location": "Features > Authentication",
+                "description": "Vague requirement: 'fast login' without specific latency target",
+                "suggestion": "Define target latency, e.g., 'login completes within 500ms'",
+                "severity": "medium",
+            }
+        ],
+        "missing_requirements": [
+            {
+                "area": "Error Handling",
+                "description": "No error handling specification for API endpoints",
+                "impact": "significant",
+            }
+        ],
+        "contradictions": [
+            {
+                "items": ["Goal: minimize latency", "Constraint: use synchronous processing only"],
+                "description": "Synchronous processing contradicts low-latency goal for I/O-bound operations",
+            }
+        ],
+        "risks": [
+            {
+                "description": "No authentication mechanism specified for public API",
+                "mitigation": "Add OAuth2 or API key authentication requirement",
+                "likelihood": "high",
+            }
+        ],
+        "completeness_score": 62,
+        "clarification_questions": [
+            "What authentication method should be used?",
+            "What is the target response latency?",
+        ],
+        "summary": "PRD has significant gaps in error handling and security requirements.",
+    }
+
+    validate(instance=payload, schema=PRD_ANALYSIS_SCHEMA)
+
+
+def test_prd_analysis_schema_accepts_clean_analysis():
+    payload = {
+        "ambiguities": [],
+        "missing_requirements": [],
+        "contradictions": [],
+        "risks": [],
+        "completeness_score": 95,
+        "clarification_questions": [],
+        "summary": "PRD is well-structured with clear requirements and acceptance criteria.",
+    }
+
+    validate(instance=payload, schema=PRD_ANALYSIS_SCHEMA)
+
+
+def test_prd_analysis_schema_rejects_missing_required():
+    payload = {
+        "ambiguities": [],
+        "risks": [],
+        "summary": "Incomplete payload",
+    }
+
+    try:
+        validate(instance=payload, schema=PRD_ANALYSIS_SCHEMA)
+    except Exception:
+        pass
+    else:
+        assert False, "Expected PRD_ANALYSIS_SCHEMA validation error"

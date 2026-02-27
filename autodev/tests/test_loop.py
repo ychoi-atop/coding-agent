@@ -193,6 +193,16 @@ class _FakeEnvManager(EnvManager):
         return "/fake/python"
 
 
+MINIMAL_PRD_ANALYSIS = {
+    "ambiguities": [],
+    "missing_requirements": [],
+    "contradictions": [],
+    "risks": [],
+    "completeness_score": 85,
+    "clarification_questions": [],
+    "summary": "PRD analysis complete — no significant issues found.",
+}
+
 MINIMAL_ARCHITECTURE = {
     "components": [],
     "data_models": [],
@@ -230,6 +240,7 @@ def _with_handoff_if_changeset(payload: Any) -> Any:
 
 
 _AUTO_ROLE_RESPONSES: dict[str, dict[str, Any]] = {
+    "prd_analyst": MINIMAL_PRD_ANALYSIS,
     "architect": MINIMAL_ARCHITECTURE,
     "reviewer": MINIMAL_REVIEW_APPROVE,
 }
