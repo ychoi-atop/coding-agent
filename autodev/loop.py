@@ -93,6 +93,7 @@ from .parallel_fixer import (
     partition_failures,
     resolve_parallel_fixer_config,
 )
+from .smart_scope import apply_smart_scope, resolve_smart_scope_config
 from .context_cache import IncrementalContextCache
 from .perf_baseline import record_and_check as _perf_baseline_check
 from .task_scheduler import (
@@ -996,6 +997,9 @@ async def run_autodev_enterprise(
     # -- Parallel fixer: concurrent repair of independent failure categories ----
     _parallel_fixer_config = resolve_parallel_fixer_config(quality_profile)
 
+    # -- Smart scope: narrow validators to actual changes ---------------------
+    _smart_scope_config = resolve_smart_scope_config(quality_profile)
+
     def _cached_files_context(task_id: str, files: List[str], goal: str = "") -> Dict[str, str]:
         cache_key = f"{task_id}:{'|'.join(files)}"
         cached = task_context_cache.get(cache_key)
@@ -1194,6 +1198,21 @@ async def run_autodev_enterprise(
                 impl_payload["review_feedback"] = review_ctx
 
         task_last_validation: List[Dict[str, Any]] = []
+
+        # -- Smart scope: narrow validators to actual changes (first pass) ----
+        if _smart_scope_config.enabled and changes:
+            run_set, _ss_result = apply_smart_scope(
+                run_set, changes, _smart_scope_config,
+            )
+            if _ss_result.removed_validators:
+                trace.record(
+                    EventType.SMART_SCOPE_APPLIED,
+                    task_id=task["id"],
+                    original_count=len(_ss_result.original_validators),
+                    scoped_count=len(_ss_result.scoped_validators),
+                    changed_files=_ss_result.changed_files,
+                    removed=_ss_result.removed_validators,
+                )
 
         while True:
             start = time.perf_counter()

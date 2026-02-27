@@ -67,6 +67,9 @@ class EventType(str, Enum):
     PARALLEL_FIXER_PLANNED = "parallel_fixer.planned"
     PARALLEL_FIXER_MERGED = "parallel_fixer.merged"
 
+    # Smart scope
+    SMART_SCOPE_APPLIED = "smart_scope.applied"
+
 
 # ---------------------------------------------------------------------------
 # Data classes
