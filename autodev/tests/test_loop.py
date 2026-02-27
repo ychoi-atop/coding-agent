@@ -193,13 +193,58 @@ class _FakeEnvManager(EnvManager):
         return "/fake/python"
 
 
+MINIMAL_ARCHITECTURE = {
+    "components": [],
+    "data_models": [],
+    "api_contracts": [],
+    "technology_decisions": [],
+    "constraints": [],
+}
+
+MINIMAL_REVIEW_APPROVE = {
+    "findings": [],
+    "overall_verdict": "approve",
+    "blocking_issues": [],
+    "summary": "LGTM",
+}
+
+
+def _with_handoff_if_changeset(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    required = {"role", "summary", "changes", "notes"}
+    if not required.issubset(payload.keys()):
+        return payload
+    if "handoff" in payload and isinstance(payload["handoff"], dict):
+        return payload
+    payload = dict(payload)
+    payload["handoff"] = {
+        "Summary": str(payload.get("summary") or "요약 없음"),
+        "Changed Files": [str(c.get("path")) for c in payload.get("changes", []) if isinstance(c, dict) and c.get("path")],
+        "Commands": ["pytest"],
+        "Evidence": ["테스트는 스텁 환경에서 검증"],
+        "Risks": ["추가 통합 검증 필요"],
+        "Next Input": "추가 요구사항이 있으면 알려주세요.",
+    }
+    return payload
+
+
+_AUTO_ROLE_RESPONSES: dict[str, dict[str, Any]] = {
+    "architect": MINIMAL_ARCHITECTURE,
+    "reviewer": MINIMAL_REVIEW_APPROVE,
+}
+
+
 class _FakeLLM(LLMClient):
     def __init__(self, responses):
         # Keep a lightweight in-memory stub; no network calls.
         self.responses = responses
         self.calls = 0
 
-    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: str | None = None) -> str:
+        # Auto-respond for new roles not covered by legacy test fixtures.
+        if role_hint in _AUTO_ROLE_RESPONSES:
+            return json.dumps(_AUTO_ROLE_RESPONSES[role_hint])
         if self.calls >= len(self.responses):
             resp = self.responses[-1]
         else:
@@ -207,7 +252,7 @@ class _FakeLLM(LLMClient):
             self.calls += 1
         if isinstance(resp, Exception):
             raise resp
-        return json.dumps(resp)
+        return json.dumps(_with_handoff_if_changeset(resp))
 
 
 class _ScriptedLLM(LLMClient):
@@ -215,13 +260,17 @@ class _ScriptedLLM(LLMClient):
         self.responses = list(responses)
         self.calls = 0
 
-    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: str | None = None) -> str:
+        if role_hint in _AUTO_ROLE_RESPONSES:
+            return json.dumps(_AUTO_ROLE_RESPONSES[role_hint])
         if self.calls >= len(self.responses):
             raise RuntimeError("LLM had no scripted response")
         out = self.responses[self.calls]
         self.calls += 1
         if isinstance(out, Exception):
             raise out
+        if isinstance(out, dict):
+            return json.dumps(_with_handoff_if_changeset(out))
         return out
 
 
@@ -231,7 +280,9 @@ class _TempRecordingLLM(LLMClient):
         self.calls = 0
         self.temperatures: list[float] = []
 
-    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: str | None = None) -> str:
+        if role_hint in _AUTO_ROLE_RESPONSES:
+            return json.dumps(_AUTO_ROLE_RESPONSES[role_hint])
         self.temperatures.append(float(temperature))
         if self.calls >= len(self.responses):
             raise RuntimeError("LLM had no scripted response")
@@ -239,7 +290,7 @@ class _TempRecordingLLM(LLMClient):
         self.calls += 1
         if isinstance(out, Exception):
             raise out
-        return json.dumps(out)
+        return json.dumps(_with_handoff_if_changeset(out))
 
 
 def test_llm_json_repair_eventually_succeeds():
@@ -303,6 +354,73 @@ def test_llm_json_raises_on_chat_failure_before_parse():
         )
 
     assert "LLM call failed while generating structured output" in str(exc.value)
+
+
+def test_llm_json_handoff_missing_triggers_repair(capsys):
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": True,
+    }
+
+    llm = _ScriptedLLM([
+        {"summary": "ok", "handoff": {"Summary": "only one"}},
+        {
+            "summary": "ok",
+            "handoff": {
+                "Summary": "done",
+                "Changed Files": ["a.py"],
+                "Commands": ["pytest"],
+                "Evidence": ["passed"],
+                "Risks": ["none"],
+                "Next Input": "none",
+            },
+        },
+    ])
+
+    result = asyncio.run(
+        _llm_json(
+            cast(LLMClient, llm),
+            "system",
+            "user",
+            schema,
+            semantic_validator=lambda d: None
+            if isinstance(d.get("handoff"), dict) and "Next Input" in d["handoff"]
+            and "Commands" in d["handoff"] and "Evidence" in d["handoff"]
+            and "Risks" in d["handoff"] and "Changed Files" in d["handoff"] and "Summary" in d["handoff"]
+            else "MISSING_HANDOFF_FIELDS:Summary,Changed Files,Commands,Evidence,Risks,Next Input",
+            max_repair=1,
+        )
+    )
+
+    assert result["handoff"]["Next Input"] == "none"
+    assert "handoff.repair_requested" in capsys.readouterr().out
+
+
+def test_llm_json_handoff_missing_exhaustion_logs_incomplete(capsys):
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": True,
+    }
+
+    llm = _ScriptedLLM([{"summary": "ok", "handoff": {"Summary": "only"}}])
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            _llm_json(
+                cast(LLMClient, llm),
+                "system",
+                "user",
+                schema,
+                semantic_validator=lambda _d: "MISSING_HANDOFF_FIELDS:Changed Files,Commands,Evidence,Risks,Next Input",
+                max_repair=0,
+            )
+        )
+
+    assert "handoff.incomplete" in capsys.readouterr().out
 
 
 class _FakePassingValidation:

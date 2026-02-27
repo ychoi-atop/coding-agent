@@ -1,0 +1,42 @@
+[
+  {
+    "lane": "before",
+    "repeat": 1,
+    "ok": false,
+    "returncode": 1,
+    "wall_time_ms": 480234,
+    "peak_rss_kb": 47872,
+    "validator_total_ms": 0,
+    "validator_max_ms": 0,
+    "llm_total_tokens": 0,
+    "llm_prompt_tokens": 0,
+    "llm_completion_tokens": 0,
+    "llm_chat_calls": 0,
+    "llm_transport_retries": 0,
+    "llm_failed_chat_calls": 0,
+    "task_retry_like_count": 0,
+    "retries_total": 0,
+    "run_dir": "",
+    "error": "{\n  \"ts\": \"2026-02-27T07:29:31Z\",\n  \"event\": \"autodev.run_cli_start\",\n  \"run_id\": \"68a2af7c74a74138bfcc4b103a368967\",\n  \"request_id\": \"c601460601364857adc013f9fe57a544\",\n  \"profile\": \"enterprise_smoke\",\n  \"prd\": \"/Users/ychoi/Documents/GitHub/coding-agent/docs/ops/benchmark_smoke_prd.md\",\n  \"out_root\": \"/Users/ychoi/Documents/GitHub/coding-agent/artifacts/perf/20260227_162930/runs/before\",\n  \"run_out\": \"/Users/ychoi/Documents/GitHub/coding-agent/artifacts/perf/20260227_162930/runs/before/benchma"
+  },
+  {
+    "lane": "after",
+    "repeat": 1,
+    "ok": false,
+    "returncode": 1,
+    "wall_time_ms": 480258,
+    "peak_rss_kb": 48384,
+    "validator_total_ms": 0,
+    "validator_max_ms": 0,
+    "llm_total_tokens": 0,
+    "llm_prompt_tokens": 0,
+    "llm_completion_tokens": 0,
+    "llm_chat_calls": 0,
+    "llm_transport_retries": 0,
+    "llm_failed_chat_calls": 0,
+    "task_retry_like_count": 0,
+    "retries_total": 0,
+    "run_dir": "",
+    "error": "{\n  \"ts\": \"2026-02-27T07:37:31Z\",\n  \"event\": \"autodev.run_cli_start\",\n  \"run_id\": \"4eb2bf81e459414c85cfbeb692084c96\",\n  \"request_id\": \"3c8f00451eb445a1a108ce602d335931\",\n  \"profile\": \"enterprise_smoke\",\n  \"prd\": \"/Users/ychoi/Documents/GitHub/coding-agent/docs/ops/benchmark_smoke_prd.md\",\n  \"out_root\": \"/Users/ychoi/Documents/GitHub/coding-agent/artifacts/perf/20260227_162930/runs/after\",\n  \"run_out\": \"/Users/ychoi/Documents/GitHub/coding-agent/artifacts/perf/20260227_162930/runs/after/benchmark"
+  }
+]

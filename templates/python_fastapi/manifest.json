@@ -1,0 +1,10 @@
+{
+  "language": "python",
+  "runtime": "cpython",
+  "validators": ["ruff", "mypy", "pytest", "pip_audit", "bandit", "semgrep", "sbom", "docker_build"],
+  "test_command": "python -m pytest",
+  "lint_command": "python -m ruff check .",
+  "type_check_command": "python -m mypy .",
+  "build_command": "docker build -t autodev-app:test .",
+  "allowed_executables": ["python", "pip", "ruff", "mypy", "pytest", "bandit", "semgrep", "docker"]
+}

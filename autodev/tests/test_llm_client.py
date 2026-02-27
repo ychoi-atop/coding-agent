@@ -70,7 +70,8 @@ def test_chat_retries_on_retryable_http_status_and_tracks_usage(monkeypatch):
     out = asyncio.run(client.chat([{"role": "user", "content": "hello"}]))
     assert out == "ok"
     assert len(call_log) == 2
-    assert sleep_log == [2]
+    assert call_log[0]["headers"]["Authorization"] == "Bearer test"
+    assert sleep_log == [60]
 
     usage = client.usage_summary()
     assert usage["prompt_tokens"] == 10
@@ -79,6 +80,54 @@ def test_chat_retries_on_retryable_http_status_and_tracks_usage(monkeypatch):
     assert usage["transport_retries"] == 1
     assert usage["chat_calls"] == 1
     assert usage["failed_chat_calls"] == 0
+
+
+def test_chat_uses_oauth_token_when_api_key_is_missing(monkeypatch):
+    script = [
+        (200, {"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}),
+    ]
+    call_log: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        llm_client_module.httpx,
+        "AsyncClient",
+        _fake_async_client_factory(script, call_log),
+    )
+
+    client = LLMClient(
+        base_url="http://127.0.0.1:9999/v1",
+        api_key=None,
+        oauth_token="oauth-test-token",
+        model="fake-model",
+        timeout_sec=30,
+    )
+
+    out = asyncio.run(client.chat([{"role": "user", "content": "hello"}]))
+    assert out == "ok"
+    assert call_log[0]["headers"]["Authorization"] == "Bearer oauth-test-token"
+
+
+def test_chat_prefers_api_key_when_both_api_key_and_oauth_token_exist(monkeypatch):
+    script = [
+        (200, {"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}),
+    ]
+    call_log: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        llm_client_module.httpx,
+        "AsyncClient",
+        _fake_async_client_factory(script, call_log),
+    )
+
+    client = LLMClient(
+        base_url="http://127.0.0.1:9999/v1",
+        api_key="legacy-api-key",
+        oauth_token="oauth-test-token",
+        model="fake-model",
+        timeout_sec=30,
+    )
+
+    out = asyncio.run(client.chat([{"role": "user", "content": "hello"}]))
+    assert out == "ok"
+    assert call_log[0]["headers"]["Authorization"] == "Bearer legacy-api-key"
 
 
 def test_chat_stops_when_token_budget_is_exceeded(monkeypatch):

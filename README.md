@@ -23,6 +23,14 @@ It takes a Markdown PRD, plans implementation tasks, generates code, runs local 
 - Validation is done by local tools, not by model self-assertion.
 - Command execution is restricted by a strict allowlist in `ExecKernel`.
 - Fix loops are bounded by configurable max iterations.
+- Task submissions must include a mandatory handoff block (`Summary`, `Changed Files`, `Commands`, `Evidence`, `Risks`, `Next Input`). Missing fields trigger friendly re-request and are logged.
+
+## Prompt Contract (Core + Optional)
+Implementation/fix prompts are now split into:
+- `core` (minimum slots): `goal`, `paths`, `constraints`, `output_format`
+- `optional_context`: plan/task/files/validation details used only when needed
+
+This keeps prompt payload lightweight while preserving required execution context.
 
 ## Requirements
 - Python 3.10+
@@ -42,12 +50,13 @@ pip install -e .
 ```
 
 ## Configure
-Edit `config.yaml` for your model endpoint and run profile. Set `AUTODEV_LLM_API_KEY` in your environment (or replace the placeholder) to provide the API key securely.
+Edit `config.yaml` for your model endpoint and run profile. You can authenticate with either `AUTODEV_LLM_API_KEY` (legacy compatible) or `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`.
 
 ```yaml
 llm:
   base_url: "https://openrouter.ai/api/v1"
   api_key: ${AUTODEV_LLM_API_KEY}
+  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
   model: "anthropic/claude-sonnet-4-6"
   timeout_sec: 240
   role_temperatures:
@@ -155,9 +164,15 @@ run:
     max_tokens: 500000
 ```
 
+### Authentication priority and safety
+- Priority: `llm.api_key` (or `AUTODEV_LLM_API_KEY`) is used first for backward compatibility.
+- Fallback: if API key is empty, `llm.oauth_token` (or `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`) is used.
+- Never commit real keys/tokens to Git. Keep them in environment variables.
+- Avoid printing token values in logs, shell history, and CI output.
+
 ### Quick provider swap checklist
-- Set `AUTODEV_LLM_API_KEY` (or provider-specific token)
-- Update only `llm.base_url`, `llm.api_key`, and `llm.model`
+- Set `AUTODEV_LLM_API_KEY` or `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`
+- Update `llm.base_url`, `llm.model`, and (optionally) auth placeholders in config
 - Ensure backend is running (`ollama serve` / gateway health endpoint)
 - Run a dry-check (e.g. `autodev --help` or a small sample PRD run)
 
@@ -175,6 +190,38 @@ Precedence: `--model` > `AUTODEV_LLM_MODEL` > `config.yaml` (`llm.model`).
 - `make benchmark-generate` for baseline vs optimized generation timing smoke
 - `make perf-smoke` for lightweight performance snapshot from a generated run
 - `make perf-strict` for conservative regression gate against previous `generated_dir/.autodev/perf.json`
+- `python docs/ops/perf_compare_report.py --repeat 2` for before/after 자동 비교 리포트(`artifacts/perf/<timestamp>/`)
+
+#### Before/After 성능 리포트 스크립트
+동일 PRD 시나리오를 before/after 각각 반복 실행해 다음 지표를 수집합니다.
+- wall time(ms)
+- peak RSS(KB)
+- validator ms(총합/최대)
+- llm usage(tokens/chat calls/transport retries)
+- retries(transport retries + task 재시도 유사 카운트)
+
+실행 예시:
+```bash
+# 권장: 기본 2회 반복으로 비교
+python docs/ops/perf_compare_report.py \
+  --config config.yaml \
+  --prd docs/ops/benchmark_smoke_prd.md \
+  --profile enterprise \
+  --repeat 2
+
+# 스모크(짧은 검증): 1회 실행
+python docs/ops/perf_compare_report.py --smoke
+```
+
+산출물:
+- `artifacts/perf/<timestamp>/results.csv`
+- `artifacts/perf/<timestamp>/report.md`
+- `artifacts/perf/<timestamp>/results.json`
+
+한계/주의:
+- 네트워크/LLM provider/머신 부하에 따라 결과 편차가 큼
+- peak RSS는 `/usr/bin/time -l` 또는 GNU time 출력 파싱에 의존
+- 실행 실패 케이스도 CSV에 기록됨(원인 추적 용도)
 
 ### Spec-first + Test-first + Docs-as-code workflow
 - Spec-first: PR에서 변경 목적/수용기준/비범위를 먼저 명시

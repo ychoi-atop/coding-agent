@@ -160,6 +160,14 @@ def test_changeset_schema_keeps_quality_links_metadata_required_when_present():
             "tasks": ["task1"],
             "validators": ["ruff", "mypy"],
         },
+        "handoff": {
+            "Summary": "Fixed lint issues in README",
+            "Changed Files": ["README.md"],
+            "Commands": ["ruff check ."],
+            "Evidence": ["ruff passes"],
+            "Risks": ["none"],
+            "Next Input": "ready for review",
+        },
     }
 
     validate(instance=payload, schema=CHANGESET_SCHEMA)
@@ -175,6 +183,14 @@ def test_changeset_schema_rejects_unknown_validator_link():
             "acceptance": ["AC-1"],
             "tasks": ["task1"],
             "validators": ["unknown"],
+        },
+        "handoff": {
+            "Summary": "Attempted fix",
+            "Changed Files": [],
+            "Commands": [],
+            "Evidence": [],
+            "Risks": [],
+            "Next Input": "n/a",
         },
     }
 

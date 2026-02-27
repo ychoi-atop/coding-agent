@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .config import load_config
-from .llm_client import LLMClient
+from .llm_client import LLMClient, ModelEndpoint, ModelRouter
 from .workspace import Workspace
 from .loop import run_autodev_enterprise
 from .report import write_report
@@ -98,6 +98,22 @@ def _coerce_optional_int(value: Any, key: str) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         raise SystemExit(f"config.run.{key} must be an integer, got {value!r}.")
+
+
+def _coerce_max_parallel_tasks(value: Any, *, default: int = 2) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise SystemExit(
+            f"config.run.max_parallel_tasks must be an integer between 1 and 3 (recommended), got {type(value).__name__}."
+        )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise SystemExit(f"config.run.max_parallel_tasks must be an integer, got {value!r}.")
+    if parsed < 1:
+        raise SystemExit("config.run.max_parallel_tasks must be >= 1.")
+    return parsed
 
 
 def _coerce_role_temperatures(value: Any) -> Dict[str, float]:
@@ -191,6 +207,7 @@ def cli():
     budget_cfg = run_cfg.get("budget")
     if budget_cfg is not None and not isinstance(budget_cfg, dict):
         raise SystemExit("Invalid config: run.budget must be an object.")
+    max_parallel_tasks = _coerce_max_parallel_tasks(run_cfg.get("max_parallel_tasks"), default=2)
     max_token_budget = None
     if isinstance(budget_cfg, dict):
         max_token_budget = _coerce_optional_int(budget_cfg.get("max_tokens"), "budget.max_tokens")
@@ -209,10 +226,12 @@ def cli():
     llm_cfg = cfg["llm"]
     role_temperatures = _coerce_role_temperatures(llm_cfg.get("role_temperatures"))
     llm_api_key = (llm_cfg.get("api_key") or "").strip()
-    if not llm_api_key:
+    llm_oauth_token = (llm_cfg.get("oauth_token") or "").strip()
+    if not llm_api_key and not llm_oauth_token:
         raise SystemExit(
-            "Missing LLM API key. Set llm.api_key in config.yaml (or as ${AUTODEV_LLM_API_KEY}) "
-            "or define AUTODEV_LLM_API_KEY in the environment."
+            "Missing LLM authentication. Set llm.api_key or llm.oauth_token in config.yaml "
+            "(or use ${AUTODEV_LLM_API_KEY}/${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}) "
+            "or define AUTODEV_LLM_API_KEY/AUTODEV_CLAUDE_CODE_OAUTH_TOKEN in the environment."
         )
 
     llm_model = (args.model or os.getenv("AUTODEV_LLM_MODEL") or llm_cfg.get("model") or "").strip()
@@ -221,13 +240,37 @@ def cli():
             "Missing LLM model. Set llm.model in config.yaml, define AUTODEV_LLM_MODEL, or pass --model."
         )
 
+    # Build optional multi-model router from llm.models + llm.role_mapping
+    router: ModelRouter | None = None
+    models_list = llm_cfg.get("models")
+    if isinstance(models_list, list) and models_list:
+        endpoints: list[ModelEndpoint] = []
+        for entry in models_list:
+            ep_api_key = (entry.get("api_key") or "").strip() or None
+            ep_oauth = (entry.get("oauth_token") or "").strip() or None
+            endpoints.append(
+                ModelEndpoint(
+                    base_url=entry["base_url"],
+                    model=entry["model"],
+                    api_key=ep_api_key,
+                    oauth_token=ep_oauth,
+                )
+            )
+        role_mapping_raw = llm_cfg.get("role_mapping")
+        role_mapping_parsed: Dict[str, int] = {}
+        if isinstance(role_mapping_raw, dict):
+            role_mapping_parsed = {str(k): int(v) for k, v in role_mapping_raw.items()}
+        router = ModelRouter(endpoints=endpoints, role_mapping=role_mapping_parsed)
+
     try:
         client = LLMClient(
             base_url=llm_cfg["base_url"],
-            api_key=llm_api_key,
+            api_key=llm_api_key or None,
+            oauth_token=llm_oauth_token or None,
             model=llm_model,
             timeout_sec=int(llm_cfg.get("timeout_sec", 240)),
             max_total_tokens=max_token_budget,
+            router=router,
         )
     except (TypeError, ValueError) as e:
         raise SystemExit(f"Invalid llm config: {e}") from e
@@ -249,9 +292,12 @@ def cli():
         "final_soft_validators": final_soft,
         "disable_docker_build": disable_docker_build,
         "validators_enabled": validators_enabled,
+        "max_parallel_tasks": max_parallel_tasks,
+        "max_parallel_tasks_recommended": 3,
         "resolved_from": quality_profile.get("name", "balanced"),
         "llm": {
             "model": llm_model,
+            "auth_source": "api_key" if llm_api_key else "oauth_token",
             "model_override": {
                 "cli": args.model,
                 "env": os.getenv("AUTODEV_LLM_MODEL"),
@@ -280,6 +326,7 @@ def cli():
         llm_model=llm_model,
         llm_max_total_tokens=max_token_budget,
         role_temperatures=role_temperatures,
+        max_parallel_tasks=max_parallel_tasks,
     )
     ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
 
@@ -314,6 +361,7 @@ def cli():
                 resume=bool(args.resume),
                 interactive=bool(args.interactive),
                 role_temperatures=role_temperatures,
+                max_parallel_tasks=max_parallel_tasks,
             )
         )
     except ValueError as e:

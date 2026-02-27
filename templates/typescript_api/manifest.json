@@ -1,0 +1,10 @@
+{
+  "language": "typescript",
+  "runtime": "node",
+  "validators": ["eslint", "tsc", "jest"],
+  "test_command": "npx jest",
+  "lint_command": "npx eslint src/",
+  "type_check_command": "npx tsc --noEmit",
+  "build_command": "npx tsc",
+  "allowed_executables": ["node", "npm", "npx", "tsc", "eslint", "jest", "docker"]
+}

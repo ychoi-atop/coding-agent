@@ -1,0 +1,49 @@
+lane,repeat,ok,returncode,wall_time_ms,peak_rss_kb,validator_total_ms,validator_max_ms,llm_total_tokens,llm_prompt_tokens,llm_completion_tokens,llm_chat_calls,llm_transport_retries,llm_failed_chat_calls,task_retry_like_count,retries_total,run_dir,error
+before,1,False,1,145,40224,0,0,0,0,0,0,0,0,0,0,,"
+Invalid config:
+- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.
+        0.14 real         0.11 user         0.02 sys
+            41189376  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3753  page reclaims
+                  17  page faults
+                   0  swaps
+                   0  block inpu"
+before,2,False,1,142,40128,0,0,0,0,0,0,0,0,0,0,,"
+Invalid config:
+- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.
+        0.14 real         0.11 user         0.02 sys
+            41091072  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3747  page reclaims
+                  17  page faults
+                   0  swaps
+                   0  block inpu"
+after,1,False,1,146,40240,0,0,0,0,0,0,0,0,0,0,,"
+Invalid config:
+- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.
+        0.14 real         0.12 user         0.02 sys
+            41205760  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3754  page reclaims
+                  17  page faults
+                   0  swaps
+                   0  block inpu"
+after,2,False,1,150,40384,0,0,0,0,0,0,0,0,0,0,,"
+Invalid config:
+- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.
+        0.14 real         0.12 user         0.02 sys
+            41353216  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3763  page reclaims
+                  17  page faults
+                   0  swaps
+                   0  block inpu"

@@ -1,0 +1,91 @@
+llm:
+  base_url: http://127.0.0.1:11434/v1
+  api_key: ${AUTODEV_LLM_API_KEY}
+  model: anthropic/claude-sonnet-4-6
+  timeout_sec: 600
+  role_temperatures:
+    prd_normalizer: 0.2
+    planner: 0.4
+    implementer: 0.1
+    fixer: 0.15
+run:
+  max_json_repair: 0
+  max_fix_loops_total: 2
+  max_fix_loops_per_task: 1
+  verbose: true
+  budget:
+    max_tokens: 500000
+profiles:
+  enterprise:
+    template_candidates:
+    - python_fastapi
+    - python_cli
+    - python_library
+    validators:
+    - ruff
+    - pytest
+    security:
+      audit_required: false
+    validator_policy:
+      per_task:
+        soft_fail:
+        - docker_build
+        - pip_audit
+        - semgrep
+        - sbom
+      final:
+        soft_fail:
+        - pip_audit
+        - sbom
+        - semgrep
+        - docker_build
+    quality_profile:
+      name: balanced
+      per_task_soft:
+      - docker_build
+      - pip_audit
+      - sbom
+      final_soft:
+      - pip_audit
+      - sbom
+      - semgrep
+      by_level:
+        minimal:
+          per_task_soft:
+          - docker_build
+          - pip_audit
+          - sbom
+          - semgrep
+          final_soft:
+          - pip_audit
+          - sbom
+          - semgrep
+        balanced:
+          per_task_soft:
+          - docker_build
+          - pip_audit
+          - sbom
+          final_soft:
+          - pip_audit
+          - sbom
+          - semgrep
+        strict:
+          per_task_soft:
+          - docker_build
+          final_soft: []
+      escalation:
+        repeat_failure_guard:
+          enabled: true
+          max_retries_before_targeted_fix: 1
+  enterprise_smoke:
+    template_candidates:
+    - python_cli
+    validators:
+    - ruff
+    - pytest
+    security:
+      audit_required: false
+    quality_profile:
+      name: minimal
+      per_task_soft: []
+      final_soft: []

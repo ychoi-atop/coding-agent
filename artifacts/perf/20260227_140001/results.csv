@@ -1,0 +1,25 @@
+lane,repeat,ok,returncode,wall_time_ms,peak_rss_kb,validator_total_ms,validator_max_ms,llm_total_tokens,llm_prompt_tokens,llm_completion_tokens,llm_chat_calls,llm_transport_retries,llm_failed_chat_calls,task_retry_like_count,retries_total,run_dir,error
+before,1,False,1,148,45088,0,0,0,0,0,0,0,0,0,0,,"
+Invalid config:
+- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.
+        0.14 real         0.11 user         0.02 sys
+            46170112  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                4057  page reclaims
+                  17  page faults
+                   0  swaps
+                   0  block inpu"
+after,1,False,1,130,40128,0,0,0,0,0,0,0,0,0,0,,"
+Invalid config:
+- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.
+        0.12 real         0.10 user         0.01 sys
+            41091072  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3747  page reclaims
+                  17  page faults
+                   0  swaps
+                   0  block inpu"

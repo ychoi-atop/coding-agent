@@ -16,7 +16,7 @@ from jsonschema import validate  # type: ignore[import-untyped]
 from .llm_client import LLMClient
 from .json_utils import strict_json_loads, json_dumps
 from .roles import prompts
-from .schemas import PRD_SCHEMA, PLAN_SCHEMA, CHANGESET_SCHEMA
+from .schemas import PRD_SCHEMA, PLAN_SCHEMA, CHANGESET_SCHEMA, ARCHITECTURE_SCHEMA, REVIEW_SCHEMA
 from .workspace import Workspace, Change
 from .exec_kernel import ExecKernel
 from .env_manager import EnvManager
@@ -67,7 +67,28 @@ QUALITY_RESOLUTION_FILE = ".autodev/quality_resolution.json"
 PLAN_CACHE_FILE = ".autodev/generate_cache.json"
 CHECKPOINT_FILE = ".autodev/checkpoint.json"
 PLAN_CACHE_VERSION = 1
+FULL_REPO_VALIDATORS = {
+    "mypy",
+    "pytest",
+    "pip_audit",
+    "bandit",
+    "semgrep",
+    "sbom",
+    "docker_build",
+    "dependency_lock",
+}
 
+HANDOFF_REQUIRED_FIELDS = [
+    "Summary",
+    "Changed Files",
+    "Commands",
+    "Evidence",
+    "Risks",
+    "Next Input",
+]
+DEFAULT_MAX_PARALLEL_TASKS = 2
+RECOMMENDED_MAX_PARALLEL_TASKS = 3
+CONSECUTIVE_FAILURE_FAIL_FAST_THRESHOLD = 3
 
 
 def _resolve_gate_profile(
@@ -203,19 +224,18 @@ def _write_generation_cache(
     cache_key: str,
     prd_struct: Dict[str, Any],
     plan: Dict[str, Any],
+    architecture: Dict[str, Any] | None = None,
 ) -> None:
-    ws.write_text(
-        PLAN_CACHE_FILE,
-        json_dumps(
-            {
-                "version": PLAN_CACHE_VERSION,
-                "cache_key": cache_key,
-                "prd_struct": prd_struct,
-                "plan": plan,
-                "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-            }
-        ),
-    )
+    payload: Dict[str, Any] = {
+        "version": PLAN_CACHE_VERSION,
+        "cache_key": cache_key,
+        "prd_struct": prd_struct,
+        "plan": plan,
+        "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    if architecture is not None:
+        payload["architecture"] = architecture
+    ws.write_text(PLAN_CACHE_FILE, json_dumps(payload))
 
 
 def _read_checkpoint(ws: Workspace) -> Dict[str, Any] | None:
@@ -257,25 +277,46 @@ def _build_task_payload(
     task: Dict[str, Any],
     performance_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    constraints: List[str] = []
+    acceptance = task.get("acceptance", [])
+    if isinstance(acceptance, list) and acceptance:
+        constraints.extend([f"acceptance: {item}" for item in acceptance if isinstance(item, str) and item.strip()])
+
+    quality_expectations = task.get("quality_expectations", {})
+    if isinstance(quality_expectations, dict) and quality_expectations:
+        constraints.append("quality_expectations를 만족해야 함")
+
+    output_format = {
+        "type": "CHANGESET_SCHEMA",
+        "required_root_fields": ["role", "summary", "changes", "notes", "handoff"],
+        "handoff_required_fields": HANDOFF_REQUIRED_FIELDS,
+    }
+
     return {
-        "plan": {
-            "project": {
-                "type": plan["project"].get("type"),
-                "name": plan["project"].get("name"),
-                "quality_gate_profile": plan["project"].get("quality_gate_profile"),
-                "default_artifacts": plan["project"].get("default_artifacts", []),
-            },
-            "performance_hints": performance_context or {},
-        },
-        "task": {
-            "id": task["id"],
-            "title": task["title"],
+        "core": {
             "goal": task.get("goal", ""),
-            "files": task.get("files", []),
-            "acceptance": task.get("acceptance", []),
-            "depends_on": task.get("depends_on", []),
-            "quality_expectations": task.get("quality_expectations", {}),
-            "validator_focus": task.get("validator_focus", []),
+            "paths": task.get("files", []),
+            "constraints": constraints,
+            "output_format": output_format,
+        },
+        "optional_context": {
+            "task": {
+                "id": task["id"],
+                "title": task["title"],
+                "acceptance": acceptance,
+                "depends_on": task.get("depends_on", []),
+                "quality_expectations": quality_expectations,
+                "validator_focus": task.get("validator_focus", []),
+            },
+            "plan": {
+                "project": {
+                    "type": plan["project"].get("type"),
+                    "name": plan["project"].get("name"),
+                    "quality_gate_profile": plan["project"].get("quality_gate_profile"),
+                    "default_artifacts": plan["project"].get("default_artifacts", []),
+                },
+                "performance_hints": performance_context or {},
+            },
         },
     }
 
@@ -644,6 +685,17 @@ def _write_json(ws: Workspace, rel_path: str, payload: Dict[str, Any]) -> None:
     ws.write_text(rel_path, json_dumps(payload))
 
 
+def _validate_handoff_fields(changeset: Dict[str, Any]) -> str | None:
+    handoff = changeset.get("handoff")
+    if not isinstance(handoff, dict):
+        return "MISSING_HANDOFF_FIELDS:" + ",".join(HANDOFF_REQUIRED_FIELDS)
+
+    missing = [field for field in HANDOFF_REQUIRED_FIELDS if not str(handoff.get(field, "")).strip()]
+    if missing:
+        return "MISSING_HANDOFF_FIELDS:" + ",".join(missing)
+    return None
+
+
 def _quality_metadata_from_changeset(
     changeset: Dict[str, Any],
     task_id: str,
@@ -664,6 +716,9 @@ def _quality_metadata_from_changeset(
         }
     if "quality_notes" not in out:
         out["quality_notes"] = []
+    handoff = changeset.get("handoff")
+    if isinstance(handoff, dict):
+        out["handoff"] = handoff
     return out
 
 
@@ -759,12 +814,16 @@ def _coerce_plan_payload(data: Dict[str, Any], template_candidates: List[str] | 
 
     project = dict(out.get("project", {}))
     template_root_default = (template_candidates or ["python_cli"])[0]
-    if project.get("type") not in {"python_fastapi", "python_cli", "python_library"}:
+    valid_types = set(template_candidates or []) | {"python_fastapi", "python_cli", "python_library"}
+    if project.get("type") not in valid_types:
         project["type"] = template_root_default
     if not isinstance(project.get("name"), str) or not project.get("name"):
         project["name"] = "autodev-bench"
-    if not isinstance(project.get("python_version"), str) or not project.get("python_version"):
-        project["python_version"] = "3.11"
+    # python_version is optional for non-Python templates; provide default for Python.
+    proj_type = project.get("type", "")
+    if proj_type.startswith("python"):
+        if not isinstance(project.get("python_version"), str) or not project.get("python_version"):
+            project["python_version"] = "3.11"
     out["project"] = project
 
     ci = dict(out.get("ci", {}))
@@ -863,7 +922,9 @@ async def _llm_json(
     profile: str | None = None,
     component: str = "llm",
     post_process: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+    semantic_validator: Callable[[Dict[str, Any]], str | None] | None = None,
     temperature: float = 0.2,
+    role_hint: str | None = None,
 ) -> Dict[str, Any]:
     run_id = run_id or uuid4().hex
     request_id = request_id or uuid4().hex
@@ -886,7 +947,7 @@ async def _llm_json(
         )
 
         try:
-            raw = await client.chat(_msg(system, prompt_user), temperature=temperature)
+            raw = await client.chat(_msg(system, prompt_user), temperature=temperature, role_hint=role_hint)
             last_raw = raw
         except Exception as e:
             raise ValueError(
@@ -896,10 +957,14 @@ async def _llm_json(
 
         try:
             data = strict_json_loads(raw)
+            parsed = data
             if post_process:
                 try:
-                    repaired = post_process(data)
-                    validate(instance=repaired, schema=schema)
+                    parsed = post_process(data)
+                    validate(instance=parsed, schema=schema)
+                    semantic_error = semantic_validator(parsed) if semantic_validator else None
+                    if semantic_error:
+                        raise ValueError(semantic_error)
                     _log_event(
                         "llm.parse_success",
                         run_id=run_id,
@@ -907,12 +972,15 @@ async def _llm_json(
                         profile=profile,
                         component=f"{component}._post_process",
                         attempts=retry_count,
-                        repaired_fields=list(repaired.keys())[:20],
+                        repaired_fields=list(parsed.keys())[:20],
                     )
-                    return repaired
+                    return parsed
                 except Exception:
                     pass
-            validate(instance=data, schema=schema)
+            validate(instance=parsed, schema=schema)
+            semantic_error = semantic_validator(parsed) if semantic_validator else None
+            if semantic_error:
+                raise ValueError(semantic_error)
             _log_event(
                 "llm.parse_success",
                 run_id=run_id,
@@ -921,31 +989,64 @@ async def _llm_json(
                 component=component,
                 attempts=retry_count,
             )
-            return data
+            return parsed
         except Exception as e:
             last_error = e
             if attempt >= max_repair:
                 break
-            repair_user = f"""Your previous output did not match the required JSON schema.
+            error_text = str(e)
+            if error_text.startswith("MISSING_HANDOFF_FIELDS:"):
+                missing = [x.strip() for x in error_text.split(":", 1)[1].split(",") if x.strip()]
+                repair_user = f"""Your previous JSON is missing required handoff fields: {', '.join(missing)}.
+
+Return ONLY corrected JSON.
+Keep existing intent and code changes, and fill all required handoff fields.
+Do not include markdown fences or extra text.
+"""
+                _log_event(
+                    "handoff.repair_requested",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    component=component,
+                    attempt=retry_count,
+                    missing_fields=missing,
+                )
+            else:
+                repair_user = f"""Your previous output did not match the required JSON schema.
 Error: {e}
 
 Return ONLY a corrected JSON object that matches the schema.
 Do not include markdown fences or additional text.
 """
-            _log_event(
-                "llm.parse_retry_requested",
-                run_id=run_id,
-                request_id=request_id,
-                profile=profile,
-                component=component,
-                attempt=retry_count,
-                raw_preview=_safe_short_text(last_raw),
-                error=str(e),
-            )
+                _log_event(
+                    "llm.parse_retry_requested",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    component=component,
+                    attempt=retry_count,
+                    raw_preview=_safe_short_text(last_raw),
+                    error=error_text,
+                )
             prompt_user = repair_user
 
     if last_error is None:
         raise ValueError("LLM output could not be validated, but no parser/runtime error was captured.")
+
+    last_error_text = str(last_error)
+    if last_error_text.startswith("MISSING_HANDOFF_FIELDS:"):
+        missing = [x.strip() for x in last_error_text.split(":", 1)[1].split(",") if x.strip()]
+        _log_event(
+            "handoff.incomplete",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            component=component,
+            missing_fields=missing,
+            attempts=max_repair + 1,
+            status="re_request_exhausted",
+        )
 
     raise ValueError(
         "Structured JSON generation failed after "
@@ -973,6 +1074,7 @@ async def run_autodev_enterprise(
     resume: bool = False,
     interactive: bool = False,
     role_temperatures: Dict[str, float] | None = None,
+    max_parallel_tasks: int = DEFAULT_MAX_PARALLEL_TASKS,
     *,
     run_id: str | None = None,
     request_id: str | None = None,
@@ -980,6 +1082,9 @@ async def run_autodev_enterprise(
 ) -> Tuple[bool, Dict[str, Any], Dict[str, Any], Any]:
     run_id = run_id or uuid4().hex
     request_id = request_id or uuid4().hex
+
+    if max_parallel_tasks <= 0:
+        max_parallel_tasks = 1
 
     _log_event(
         "run_enterprise.start",
@@ -993,12 +1098,23 @@ async def run_autodev_enterprise(
         max_fix_loops_total=max_fix_loops_total,
         max_fix_loops_per_task=max_fix_loops_per_task,
         max_json_repair=max_json_repair,
+        max_parallel_tasks=max_parallel_tasks,
+        max_parallel_tasks_recommended=RECOMMENDED_MAX_PARALLEL_TASKS,
         resume=resume,
         interactive=interactive,
     )
 
     p = prompts()
     role_temperatures = role_temperatures or {}
+    if max_parallel_tasks > RECOMMENDED_MAX_PARALLEL_TASKS:
+        _log_event(
+            "task.concurrency_high",
+            run_id=run_id,
+            request_id=request_id,
+            profile=profile,
+            configured=max_parallel_tasks,
+            recommended_max=RECOMMENDED_MAX_PARALLEL_TASKS,
+        )
 
     def _role_temperature(component: str, default: float = 0.2) -> float:
         value = role_temperatures.get(component)
@@ -1025,10 +1141,14 @@ async def run_autodev_enterprise(
         and isinstance(cache_payload.get("plan"), dict)
     )
 
+    architecture: Dict[str, Any] | None = None
+
     if use_cached:
         cached = cast(Dict[str, Any], cache_payload)
         prd_struct = cast(Dict[str, Any], cached["prd_struct"])
         plan = cast(Dict[str, Any], cached["plan"])
+        # Restore cached architecture if present.
+        architecture = cached.get("architecture")
         _log_event(
             "run.cache_hit",
             run_id=run_id,
@@ -1050,17 +1170,50 @@ async def run_autodev_enterprise(
             component="prd_normalizer",
             post_process=_coerce_prd_payload,
             temperature=_role_temperature("prd_normalizer"),
+            role_hint="prd_normalizer",
         )
 
-        # 2) Plan
+        # 2) Architecture design (optional — skipped if role not defined)
+        if "architect" in p:
+            architecture = await _llm_json(
+                client,
+                p["architect"]["system"],
+                json_dumps({
+                    "prd_struct": prd_struct,
+                    "task": p["architect"]["task"],
+                }),
+                ARCHITECTURE_SCHEMA,
+                max_repair=max_json_repair,
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                component="architect",
+                temperature=_role_temperature("architect", 0.3),
+                role_hint="architect",
+            )
+            _write_json(ws, ".autodev/architecture.json", architecture)
+            _log_event(
+                "run.architecture_generated",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                components=len(architecture.get("components", [])),
+                data_models=len(architecture.get("data_models", [])),
+                api_contracts=len(architecture.get("api_contracts", [])),
+            )
+
+        # 3) Plan
+        planner_input: Dict[str, Any] = {
+            "template_candidates": template_candidates,
+            "prd_struct": prd_struct,
+            "task": p["planner"]["task"],
+        }
+        if architecture is not None:
+            planner_input["architecture"] = architecture
         plan = await _llm_json(
             client,
             p["planner"]["system"],
-            json_dumps({
-                "template_candidates": template_candidates,
-                "prd_struct": prd_struct,
-                "task": p["planner"]["task"],
-            }),
+            json_dumps(planner_input),
             PLAN_SCHEMA,
             max_repair=max_json_repair,
             run_id=run_id,
@@ -1069,8 +1222,9 @@ async def run_autodev_enterprise(
             component="planner",
             post_process=lambda payload: _coerce_plan_payload(payload, template_candidates),
             temperature=_role_temperature("planner"),
+            role_hint="planner",
         )
-        _write_generation_cache(ws, cache_key, prd_struct, plan)
+        _write_generation_cache(ws, cache_key, prd_struct, plan, architecture)
 
     # 3) Scaffold
     project_type = plan["project"]["type"]
@@ -1123,6 +1277,7 @@ async def run_autodev_enterprise(
             component="planner_repair",
             post_process=lambda payload: _coerce_plan_payload(payload, template_candidates),
             temperature=_role_temperature("planner_repair", _role_temperature("planner")),
+            role_hint="planner",
         )
         if repaired_plan["project"]["type"] != project_type:
             raise ValueError("Planner repair changed project.type; refusing to continue.")
@@ -1246,6 +1401,10 @@ async def run_autodev_enterprise(
         },
         "validator_enabled": effective_validators_enabled,
         "resolved_quality_profile": quality_profile,
+        "concurrency": {
+            "max_parallel_tasks": max_parallel_tasks,
+            "recommended_max_parallel_tasks": RECOMMENDED_MAX_PARALLEL_TASKS,
+        },
         "tasks": [],
     }
 
@@ -1256,6 +1415,16 @@ async def run_autodev_enterprise(
     performance_context = _extract_performance_hints(prd_struct=prd_struct, plan=plan)
     task_order = {task["id"]: index for index, task in enumerate(tasks, start=1)}
     task_levels = _toposort_levels(tasks)
+    task_context_cache: Dict[str, Dict[str, str]] = {}
+
+    def _cached_files_context(task_id: str, files: List[str]) -> Dict[str, str]:
+        cache_key = f"{task_id}:{'|'.join(files)}"
+        cached = task_context_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        ctx = _build_files_context(ws, files)
+        task_context_cache[cache_key] = ctx
+        return ctx
 
     async def _run_task_execution(
         task: Dict[str, Any],
@@ -1280,11 +1449,12 @@ async def run_autodev_enterprise(
             file_count=len(task["files"]),
         )
 
-        files_ctx = _build_files_context(ws, task["files"])
+        files_ctx = _cached_files_context(task["id"], task["files"])
         attempt_records: List[Dict[str, Any]] = []
         loops = 0
         last_failure_signature: tuple[Any, ...] = tuple()
         repeat_failure_count = 0
+        consecutive_failures = 0
         repair_used = False
         previous_validation_rows: List[Dict[str, Any]] = []
 
@@ -1301,7 +1471,9 @@ async def run_autodev_enterprise(
             request_id=request_id,
             profile=profile,
             component="implementer",
+            semantic_validator=_validate_handoff_fields,
             temperature=_role_temperature("implementer"),
+            role_hint="implementer",
         )
         quality_trace = [_quality_metadata_from_changeset(changeset, task["id"], run_set)]
 
@@ -1309,6 +1481,59 @@ async def run_autodev_enterprise(
         for c in changeset["changes"]:
             changes.append(Change(op=c["op"], path=c["path"], content=c.get("content")))
         ws.apply_changes(changes)
+        task_context_cache.pop(f"{task['id']}:{'|'.join(task['files'])}", None)
+
+        # -- Code review (optional — skipped if role not defined) --
+        if "reviewer" in p:
+            review_files_ctx: Dict[str, str] = {}
+            for ch in changeset["changes"]:
+                if ch["op"] in ("write", "patch") and ws.exists(ch["path"]):
+                    try:
+                        review_files_ctx[ch["path"]] = ws.read_text(ch["path"])[:8000]
+                    except Exception:
+                        pass
+            review_input: Dict[str, Any] = {
+                "task": p["reviewer"]["task"],
+                "task_goal": task.get("goal", ""),
+                "acceptance_criteria": task.get("acceptance", []),
+                "changeset_summary": changeset.get("summary", ""),
+                "changed_files": review_files_ctx,
+            }
+            if architecture is not None:
+                review_input["architecture"] = architecture
+            review = await _llm_json(
+                client,
+                p["reviewer"]["system"],
+                json_dumps(review_input),
+                REVIEW_SCHEMA,
+                max_repair=max_json_repair,
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                component="reviewer",
+                temperature=_role_temperature("reviewer", 0.15),
+                role_hint="reviewer",
+            )
+            _write_json(ws, f".autodev/task_{task['id']}_review.json", review)
+            _log_event(
+                "task.review_completed",
+                run_id=run_id,
+                request_id=request_id,
+                profile=profile,
+                task_id=task["id"],
+                verdict=review.get("overall_verdict", "unknown"),
+                findings_count=len(review.get("findings", [])),
+                blocking_count=len(review.get("blocking_issues", [])),
+            )
+
+            # If reviewer found blocking issues, feed them as extra context to the fixer
+            blocking = review.get("blocking_issues", [])
+            if blocking and review.get("overall_verdict") == "request_changes":
+                review_ctx = (
+                    "Code review found blocking issues:\n"
+                    + "\n".join(f"- {b}" for b in blocking)
+                )
+                impl_payload["review_feedback"] = review_ctx
 
         task_last_validation: List[Dict[str, Any]] = []
 
@@ -1407,6 +1632,7 @@ async def run_autodev_enterprise(
             )
 
             if row["status"] == "passed":
+                consecutive_failures = 0
                 _log_event(
                     "task.attempt_passed",
                     run_id=run_id,
@@ -1418,6 +1644,66 @@ async def run_autodev_enterprise(
                     total_task_attempts=len(attempt_records),
                 )
                 break
+
+            consecutive_failures += 1
+            if consecutive_failures > CONSECUTIVE_FAILURE_FAIL_FAST_THRESHOLD:
+                task_entry = {
+                    "task_id": task["id"],
+                    "status": "failed",
+                    "attempts": len(attempt_records),
+                    "validator_focus": run_set,
+                    "attempt_trend": _build_task_summary_rows(attempt_records),
+                    "hard_failures": attempt_records[-1]["hard_failures"],
+                    "soft_failures": attempt_records[-1]["soft_failures"],
+                    "last_validation": attempt_records[-1]["validations"],
+                    "quality_trace": quality_trace,
+                    "fail_fast": True,
+                }
+                _log_event(
+                    "task.fail_fast_triggered",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    iteration=iteration,
+                    task_id=task["id"],
+                    attempt=loops + 1,
+                    consecutive_failures=consecutive_failures,
+                    threshold=CONSECUTIVE_FAILURE_FAIL_FAST_THRESHOLD,
+                    reason="consecutive_validation_failures",
+                )
+                _write_json(
+                    ws,
+                    QUALITY_TASK_FILE_TMPL.format(task_id=task["id"]),
+                    {
+                        "task_id": task["id"],
+                        "status": "failed",
+                        "attempts": attempt_records,
+                        "attempts_count": len(attempt_records),
+                        "validator_focus": run_set,
+                        "attempt_trend": _build_task_summary_rows(attempt_records),
+                        "last_validation": attempt_records[-1]["validations"],
+                        "quality_trace": quality_trace,
+                        "fail_fast": True,
+                    },
+                )
+                _write_json(
+                    ws,
+                    QUALITY_TASK_LAST_FILE_TMPL.format(task_id=task["id"]),
+                    {
+                        "validator_focus": run_set,
+                        "run_level": "per_task",
+                        "validation": task_last_validation,
+                        "record_count": len(attempt_records),
+                        "fail_fast": True,
+                    },
+                )
+                return {
+                    "task_id": task["id"],
+                    "iteration": iteration,
+                    "status": "failed",
+                    "task_entry": task_entry,
+                    "last_validation": task_last_validation,
+                }
 
             loops += 1
             total_fix_loops += 1
@@ -1478,7 +1764,7 @@ async def run_autodev_enterprise(
                     "last_validation": task_last_validation,
                 }
 
-            files_ctx = _build_files_context(ws, task["files"])
+            files_ctx = _cached_files_context(task["id"], task["files"])
             same_failure_signature = bool(signature) and signature == last_failure_signature
             if same_failure_signature:
                 repeat_failure_count += 1
@@ -1533,13 +1819,16 @@ async def run_autodev_enterprise(
                 request_id=request_id,
                 profile=profile,
                 component="fixer",
+                semantic_validator=_validate_handoff_fields,
                 temperature=_role_temperature("fixer"),
+                role_hint="fixer",
             )
             quality_trace.append(_quality_metadata_from_changeset(fix, task["id"], run_set))
             fix_changes: List[Change] = []
             for c in fix["changes"]:
                 fix_changes.append(Change(op=c["op"], path=c["path"], content=c.get("content")))
             ws.apply_changes(fix_changes)
+            task_context_cache.pop(f"{task['id']}:{'|'.join(task['files'])}", None)
 
         task_entry = {
             "task_id": task["id"],
@@ -1666,7 +1955,12 @@ async def run_autodev_enterprise(
             if not runnable:
                 continue
 
-            if len(runnable) > 1:
+            contains_global_validator = any(
+                any(name in FULL_REPO_VALIDATORS for name in run_set)
+                for _, _, run_set in runnable
+            )
+
+            if len(runnable) > 1 and not contains_global_validator:
                 _log_event(
                     "task.batch_parallel_start",
                     run_id=run_id,
@@ -1676,13 +1970,18 @@ async def run_autodev_enterprise(
                     batch=batch_idx,
                     task_ids=[task["id"] for task, _, _ in runnable],
                     batch_size=len(runnable),
+                    concurrency_limit=max_parallel_tasks,
                 )
-                batch_results = await asyncio.gather(
-                    *[
-                        _run_task_execution(task, iteration=iteration, run_set=run_set)
-                        for task, iteration, run_set in runnable
-                    ]
-                )
+                batch_results = []
+                for chunk_start in range(0, len(runnable), max_parallel_tasks):
+                    chunk = runnable[chunk_start : chunk_start + max_parallel_tasks]
+                    chunk_results = await asyncio.gather(
+                        *[
+                            _run_task_execution(task, iteration=iteration, run_set=run_set)
+                            for task, iteration, run_set in chunk
+                        ]
+                    )
+                    batch_results.extend(chunk_results)
                 _log_event(
                     "task.batch_parallel_complete",
                     run_id=run_id,
@@ -1692,10 +1991,23 @@ async def run_autodev_enterprise(
                     batch=batch_idx,
                     task_ids=[task["id"] for task, _, _ in runnable],
                     batch_size=len(runnable),
+                    concurrency_limit=max_parallel_tasks,
                 )
             else:
-                task, iteration, run_set = runnable[0]
-                batch_results = [await _run_task_execution(task, iteration=iteration, run_set=run_set)]
+                if len(runnable) > 1 and contains_global_validator:
+                    _log_event(
+                        "task.batch_parallel_skipped",
+                        run_id=run_id,
+                        request_id=request_id,
+                        profile=profile,
+                        level=level_idx,
+                        batch=batch_idx,
+                        task_ids=[task["id"] for task, _, _ in runnable],
+                        reason="global_validators_detected",
+                    )
+                batch_results = []
+                for task, iteration, run_set in runnable:
+                    batch_results.append(await _run_task_execution(task, iteration=iteration, run_set=run_set))
 
             for result in sorted(batch_results, key=lambda row: int(row["iteration"])):
                 quality_summary["tasks"].append(cast(Dict[str, Any], result["task_entry"]))
@@ -1817,7 +2129,9 @@ async def run_autodev_enterprise(
             request_id=request_id,
             profile=profile,
             component="perf_fixer",
+            semantic_validator=_validate_handoff_fields,
             temperature=_role_temperature("perf_fixer"),
+            role_hint="fixer",
         )
         for c in perf_fix["changes"]:
             ws.apply_changes([Change(op=c["op"], path=c["path"], content=c.get("content"))])

@@ -1,0 +1,10 @@
+{
+  "language": "go",
+  "runtime": "go",
+  "validators": ["go_vet", "golangci_lint", "go_test"],
+  "test_command": "go test ./...",
+  "lint_command": "golangci-lint run",
+  "type_check_command": "go vet ./...",
+  "build_command": "go build ./cmd/server",
+  "allowed_executables": ["go", "golangci-lint", "docker"]
+}

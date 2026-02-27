@@ -1,6 +1,7 @@
 llm:
   base_url: "http://127.0.0.1:11434/v1"
-  api_key: ${AUTODEV_LLM_API_KEY}
+  api_key: ${AUTODEV_LLM_API_KEY}  # 우선순위 1 (하위호환)
+  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}  # api_key 비어있을 때 사용
   model: "anthropic/claude-sonnet-4-6"
   timeout_sec: 600
   role_temperatures:
@@ -8,6 +9,27 @@ llm:
     planner: 0.4
     implementer: 0.1
     fixer: 0.15
+    architect: 0.3
+    reviewer: 0.15
+
+  # -- Multi-model routing (optional) --
+  # Uncomment to route roles to different model endpoints.
+  # Fallback: if a primary endpoint fails, the next endpoint in the list is tried.
+  #
+  # models:
+  #   - base_url: "http://127.0.0.1:11434/v1"
+  #     model: "anthropic/claude-opus-4-6"
+  #     api_key: ${AUTODEV_LLM_API_KEY}
+  #   - base_url: "http://127.0.0.1:11434/v1"
+  #     model: "anthropic/claude-sonnet-4-6"
+  #     api_key: ${AUTODEV_LLM_API_KEY}
+  # role_mapping:
+  #   planner: 0        # Use Opus for planning (stronger reasoning)
+  #   architect: 0      # Use Opus for architecture design
+  #   prd_normalizer: 1 # Use Sonnet for PRD normalization (fast)
+  #   implementer: 1    # Use Sonnet for implementation (fast, cheap)
+  #   fixer: 1          # Use Sonnet for fixes
+  #   reviewer: 1       # Use Sonnet for code review
 
 run:
   max_json_repair: 2

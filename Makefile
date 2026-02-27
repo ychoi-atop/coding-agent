@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks check-docs benchmark-generate perf-smoke perf-strict untyped-check test-backend
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks check-docs benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
@@ -78,6 +78,14 @@ perf-smoke:
 # Strict perf gate with conservative regression thresholds.
 perf-strict:
 	$(PYTHON) docs/ops/perf_strict.py
+
+# Before/after perf compare report (default repeat=2).
+perf-compare:
+	$(PYTHON) docs/ops/perf_compare_report.py --repeat 2
+
+# Quick smoke for perf compare script behavior validation.
+perf-compare-smoke:
+	$(PYTHON) docs/ops/perf_compare_report.py --smoke
 
 # Validate template CI workflow and docs parity against shared contract.
 check-template:

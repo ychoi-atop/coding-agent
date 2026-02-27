@@ -27,13 +27,15 @@ _PROFILE_OPTIONAL_KEYS = {
 }
 _PROFILE_ALLOWED_KEYS = _PROFILE_REQUIRED_KEYS | _PROFILE_OPTIONAL_KEYS
 _AUTODEV_API_KEY_ENV = "AUTODEV_LLM_API_KEY"
+_AUTODEV_OAUTH_TOKEN_ENV = "AUTODEV_CLAUDE_CODE_OAUTH_TOKEN"
 _AUTODEV_API_KEY_PLACEHOLDER = f"${{{_AUTODEV_API_KEY_ENV}}}"
+_AUTODEV_OAUTH_TOKEN_PLACEHOLDER = f"${{{_AUTODEV_OAUTH_TOKEN_ENV}}}"
 _DEFAULT_PROFILE_QUALITY_PROFILE: Dict[str, Any] = {"validator_policy": {"per_task": {}, "final": {}}}
 
 
-def _resolve_api_key(value: Any) -> Any:
-    if isinstance(value, str) and value == _AUTODEV_API_KEY_PLACEHOLDER:
-        return os.getenv(_AUTODEV_API_KEY_ENV)
+def _resolve_auth_value(value: Any, placeholder: str, env_name: str) -> Any:
+    if isinstance(value, str) and value == placeholder:
+        return os.getenv(env_name)
     return value
 
 
@@ -371,6 +373,43 @@ def _validate_quality_profile(profile_name: str, quality_profile: Any, errors: L
             )
 
 
+def _validate_model_endpoint(entry: Any, index: int, errors: List[str]) -> None:
+    """Validate a single item inside ``llm.models[]``."""
+    base = f"llm.models[{index}]"
+    if not isinstance(entry, dict):
+        errors.append(f"{base} must be an object.")
+        return
+    for required_key in ("base_url", "model"):
+        val = entry.get(required_key)
+        if not isinstance(val, str) or not val.strip():
+            errors.append(f"{base}.{required_key} is required and must be a non-empty string.")
+
+    api_key = _resolve_auth_value(entry.get("api_key"), _AUTODEV_API_KEY_PLACEHOLDER, _AUTODEV_API_KEY_ENV)
+    oauth_token = _resolve_auth_value(entry.get("oauth_token"), _AUTODEV_OAUTH_TOKEN_PLACEHOLDER, _AUTODEV_OAUTH_TOKEN_ENV)
+    entry["api_key"] = api_key
+    entry["oauth_token"] = oauth_token
+    has_key = isinstance(api_key, str) and bool(api_key.strip())
+    has_oauth = isinstance(oauth_token, str) and bool(oauth_token.strip())
+    if not has_key and not has_oauth:
+        errors.append(f"{base} requires api_key or oauth_token.")
+
+
+def _validate_role_mapping(role_mapping: Any, endpoint_count: int, errors: List[str]) -> None:
+    """Validate ``llm.role_mapping`` dict (role name → endpoint index)."""
+    if role_mapping is None:
+        return
+    if not isinstance(role_mapping, dict):
+        errors.append("llm.role_mapping must be an object mapping role names to endpoint indices.")
+        return
+    for role_name, idx in role_mapping.items():
+        path = f"llm.role_mapping.{role_name}"
+        if not isinstance(idx, int) or isinstance(idx, bool):
+            errors.append(f"{path} must be an integer index into llm.models[].")
+            continue
+        if idx < 0 or idx >= endpoint_count:
+            errors.append(f"{path} index {idx} is out of range (0..{endpoint_count - 1}).")
+
+
 def _validate_llm_section(llm_cfg: Any, errors: List[str]) -> None:
     if not isinstance(llm_cfg, dict):
         errors.append("llm must be an object.")
@@ -384,11 +423,26 @@ def _validate_llm_section(llm_cfg: Any, errors: List[str]) -> None:
     if not isinstance(model, str) or not model.strip():
         errors.append("llm.model is required and must be a non-empty string.")
 
-    resolved_api_key = _resolve_api_key(llm_cfg.get("api_key"))
+    resolved_api_key = _resolve_auth_value(
+        llm_cfg.get("api_key"),
+        _AUTODEV_API_KEY_PLACEHOLDER,
+        _AUTODEV_API_KEY_ENV,
+    )
+    resolved_oauth_token = _resolve_auth_value(
+        llm_cfg.get("oauth_token"),
+        _AUTODEV_OAUTH_TOKEN_PLACEHOLDER,
+        _AUTODEV_OAUTH_TOKEN_ENV,
+    )
+
     llm_cfg["api_key"] = resolved_api_key
-    if not isinstance(resolved_api_key, str) or not resolved_api_key.strip():
+    llm_cfg["oauth_token"] = resolved_oauth_token
+
+    has_api_key = isinstance(resolved_api_key, str) and bool(resolved_api_key.strip())
+    has_oauth_token = isinstance(resolved_oauth_token, str) and bool(resolved_oauth_token.strip())
+    if not has_api_key and not has_oauth_token:
         errors.append(
-            "llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment."
+            "llm authentication is required. Set llm.api_key/llm.oauth_token in config.yaml "
+            "or define AUTODEV_LLM_API_KEY/AUTODEV_CLAUDE_CODE_OAUTH_TOKEN in environment."
         )
 
     timeout = _coerce_int(llm_cfg.get("timeout_sec"), "llm.timeout_sec", errors, default=240)
@@ -397,6 +451,16 @@ def _validate_llm_section(llm_cfg: Any, errors: List[str]) -> None:
             errors.append("llm.timeout_sec must be a positive integer.")
         else:
             llm_cfg["timeout_sec"] = timeout
+
+    # -- Multi-model endpoints (optional) --
+    models_list = llm_cfg.get("models")
+    if models_list is not None:
+        if not isinstance(models_list, list):
+            errors.append("llm.models must be a list of endpoint objects.")
+        else:
+            for i, entry in enumerate(models_list):
+                _validate_model_endpoint(entry, i, errors)
+            _validate_role_mapping(llm_cfg.get("role_mapping"), len(models_list), errors)
 
     role_temps = llm_cfg.get("role_temperatures")
     if role_temps is None:
@@ -450,6 +514,12 @@ def _validate_run_section(run: Any, errors: List[str]) -> None:
     if not isinstance(run, dict):
         errors.append("run must be an object.")
         return
+
+    max_parallel_tasks = _coerce_int(run.get("max_parallel_tasks"), "run.max_parallel_tasks", errors, default=2)
+    if max_parallel_tasks is not None:
+        if max_parallel_tasks <= 0:
+            errors.append("run.max_parallel_tasks must be >= 1.")
+        run["max_parallel_tasks"] = max_parallel_tasks
 
     budget = run.get("budget")
     if budget is None:

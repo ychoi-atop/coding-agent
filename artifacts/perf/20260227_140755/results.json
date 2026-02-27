@@ -1,0 +1,42 @@
+[
+  {
+    "lane": "before",
+    "repeat": 1,
+    "ok": false,
+    "returncode": 1,
+    "wall_time_ms": 145,
+    "peak_rss_kb": 45120,
+    "validator_total_ms": 0,
+    "validator_max_ms": 0,
+    "llm_total_tokens": 0,
+    "llm_prompt_tokens": 0,
+    "llm_completion_tokens": 0,
+    "llm_chat_calls": 0,
+    "llm_transport_retries": 0,
+    "llm_failed_chat_calls": 0,
+    "task_retry_like_count": 0,
+    "retries_total": 0,
+    "run_dir": "",
+    "error": "\nInvalid config:\n- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.\n        0.14 real         0.11 user         0.02 sys\n            46202880  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4059  page reclaims\n                  17  page faults\n                   0  swaps\n                   0  block inpu"
+  },
+  {
+    "lane": "after",
+    "repeat": 1,
+    "ok": false,
+    "returncode": 1,
+    "wall_time_ms": 129,
+    "peak_rss_kb": 40272,
+    "validator_total_ms": 0,
+    "validator_max_ms": 0,
+    "llm_total_tokens": 0,
+    "llm_prompt_tokens": 0,
+    "llm_completion_tokens": 0,
+    "llm_chat_calls": 0,
+    "llm_transport_retries": 0,
+    "llm_failed_chat_calls": 0,
+    "task_retry_like_count": 0,
+    "retries_total": 0,
+    "run_dir": "",
+    "error": "\nInvalid config:\n- llm.api_key is required. Set llm.api_key in config.yaml or define AUTODEV_LLM_API_KEY in environment.\n        0.12 real         0.10 user         0.01 sys\n            41238528  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3756  page reclaims\n                  17  page faults\n                   0  swaps\n                   0  block inpu"
+  }
+]

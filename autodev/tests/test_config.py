@@ -32,13 +32,15 @@ profiles:
     assert "unknown validator 'bad_validator'" in str(exc.value)
 
 
-def test_load_config_reports_unresolved_api_key_placeholder(tmp_path, monkeypatch):
+def test_load_config_reports_unresolved_auth_placeholders(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTODEV_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("AUTODEV_CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
     cfg = """\
 llm:
   base_url: http://127.0.0.1:1234/v1
   api_key: ${AUTODEV_LLM_API_KEY}
+  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
   model: fake-model
 profiles:
   enterprise:
@@ -54,7 +56,7 @@ profiles:
     with pytest.raises(ValueError) as exc:
         load_config(str(cfg_path))
 
-    assert "llm.api_key is required" in str(exc.value)
+    assert "llm authentication is required" in str(exc.value)
 
 
 def test_load_config_rejects_profile_ambiguity_between_validator_policy_and_quality_policy(tmp_path):
@@ -84,6 +86,27 @@ profiles:
         load_config(str(cfg_path))
 
     assert "has ambiguous policy configuration" in str(exc.value)
+
+
+def test_load_config_accepts_oauth_token_without_api_key(tmp_path):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  oauth_token: oauth-token-for-test
+  model: fake-model
+profiles:
+  enterprise:
+    validators:
+      - ruff
+      - pytest
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    config = load_config(str(cfg_path))
+    assert config["llm"]["oauth_token"] == "oauth-token-for-test"
 
 
 def test_load_config_adds_default_profile_security_and_quality_profile(tmp_path):
@@ -249,3 +272,47 @@ profiles:
         load_config(str(cfg_path))
 
     assert "llm.role_temperatures.planner must be between 0 and 2" in str(exc.value)
+
+
+def test_load_config_defaults_run_max_parallel_tasks_to_2(tmp_path):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: fake-model
+profiles:
+  enterprise:
+    validators:
+      - ruff
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    config = load_config(str(cfg_path))
+    assert config["run"]["max_parallel_tasks"] == 2
+
+
+def test_load_config_rejects_invalid_run_max_parallel_tasks(tmp_path):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: fake-model
+run:
+  max_parallel_tasks: 0
+profiles:
+  enterprise:
+    validators:
+      - ruff
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        load_config(str(cfg_path))
+
+    assert "run.max_parallel_tasks must be >= 1" in str(exc.value)
