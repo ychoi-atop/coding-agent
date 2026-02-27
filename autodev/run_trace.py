@@ -70,6 +70,9 @@ class EventType(str, Enum):
     # Smart scope
     SMART_SCOPE_APPLIED = "smart_scope.applied"
 
+    # Config tuner
+    CONFIG_TUNER_ANALYZED = "config_tuner.analyzed"
+
 
 # ---------------------------------------------------------------------------
 # Data classes

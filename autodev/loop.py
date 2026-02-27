@@ -94,6 +94,7 @@ from .parallel_fixer import (
     resolve_parallel_fixer_config,
 )
 from .smart_scope import apply_smart_scope, resolve_smart_scope_config
+from .config_tuner import generate_recommendations as _generate_tuner_recommendations
 from .context_cache import IncrementalContextCache
 from .perf_baseline import record_and_check as _perf_baseline_check
 from .task_scheduler import (
@@ -999,6 +1000,29 @@ async def run_autodev_enterprise(
 
     # -- Smart scope: narrow validators to actual changes ---------------------
     _smart_scope_config = resolve_smart_scope_config(quality_profile)
+
+    # -- Config tuner: analyse previous run and log recommendations -----------
+    try:
+        from .run_analyzer import analyze_run as _analyze_previous_run
+
+        _prev_analysis = _analyze_previous_run(ws.root)
+        if _prev_analysis.run_id != "unknown":
+            _tuner_result = _generate_tuner_recommendations(
+                _prev_analysis, quality_profile,
+            )
+            if _tuner_result.recommendations:
+                trace.record(
+                    EventType.CONFIG_TUNER_ANALYZED,
+                    recommendation_count=len(_tuner_result.recommendations),
+                    categories=[c.value for c in _tuner_result.by_category],
+                )
+                _write_json(
+                    ws,
+                    ".autodev/tuner_recommendations.json",
+                    _tuner_result.to_dict(),
+                )
+    except Exception:
+        logger.debug("config_tuner: failed to analyze previous run", exc_info=True)
 
     def _cached_files_context(task_id: str, files: List[str], goal: str = "") -> Dict[str, str]:
         cache_key = f"{task_id}:{'|'.join(files)}"
