@@ -146,6 +146,10 @@ def _failed_validator_names(validation_rows: List[Dict[str, Any]]) -> List[str]:
     ]
 
 
+def _has_skipped_dependency(validation_rows: List[Dict[str, Any]]) -> bool:
+    return any(row.get("status") == "skipped_dependency" for row in validation_rows)
+
+
 def _merge_validation_rows(
     previous: List[Dict[str, Any]],
     fresh: List[Dict[str, Any]],
@@ -267,7 +271,12 @@ def _build_quality_row(
     validation_links: Dict[str, Any] | None = None,
     repair_pass: bool = False,
 ) -> Dict[str, Any]:
-    blocked = [row for row in validation_rows if row["name"] not in soft_validators]
+    blocked = [
+        row
+        for row in validation_rows
+        if row["name"] not in soft_validators
+        and row.get("status") != "skipped_dependency"
+    ]
     hard_failures = sum(1 for row in blocked if not row["ok"])
     soft_failures = sum(1 for row in validation_rows if row["name"] in soft_validators and not row["ok"])
 

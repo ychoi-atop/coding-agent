@@ -112,6 +112,27 @@ def test_quality_row_and_pass_map_builder():
     assert pass_map["semgrep"]["status"] == "soft_fail"
 
 
+def test_quality_row_excludes_skipped_dependency_from_hard_failures():
+    rows = [
+        {"name": "ruff", "ok": False, "status": "soft_fail", "returncode": 1},
+        {"name": "mypy", "ok": False, "status": "skipped_dependency", "returncode": -1},
+    ]
+    row = _build_quality_row(
+        task_id="task-1",
+        attempt=2,
+        run_set=["ruff", "mypy"],
+        validation_rows=rows,
+        duration_ms=10,
+        soft_validators={"ruff"},
+        all_ok=True,
+    )
+
+    assert row["status"] == "passed"
+    assert row["hard_failures"] == 0
+    assert row["soft_failures"] == 1
+    assert row["validator_counts"]["skipped_dependency"] == 1
+
+
 class _FakeResult:
     def __init__(self, returncode: int = 0):
         self.returncode = returncode
@@ -1764,6 +1785,321 @@ class _FakePerfGateValidators:
     def run_one(self, name, audit_required=False, phase="task", **kwargs):
         _FakePerfGateValidators.calls.append((phase + ":one", name))
         return _FakeValidation(name, True, "passed", 0)
+
+
+class _FakeGraphRunAllOnlyValidators:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    ruff_per_task_calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @staticmethod
+    def serialize(results):
+        out = []
+        for r in results:
+            out.append(
+                {
+                    "name": r.name,
+                    "ok": r.ok,
+                    "status": r.status,
+                    "returncode": r.result.returncode,
+                    "duration_ms": r.duration_ms,
+                    "tool_version": r.tool_version,
+                    "error_classification": r.error_classification,
+                    "stdout": "",
+                    "stderr": "",
+                    "note": r.note,
+                }
+            )
+        return out
+
+    @staticmethod
+    def reset() -> None:
+        _FakeGraphRunAllOnlyValidators.calls = []
+        _FakeGraphRunAllOnlyValidators.ruff_per_task_calls = 0
+
+    def run_all(self, enabled, audit_required=False, soft_validators=None, phase="task", **kwargs):
+        names = tuple(enabled)
+        _FakeGraphRunAllOnlyValidators.calls.append((phase, names))
+
+        if phase == "per_task" and names == ("ruff",):
+            _FakeGraphRunAllOnlyValidators.ruff_per_task_calls += 1
+            if _FakeGraphRunAllOnlyValidators.ruff_per_task_calls == 1:
+                return [_FakeValidation("ruff", False, "failed", 1)]
+            return [_FakeValidation("ruff", True, "passed", 0)]
+
+        if phase == "per_task":
+            return [_FakeValidation(name, True, "passed", 0) for name in enabled]
+        return [_FakePassingValidation(name) for name in enabled]
+
+
+class _FakeDeterministicBenchmarkValidators:
+    run_all_calls: list[tuple[str, tuple[str, ...]]] = []
+    run_one_calls: list[tuple[str, str]] = []
+    _first_graph_ruff_failed = False
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    @staticmethod
+    def serialize(results):
+        return _FakeGraphRunAllOnlyValidators.serialize(results)
+
+    @staticmethod
+    def reset() -> None:
+        _FakeDeterministicBenchmarkValidators.run_all_calls = []
+        _FakeDeterministicBenchmarkValidators.run_one_calls = []
+        _FakeDeterministicBenchmarkValidators._first_graph_ruff_failed = False
+
+    @staticmethod
+    def per_task_invocations() -> int:
+        per_task_run_all = sum(
+            len(enabled)
+            for phase, enabled in _FakeDeterministicBenchmarkValidators.run_all_calls
+            if phase == "per_task"
+        )
+        per_task_run_one = sum(
+            1 for phase, _ in _FakeDeterministicBenchmarkValidators.run_one_calls
+            if phase == "per_task"
+        )
+        return per_task_run_all + per_task_run_one
+
+    def run_all(self, enabled, audit_required=False, soft_validators=None, phase="task", **kwargs):
+        names = tuple(enabled)
+        _FakeDeterministicBenchmarkValidators.run_all_calls.append((phase, names))
+
+        if phase == "per_task":
+            return [
+                _FakeValidation(name, False, "failed", 1)
+                for name in enabled
+            ]
+
+        return [_FakePassingValidation(name) for name in enabled]
+
+    def run_one(self, name, audit_required=False, phase="task", **kwargs):
+        _FakeDeterministicBenchmarkValidators.run_one_calls.append((phase, name))
+
+        if (
+            phase == "per_task"
+            and name == "ruff"
+            and not _FakeDeterministicBenchmarkValidators._first_graph_ruff_failed
+            and not any(p == "per_task" for p, _ in _FakeDeterministicBenchmarkValidators.run_all_calls)
+        ):
+            _FakeDeterministicBenchmarkValidators._first_graph_ruff_failed = True
+            return _FakeValidation(name, False, "failed", 1)
+
+        return _FakeValidation(name, True, "passed", 0)
+
+
+def test_run_loop_validator_graph_reruns_skipped_dependents_with_run_all_only_backend(tmp_path, monkeypatch):
+    import autodev.loop as loop
+
+    ws = Workspace(str(tmp_path / "validator-graph-run-all-only"))
+    _FakeGraphRunAllOnlyValidators.reset()
+
+    responses = [
+        {
+            "title": "PRD",
+            "goals": [],
+            "non_goals": [],
+            "features": [],
+            "acceptance_criteria": [],
+            "nfr": {},
+            "constraints": [],
+        },
+        {
+            "project": {
+                "type": "python_fastapi",
+                "name": "autodev-graph",
+                "python_version": "3.11",
+                "quality_gate_profile": "balanced",
+            },
+            "tasks": [
+                {
+                    "id": "core",
+                    "title": "Core graph task",
+                    "goal": "Validate graph reruns",
+                    "acceptance": [
+                        "Add test coverage for ruff/mypy dependency recovery",
+                        "Validate error handling when ruff fails before mypy",
+                    ],
+                    "files": ["src/app/main.py"],
+                    "depends_on": [],
+                    "quality_expectations": {
+                        "requires_tests": True,
+                        "requires_error_contract": True,
+                        "touches_contract": True,
+                    },
+                    "validator_focus": ["ruff", "mypy"],
+                }
+            ],
+            "ci": {"enabled": True, "provider": "github_actions"},
+            "docker": {"enabled": True},
+            "security": {"enabled": True, "tools": ["pip_audit", "bandit", "semgrep"]},
+            "observability": {"enabled": True},
+        },
+        {"role": "implementer", "summary": "ok", "changes": [], "notes": []},
+        {"role": "fixer", "summary": "repair", "changes": [], "notes": []},
+    ]
+
+    monkeypatch.setattr(loop, "ExecKernel", _FakeKernel)
+    monkeypatch.setattr(loop, "EnvManager", _FakeEnvManager)
+    monkeypatch.setattr(loop, "Validators", _FakeGraphRunAllOnlyValidators)
+
+    ok, _, _, _ = asyncio.run(
+        run_autodev_enterprise(
+            client=cast(LLMClient, _FakeLLM(responses)),
+            ws=ws,
+            prd_markdown="",
+            template_root=str(ROOT / "templates"),
+            template_candidates=["python_fastapi"],
+            validators_enabled=["ruff", "mypy"],
+            audit_required=False,
+            max_fix_loops_total=3,
+            max_fix_loops_per_task=3,
+            max_json_repair=0,
+            task_soft_validators=[],
+            final_soft_validators=[],
+            quality_profile={
+                "name": "balanced",
+                "validator_policy": {"per_task": {"soft_fail": []}, "final": {"soft_fail": []}},
+                "validator_graph": {
+                    "enabled": True,
+                    "mode": "strict",
+                    "skip_on_soft_fail": False,
+                    "custom_edges": {},
+                },
+            },
+            verbose=False,
+        )
+    )
+
+    assert ok is True
+    per_task_calls = [c for c in _FakeGraphRunAllOnlyValidators.calls if c[0] == "per_task"]
+    assert per_task_calls.count(("per_task", ("ruff",))) == 2
+    assert per_task_calls.count(("per_task", ("mypy",))) == 1
+
+    quality = json.loads(ws.read_text(".autodev/task_core_quality.json"))
+    assert quality["attempts"][0]["validations"][1]["status"] == "skipped_dependency"
+    assert quality["attempts"][-1]["validations"][1]["status"] == "passed"
+
+
+def test_validator_graph_benchmark_reduces_per_task_invocations(tmp_path, monkeypatch):
+    import autodev.loop as loop
+
+    base_responses = [
+        {
+            "title": "PRD",
+            "goals": [],
+            "non_goals": [],
+            "features": [],
+            "acceptance_criteria": [],
+            "nfr": {},
+            "constraints": [],
+        },
+        {
+            "project": {
+                "type": "python_fastapi",
+                "name": "autodev-benchmark",
+                "python_version": "3.11",
+                "quality_gate_profile": "balanced",
+            },
+            "tasks": [
+                {
+                    "id": "core",
+                    "title": "Benchmark core task",
+                    "goal": "Measure validator invocation savings",
+                    "acceptance": [
+                        "Add test coverage for validator dependency behavior",
+                        "Validate error handling in prerequisite failures",
+                    ],
+                    "files": ["src/app/main.py"],
+                    "depends_on": [],
+                    "quality_expectations": {
+                        "requires_tests": True,
+                        "requires_error_contract": True,
+                        "touches_contract": True,
+                    },
+                    "validator_focus": ["ruff", "mypy", "pytest"],
+                }
+            ],
+            "ci": {"enabled": True, "provider": "github_actions"},
+            "docker": {"enabled": True},
+            "security": {"enabled": True, "tools": ["pip_audit", "bandit", "semgrep"]},
+            "observability": {"enabled": True},
+        },
+        {"role": "implementer", "summary": "ok", "changes": [], "notes": []},
+        {"role": "fixer", "summary": "repair", "changes": [], "notes": []},
+    ]
+
+    monkeypatch.setattr(loop, "ExecKernel", _FakeKernel)
+    monkeypatch.setattr(loop, "EnvManager", _FakeEnvManager)
+    monkeypatch.setattr(loop, "Validators", _FakeDeterministicBenchmarkValidators)
+
+    # Baseline: dependency graph disabled
+    _FakeDeterministicBenchmarkValidators.reset()
+    ws_baseline = Workspace(str(tmp_path / "benchmark-baseline"))
+    ok_baseline, _, _, _ = asyncio.run(
+        run_autodev_enterprise(
+            client=cast(LLMClient, _FakeLLM(list(base_responses))),
+            ws=ws_baseline,
+            prd_markdown="",
+            template_root=str(ROOT / "templates"),
+            template_candidates=["python_fastapi"],
+            validators_enabled=["ruff", "mypy", "pytest"],
+            audit_required=False,
+            max_fix_loops_total=3,
+            max_fix_loops_per_task=3,
+            max_json_repair=0,
+            task_soft_validators=[],
+            final_soft_validators=[],
+            quality_profile={
+                "name": "balanced",
+                "validator_policy": {"per_task": {"soft_fail": []}, "final": {"soft_fail": []}},
+            },
+            verbose=False,
+        )
+    )
+    assert ok_baseline is True
+    baseline_invocations = _FakeDeterministicBenchmarkValidators.per_task_invocations()
+
+    # Candidate: dependency graph enabled
+    _FakeDeterministicBenchmarkValidators.reset()
+    ws_graph = Workspace(str(tmp_path / "benchmark-graph"))
+    ok_graph, _, _, _ = asyncio.run(
+        run_autodev_enterprise(
+            client=cast(LLMClient, _FakeLLM(list(base_responses))),
+            ws=ws_graph,
+            prd_markdown="",
+            template_root=str(ROOT / "templates"),
+            template_candidates=["python_fastapi"],
+            validators_enabled=["ruff", "mypy", "pytest"],
+            audit_required=False,
+            max_fix_loops_total=3,
+            max_fix_loops_per_task=3,
+            max_json_repair=0,
+            task_soft_validators=[],
+            final_soft_validators=[],
+            quality_profile={
+                "name": "balanced",
+                "validator_policy": {"per_task": {"soft_fail": []}, "final": {"soft_fail": []}},
+                "validator_graph": {
+                    "enabled": True,
+                    "mode": "strict",
+                    "skip_on_soft_fail": False,
+                    "custom_edges": {},
+                },
+            },
+            verbose=False,
+        )
+    )
+    assert ok_graph is True
+    graph_invocations = _FakeDeterministicBenchmarkValidators.per_task_invocations()
+
+    assert baseline_invocations > 0
+    reduction_pct = (baseline_invocations - graph_invocations) / baseline_invocations
+    assert reduction_pct >= 0.10
 
 
 def test_run_loop_only_reruns_failed_validators(tmp_path, monkeypatch):

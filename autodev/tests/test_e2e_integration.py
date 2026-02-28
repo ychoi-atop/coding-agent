@@ -192,6 +192,41 @@ class _FakeFailFirstValidators:
         return [_FakePassingValidation(name) for name in enabled]
 
 
+class _FakeGraphRunAllOnlyValidators:
+    """Graph-mode backend that implements run_all only (no run_one)."""
+
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    ruff_per_task_calls = 0
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        pass
+
+    @staticmethod
+    def serialize(results: list) -> list:
+        return _FakePassingValidators.serialize(results)
+
+    @staticmethod
+    def reset() -> None:
+        _FakeGraphRunAllOnlyValidators.calls = []
+        _FakeGraphRunAllOnlyValidators.ruff_per_task_calls = 0
+
+    def run_all(self, enabled: list, audit_required: bool = False,
+                soft_validators: Any = None, phase: str = "task", **kwargs: Any) -> list:
+        names = tuple(enabled)
+        _FakeGraphRunAllOnlyValidators.calls.append((phase, names))
+
+        if phase == "per_task" and names == ("ruff",):
+            _FakeGraphRunAllOnlyValidators.ruff_per_task_calls += 1
+            if _FakeGraphRunAllOnlyValidators.ruff_per_task_calls == 1:
+                return [_FakeValidation("ruff", False, "failed", 1)]
+            return [_FakeValidation("ruff", True, "passed", 0)]
+
+        if phase == "per_task":
+            return [_FakeValidation(name, True, "passed", 0) for name in enabled]
+
+        return [_FakePassingValidation(name) for name in enabled]
+
+
 class _FakeKernel(ExecKernel):
     def __init__(self, cwd: str, timeout_sec: int = 1200):
         super().__init__(cwd=cwd, timeout_sec=timeout_sec)
@@ -1173,3 +1208,91 @@ def test_e2e_partial_success_continues_independent_tasks(
     checkpoint = _read_autodev_json(ws, ".autodev/checkpoint.json")
     assert "models" in checkpoint.get("failed_task_ids", [])
     assert "api" in checkpoint.get("skipped_task_ids", [])
+
+
+def test_e2e_validator_graph_reruns_skipped_dependents_with_run_all_only_backend(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    _setup_infra(monkeypatch, validators_cls=_FakeGraphRunAllOnlyValidators)
+    _FakeGraphRunAllOnlyValidators.reset()
+    ws = Workspace(str(tmp_path))
+
+    responses = [
+        {
+            "title": "PRD",
+            "goals": [],
+            "non_goals": [],
+            "features": [],
+            "acceptance_criteria": [],
+            "nfr": {},
+            "constraints": [],
+        },
+        {
+            "project": {
+                "type": "python_fastapi",
+                "name": "graph-app",
+                "python_version": "3.11",
+                "quality_gate_profile": "balanced",
+            },
+            "tasks": [
+                {
+                    "id": "core",
+                    "title": "Core graph task",
+                    "goal": "Validate dependency-aware validator reruns",
+                    "acceptance": [
+                        "Add test coverage for validator dependency recovery",
+                        "Validate error handling when prerequisite checks fail",
+                    ],
+                    "files": ["src/app/main.py"],
+                    "depends_on": [],
+                    "quality_expectations": {
+                        "requires_tests": True,
+                        "requires_error_contract": True,
+                        "touches_contract": True,
+                    },
+                    "validator_focus": ["ruff", "mypy"],
+                }
+            ],
+            "ci": {"enabled": True, "provider": "github_actions"},
+            "docker": {"enabled": True},
+            "security": {"enabled": True, "tools": ["pip_audit", "bandit", "semgrep"]},
+            "observability": {"enabled": True},
+        },
+        {"role": "implementer", "summary": "ok", "changes": [], "notes": []},
+        {"role": "fixer", "summary": "repair", "changes": [], "notes": []},
+    ]
+
+    ok, _, _, _ = asyncio.run(
+        run_autodev_enterprise(
+            client=cast(LLMClient, _FakeLLM(responses)),
+            ws=ws,
+            prd_markdown="# Graph recovery\nVerify dependency reruns.",
+            **{
+                **COMMON_KWARGS,
+                "validators_enabled": ["ruff", "mypy"],
+                "task_soft_validators": [],
+                "quality_profile": {
+                    "name": "balanced",
+                    "validator_policy": {
+                        "per_task": {"soft_fail": []},
+                        "final": {"soft_fail": []},
+                    },
+                    "validator_graph": {
+                        "enabled": True,
+                        "mode": "strict",
+                        "skip_on_soft_fail": False,
+                        "custom_edges": {},
+                    },
+                },
+            },
+        )
+    )
+
+    assert ok is True
+    per_task_calls = [c for c in _FakeGraphRunAllOnlyValidators.calls if c[0] == "per_task"]
+    assert per_task_calls.count(("per_task", ("ruff",))) == 2
+    assert per_task_calls.count(("per_task", ("mypy",))) == 1
+
+    quality = _read_autodev_json(ws, ".autodev/task_core_quality.json")
+    assert quality["attempts"][0]["validations"][1]["status"] == "skipped_dependency"
+    assert quality["attempts"][-1]["validations"][1]["status"] == "passed"

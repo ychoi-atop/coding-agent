@@ -69,6 +69,7 @@ from .loop_validators import (  # noqa: F401
     _resolve_validators,
     _failure_signature,
     _failed_validator_names,
+    _has_skipped_dependency,
     _merge_validation_rows,
     _validations_ok,
     _resolve_soft_fail,
@@ -1247,14 +1248,66 @@ async def run_autodev_enterprise(
                     removed=_ss_result.removed_validators,
                 )
 
+        def _run_one_validation_row(name: str) -> Dict[str, Any]:
+            if hasattr(validators, "run_one"):
+                return Validators.serialize([
+                    validators.run_one(
+                        name,
+                        audit_required=audit_required,
+                        phase="per_task",
+                        run_id=run_id,
+                        request_id=request_id,
+                        profile=profile,
+                        task_id=task["id"],
+                        iteration=loops + 1,
+                    )
+                ])[0]
+
+            rows = Validators.serialize(
+                validators.run_all(
+                    [name],
+                    audit_required=audit_required,
+                    soft_validators=_effective_soft,
+                    phase="per_task",
+                    run_id=run_id,
+                    request_id=request_id,
+                    profile=profile,
+                    task_id=task["id"],
+                    iteration=loops + 1,
+                )
+            )
+            for row in rows:
+                if row.get("name") == name:
+                    return row
+            if rows:
+                return rows[0]
+            return {
+                "name": name,
+                "ok": False,
+                "status": "failed",
+                "phase": "per_task",
+                "cmd": [],
+                "returncode": 1,
+                "duration_ms": 0,
+                "tool_version": "unknown",
+                "error_classification": "validator_result_missing",
+                "stdout": "",
+                "stderr": "",
+                "note": "validator backend returned no result",
+                "diagnostics": {"validator": name},
+            }
+
         while True:
             start = time.perf_counter()
             progress.validation_start(task["id"], run_set)
             if previous_validation_rows:
-                failed_names = _failed_validator_names(previous_validation_rows)
-                run_names = [name for name in run_set if name in failed_names]
-                if not run_names:
+                if _has_skipped_dependency(previous_validation_rows):
                     run_names = list(run_set)
+                else:
+                    failed_names = _failed_validator_names(previous_validation_rows)
+                    run_names = [name for name in run_set if name in failed_names]
+                    if not run_names:
+                        run_names = list(run_set)
                 if _validator_graph_config.enabled:
                     # Dependency-aware repair re-run
                     _dep_completed_r: Dict[str, Dict[str, Any]] = {}
@@ -1284,54 +1337,14 @@ async def run_autodev_enterprise(
                                 iteration=loops + 1,
                             )
                         else:
-                            rerun_rows.append(
-                                Validators.serialize([
-                                    validators.run_one(
-                                        name,
-                                        audit_required=audit_required,
-                                        phase="per_task",
-                                        run_id=run_id,
-                                        request_id=request_id,
-                                        profile=profile,
-                                        task_id=task["id"],
-                                        iteration=loops + 1,
-                                    )
-                                ])[0]
-                            )
+                            rerun_rows.append(_run_one_validation_row(name))
                             _dep_completed_r[name] = rerun_rows[-1]
                     validation_results = _merge_validation_rows(previous_validation_rows, rerun_rows, run_set)
-                elif hasattr(validators, "run_one"):
+                else:
                     rerun_rows = []
                     for name in run_names:
-                        rerun_rows.append(
-                            Validators.serialize([
-                                validators.run_one(
-                                    name,
-                                    audit_required=audit_required,
-                                    phase="per_task",
-                                    run_id=run_id,
-                                    request_id=request_id,
-                                    profile=profile,
-                                    task_id=task["id"],
-                                    iteration=loops + 1,
-                                )
-                            ])[0]
-                        )
+                        rerun_rows.append(_run_one_validation_row(name))
                     validation_results = _merge_validation_rows(previous_validation_rows, rerun_rows, run_set)
-                else:
-                    validation_results = Validators.serialize(
-                        validators.run_all(
-                            run_set,
-                            audit_required=audit_required,
-                            soft_validators=_effective_soft,
-                            phase="per_task",
-                            run_id=run_id,
-                            request_id=request_id,
-                            profile=profile,
-                            task_id=task["id"],
-                            iteration=loops + 1,
-                        )
-                    )
             elif _validator_graph_config.enabled:
                 # First validation pass — dependency-aware execution
                 _dep_order = _dep_resolve_order(
@@ -1358,18 +1371,7 @@ async def run_autodev_enterprise(
                             iteration=loops + 1,
                         )
                     else:
-                        _one_row = Validators.serialize([
-                            validators.run_one(
-                                _vname,
-                                audit_required=audit_required,
-                                phase="per_task",
-                                run_id=run_id,
-                                request_id=request_id,
-                                profile=profile,
-                                task_id=task["id"],
-                                iteration=loops + 1,
-                            )
-                        ])[0]
+                        _one_row = _run_one_validation_row(_vname)
                         _dep_results.append(_one_row)
                         _dep_completed[_vname] = _one_row
                 validation_results = _dep_results

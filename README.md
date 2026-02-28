@@ -251,6 +251,12 @@ profiles:
           soft_fail: ["pip_audit", "sbom", "semgrep"]
       per_task_soft: ["docker_build", "pip_audit", "sbom", "semgrep"]
       final_soft: ["pip_audit", "sbom", "semgrep"]
+      # Disabled by default until validator-graph stabilization is complete.
+      validator_graph:
+        enabled: false
+        mode: strict
+        skip_on_soft_fail: false
+        custom_edges: {}
       by_level:
         strict:
           per_task_soft: ["docker_build"]
@@ -343,6 +349,10 @@ Notes:
 - `docker_build` runs `docker build -t autodev-app:test .`.
 - `quality_profile.validator_policy.per_task.soft_fail` controls which validators are non-blocking inside task fix loops.
 - `quality_profile.validator_policy.final.soft_fail` controls which validators are non-blocking in final project validation.
+- `quality_profile.validator_graph.enabled` defaults to `false`; keep it off until stabilization gates pass.
+- `quality_profile.validator_graph.mode` supports `strict` and `relaxed`.
+- `quality_profile.validator_graph.skip_on_soft_fail` controls whether soft prerequisite failures can skip dependent validators.
+- `quality_profile.validator_graph.custom_edges` adds project-specific dependency edges (`dependent: [prerequisite]`).
 - Legacy top-level `validator_policy` is normalized into `quality_profile.validator_policy` for backward compatibility.
 - Config load validates validator names and profile structure; invalid entries fail fast with path-specific errors.
 

@@ -77,6 +77,13 @@ profiles:
       name: balanced
       per_task_soft: ["docker_build", "pip_audit", "sbom"]
       final_soft: ["pip_audit", "sbom", "semgrep"]
+      # Validator dependency graph is disabled by default.
+      # Enable only after stabilization gates are green.
+      validator_graph:
+        enabled: false
+        mode: strict
+        skip_on_soft_fail: false
+        custom_edges: {}
       by_level:
         minimal:
           per_task_soft: ["docker_build", "pip_audit", "sbom", "semgrep"]
