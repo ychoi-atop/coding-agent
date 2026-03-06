@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List
 
 import yaml  # type: ignore[import-untyped]
@@ -31,6 +32,51 @@ _AUTODEV_OAUTH_TOKEN_ENV = "AUTODEV_CLAUDE_CODE_OAUTH_TOKEN"
 _AUTODEV_API_KEY_PLACEHOLDER = f"${{{_AUTODEV_API_KEY_ENV}}}"
 _AUTODEV_OAUTH_TOKEN_PLACEHOLDER = f"${{{_AUTODEV_OAUTH_TOKEN_ENV}}}"
 _DEFAULT_PROFILE_QUALITY_PROFILE: Dict[str, Any] = {"validator_policy": {"per_task": {}, "final": {}}}
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
+        return value[1:-1]
+    return value
+
+
+def _load_dotenv_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        return
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+
+        value = _strip_wrapping_quotes(value.strip())
+        os.environ.setdefault(key, value)
+
+
+def _load_dotenv_for_config(config_path: str) -> None:
+    resolved = Path(config_path).expanduser().resolve()
+    candidates = [resolved.parent / ".env"]
+    seen: set[Path] = set()
+    for candidate in candidates:
+        normalized = candidate.resolve(strict=False)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        _load_dotenv_file(normalized)
 
 
 def _resolve_auth_value(value: Any, placeholder: str, env_name: str) -> Any:
@@ -393,6 +439,13 @@ def _validate_model_endpoint(entry: Any, index: int, errors: List[str]) -> None:
     if not has_key and not has_oauth:
         errors.append(f"{base} requires api_key or oauth_token.")
 
+    endpoint_base = str(entry.get("base_url") or "").lower()
+    if "openrouter.ai" in endpoint_base and has_oauth and not has_key:
+        errors.append(
+            f"{base} uses OpenRouter but only oauth_token is configured. "
+            "OpenRouter requires an API key. Set api_key/AUTODEV_LLM_API_KEY or switch to an OAuth-compatible gateway."
+        )
+
 
 def _validate_role_mapping(role_mapping: Any, endpoint_count: int, errors: List[str]) -> None:
     """Validate ``llm.role_mapping`` dict (role name → endpoint index)."""
@@ -443,6 +496,12 @@ def _validate_llm_section(llm_cfg: Any, errors: List[str]) -> None:
         errors.append(
             "llm authentication is required. Set llm.api_key/llm.oauth_token in config.yaml "
             "or define AUTODEV_LLM_API_KEY/AUTODEV_CLAUDE_CODE_OAUTH_TOKEN in environment."
+        )
+
+    if isinstance(base_url, str) and "openrouter.ai" in base_url.lower() and has_oauth_token and not has_api_key:
+        errors.append(
+            "llm.base_url points to OpenRouter but only llm.oauth_token is configured. "
+            "OpenRouter requires an API key. Set llm.api_key/AUTODEV_LLM_API_KEY or switch to an OAuth-compatible gateway."
         )
 
     timeout = _coerce_int(llm_cfg.get("timeout_sec"), "llm.timeout_sec", errors, default=240)
@@ -583,6 +642,7 @@ def _validate_config(config: Any) -> Dict[str, Any]:
 
 
 def load_config(path: str):
+    _load_dotenv_for_config(path)
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return _validate_config(raw)

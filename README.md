@@ -38,6 +38,15 @@ This keeps prompt payload lightweight while preserving required execution contex
 - OpenAI-compatible chat endpoint (LM Studio, Ollama, or any OpenAI-compatible API)
 
 ## Install
+
+Recommended (demo bootstrap, idempotent):
+```bash
+bash scripts/demo_bootstrap.sh
+```
+
+> Note: the bootstrap script enforces Python 3.11+ for reliable demo checks.
+
+Manual setup:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -50,20 +59,53 @@ pip install -e .
 ```
 
 ## Configure
-Edit `config.yaml` for your model endpoint and run profile. You can authenticate with either `AUTODEV_LLM_API_KEY` (legacy compatible) or `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`.
+Edit `config.yaml` for your model endpoint and run profile.
+
+- `AUTODEV_LLM_API_KEY`: for OpenAI-compatible providers like OpenRouter.
+- `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`: only for gateways that explicitly support OAuth Bearer tokens on `chat/completions`.
+  (OpenRouter does **not** support this token type.)
+
+```bash
+cp .env.example .env
+# then fill your key/token in .env (never commit secrets)
+```
 
 ```yaml
 llm:
   base_url: "https://openrouter.ai/api/v1"
   api_key: ${AUTODEV_LLM_API_KEY}
-  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
-  model: "anthropic/claude-sonnet-4-6"
+  oauth_token: ""
+  model: "anthropic/claude-opus-4-6"
+  # optional fallback chain (retryable transport error 시 다음 endpoint 시도)
+  models:
+    - base_url: "https://openrouter.ai/api/v1"
+      model: "anthropic/claude-opus-4-6"
+      api_key: ${AUTODEV_LLM_API_KEY}
+      oauth_token: ""
+    - base_url: "https://openrouter.ai/api/v1"
+      model: "openai-codex/gpt-5.3-codex"
+      api_key: ${AUTODEV_LLM_API_KEY}
+      oauth_token: ""
   timeout_sec: 240
-  role_temperatures:
-    prd_normalizer: 0.2
-    planner: 0.4
-    implementer: 0.1
-    fixer: 0.15
+```
+
+### OpenClaw bridge profile (`openclaw-oauth-bridge`)
+
+If you are routing through the local OpenClaw OAuth bridge, use:
+
+```yaml
+llm:
+  base_url: "http://127.0.0.1:18789/v1"
+  api_key: ${AUTODEV_LLM_API_KEY}  # non-empty dummy is OK (e.g. "openclaw-dummy")
+  oauth_token: ""
+  model: "anthropic/claude-opus-4-6"
+```
+
+Then run with the dedicated profile:
+
+```bash
+AUTODEV_LLM_API_KEY="openclaw-dummy" \
+python -m autodev.main --prd /tmp/minimal-autodev-smoke-prd.md --out ./generated_runs --profile openclaw-oauth-bridge
 ```
 
 ## Switching LLM providers
@@ -72,13 +114,19 @@ llm:
 
 AutoDev is OpenAI-compatible transport only. To switch providers, only the `llm` block needs to change.
 
+### OpenClaw model sync (recommended baseline)
+- Primary: `anthropic/claude-opus-4-6`
+- Fallback endpoint model: `openai-codex/gpt-5.3-codex`
+- Keep auth in env vars only (`AUTODEV_LLM_API_KEY` or `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`)
+- Use the same OpenAI-compatible gateway URL in `llm.base_url` and `llm.models[*].base_url`
+
 - LM Studio (local):
 
   ```yaml
   llm:
     base_url: "https://openrouter.ai/api/v1"
     api_key: ${AUTODEV_LLM_API_KEY}
-    model: "anthropic/claude-sonnet-4-6"
+    model: "anthropic/claude-opus-4-6"
   ```
 
 - Ollama:
@@ -107,6 +155,16 @@ AutoDev is OpenAI-compatible transport only. To switch providers, only the `llm`
     base_url: "https://openrouter.ai/api/v1"
     api_key: "<openrouter-api-key>"
     model: "qwen/qwen-2.5-coder-32b-instruct"
+  ```
+
+- OAuth-compatible gateway example (only if your gateway docs explicitly say OAuth Bearer on `chat/completions`):
+
+  ```yaml
+  llm:
+    base_url: "https://<oauth-compatible-gateway>/v1"
+    api_key: ""
+    oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
+    model: "<provider-model-id>"
   ```
 
 - Azure OpenAI (through an OpenAI-compatible gateway or endpoint):
@@ -138,7 +196,7 @@ AutoDev is OpenAI-compatible transport only. To switch providers, only the `llm`
   llm:
     base_url: "https://openrouter.ai/api/v1"  # or your proxy URL
     api_key: "<proxy-or-service-key>"
-    model: "anthropic/claude-sonnet-4-6"
+    model: "anthropic/claude-opus-4-6"
   ```
 
 - Codex-style models (via compatible gateway)
@@ -167,6 +225,7 @@ run:
 ### Authentication priority and safety
 - Priority: `llm.api_key` (or `AUTODEV_LLM_API_KEY`) is used first for backward compatibility.
 - Fallback: if API key is empty, `llm.oauth_token` (or `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN`) is used.
+- Important: `llm.oauth_token` only works with gateways that support OAuth Bearer for `chat/completions`. OpenRouter requires API key auth.
 - Never commit real keys/tokens to Git. Keep them in environment variables.
 - Avoid printing token values in logs, shell history, and CI output.
 
@@ -178,9 +237,9 @@ run:
 
 ### Runtime model override (without editing config)
 - Environment variable override:
-  - `export AUTODEV_LLM_MODEL="anthropic/claude-sonnet-4-6"`
+  - `export AUTODEV_LLM_MODEL="anthropic/claude-opus-4-6"`
 - CLI override (highest precedence):
-  - `autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --model "anthropic/claude-sonnet-4-6"`
+  - `autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --model "anthropic/claude-opus-4-6"`
 
 Precedence: `--model` > `AUTODEV_LLM_MODEL` > `config.yaml` (`llm.model`).
 
@@ -299,6 +358,29 @@ Require manual confirmation before implementation:
 ```bash
 autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --interactive
 ```
+
+### GUI launcher (MVP)
+Run the static GUI + read-only API server:
+```bash
+autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787
+```
+
+Then open `http://127.0.0.1:8787` in a browser.
+
+Options:
+- `--runs-root`: scan target for `<run_dir>/.autodev/*` artifacts (default: `generated_runs`)
+- `--host`: bind address (default: `127.0.0.1`)
+- `--port`: bind port (default: `8787`)
+
+Known limits (MVP):
+- Run list/detail and artifact read only; no live streaming updates.
+- No stop/kill/retry control for active runs.
+- JSON artifact schema is not versioned yet; breaking changes may require GUI updates.
+
+Showoff planning bundle (execution-oriented):
+- `docs/ROADMAP_SHOWOFF.md`
+- `docs/BACKLOG_SHOWOFF.md`
+- `docs/DEMO_PLAYBOOK.md`
 
 ## Output Directory Naming
 `--out` is treated as a parent directory.

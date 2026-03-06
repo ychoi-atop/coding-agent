@@ -6,6 +6,17 @@
 
 ## 2) One-time local setup
 
+Recommended (idempotent bootstrap):
+
+```bash
+# from repo root
+bash scripts/demo_bootstrap.sh
+```
+
+> Note: `scripts/demo_bootstrap.sh` enforces Python 3.11+ for demo reliability.
+
+Manual setup:
+
 ```bash
 # from repo root
 python -m venv .venv
@@ -27,6 +38,24 @@ autodev --help
 AutoDev requires an OpenAI-compatible backend for the LLM client.
 
 You can keep LM Studio defaults, or switch to another provider like Ollama.
+
+### OpenClaw 동기화 권장값 (현재 운영 기준: oauth-bridge)
+
+```yaml
+llm:
+  base_url: "http://127.0.0.1:18789/v1"
+  api_key: ${AUTODEV_LLM_API_KEY}  # non-empty dummy allowed (ex: "openclaw-dummy")
+  oauth_token: ""
+  model: "anthropic/claude-opus-4-6"
+  models:
+    - base_url: "http://127.0.0.1:18789/v1"
+      model: "anthropic/claude-opus-4-6"
+      api_key: ${AUTODEV_LLM_API_KEY}
+      oauth_token: ""
+```
+
+브릿지 경유 시 AutoDev는 Bearer 헤더를 만들기 위해 비어있지 않은 토큰 문자열이 필요합니다.
+`AUTODEV_LLM_API_KEY="openclaw-dummy"` 같은 placeholder를 사용하세요(실제 민감정보 금지).
 
 ### LM Studio (default)
 
@@ -61,8 +90,9 @@ You can also point to any OpenAI-compatible endpoint by changing only `base_url`
 
 ### 빠른 전환 체크리스트(30초)
 
-- `AUTODEV_LLM_API_KEY` 환경변수를 임시/영구 설정
-- `config.yaml`의 `llm` 블록에서 `base_url`, `api_key`, `model` 수정
+- OpenRouter/일반 OpenAI-compatible: `AUTODEV_LLM_API_KEY` 설정
+- OAuth 전용 게이트웨이 사용 시에만: `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN` 설정 + `api_key` 비우기
+- `config.yaml`의 `llm` 블록에서 `base_url`, `api_key` 또는 `oauth_token`, `model` 수정
 - 해당 백엔드의 모델/서비스 실행 상태 확인 (`ollama serve`, `ollama list`, 게이트웨이 헬스체크)
 - `autodev --help` 또는 샘플 PRD 실행으로 한 번 동작 테스트
 
@@ -105,28 +135,48 @@ PRD
 autodev --prd /tmp/minimal-autodev-smoke-prd.md --out ./generated_runs --profile enterprise
 ```
 
+OpenClaw bridge 전용으로는 아래 profile을 바로 사용할 수 있습니다.
+
+```bash
+AUTODEV_LLM_API_KEY="openclaw-dummy" \
+python -m autodev.main --prd /tmp/minimal-autodev-smoke-prd.md --out ./generated_runs --profile openclaw-oauth-bridge
+```
+
 #### Claude (via OpenAI-compatible gateway)
 
 AutoDev의 클라이언트는 OpenAI 형식이므로, Claude를 바로 쓰려면 OpenRouter, LiteLLM, 또는 자체 프록시처럼
 `chat/completions`를 제공하는 게이트웨이를 앞단에 둡니다.
 
+> ⚠️ OpenRouter는 `AUTODEV_CLAUDE_CODE_OAUTH_TOKEN` 인증을 지원하지 않습니다.
+> OpenRouter를 사용할 때는 반드시 `AUTODEV_LLM_API_KEY`를 사용하세요.
+
 ```yaml
 llm:
   base_url: "https://openrouter.ai/api/v1"  # 또는 자체 게이트웨이 주소
   api_key: "<gateway-key>"
-  model: "anthropic/claude-sonnet-4-6"
+  model: "anthropic/claude-opus-4-6"
+```
+
+OAuth-compatible 게이트웨이(문서에서 OAuth Bearer + `chat/completions`를 명시한 경우만):
+
+```yaml
+llm:
+  base_url: "https://<oauth-compatible-gateway>/v1"
+  api_key: ""
+  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
+  model: "<provider-model-id>"
 ```
 
 #### 런타임 모델 오버라이드 (config 수정 없이)
 
-Claude Sonnet 4.6을 기본값으로 두고, 실행 시점에만 모델을 바꾸고 싶다면 아래 우선순위를 사용하세요.
+Claude Opus 4.6을 기본값으로 두고, 실행 시점에만 모델을 바꾸고 싶다면 아래 우선순위를 사용하세요.
 
 ```bash
 # 1) 환경변수 오버라이드
-export AUTODEV_LLM_MODEL="anthropic/claude-sonnet-4-6"
+export AUTODEV_LLM_MODEL="anthropic/claude-opus-4-6"
 
 # 2) CLI 오버라이드 (최우선)
-autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --model "anthropic/claude-sonnet-4-6"
+autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --model "anthropic/claude-opus-4-6"
 ```
 
 우선순위: `--model` > `AUTODEV_LLM_MODEL` > `config.yaml` (`llm.model`)
@@ -170,6 +220,16 @@ autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise
 - On success you'll get a JSON-like message like `{ok: true, out: ...}`
 - On failure, command exits non-zero and writes failure artifacts under the run directory.
 
+### Optional: launch GUI (MVP)
+
+```bash
+autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787
+```
+
+Open `http://127.0.0.1:8787`.
+
+Known limits: no live streaming, no active-run kill/retry controls, and artifact schema compatibility is best-effort.
+
 ## 5) First actions for a generated run
 
 ```bash
@@ -211,3 +271,18 @@ curl -sS http://127.0.0.1:8000/health
   ```bash
   bash docs/ops/check_template_ci_drift.sh
   ```
+
+## 8) Showoff demo prep (optional)
+
+```bash
+# seed deterministic fixture runs
+python3 scripts/showoff_seed_fixtures.py
+
+# run GUI/API smoke test
+bash scripts/showoff_demo_smoke.sh ./generated_runs
+```
+
+Planning and execution docs:
+- `docs/ROADMAP_SHOWOFF.md`
+- `docs/BACKLOG_SHOWOFF.md`
+- `docs/DEMO_PLAYBOOK.md`

@@ -316,3 +316,80 @@ profiles:
         load_config(str(cfg_path))
 
     assert "run.max_parallel_tasks must be >= 1" in str(exc.value)
+
+
+def test_load_config_reads_oauth_token_from_dotenv(tmp_path, monkeypatch):
+    monkeypatch.delenv("AUTODEV_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("AUTODEV_CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: ${AUTODEV_LLM_API_KEY}
+  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
+  model: fake-model
+profiles:
+  enterprise:
+    validators:
+      - ruff
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        'AUTODEV_CLAUDE_CODE_OAUTH_TOKEN="oauth-token-from-dotenv"\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(str(cfg_path))
+    assert config["llm"]["api_key"] is None
+    assert config["llm"]["oauth_token"] == "oauth-token-from-dotenv"
+
+
+def test_load_config_rejects_openrouter_with_oauth_only(tmp_path):
+    cfg = """\
+llm:
+  base_url: "https://openrouter.ai/api/v1"
+  oauth_token: oauth-token-for-test
+  model: fake-model
+profiles:
+  enterprise:
+    validators:
+      - ruff
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        load_config(str(cfg_path))
+
+    assert "OpenRouter requires an API key" in str(exc.value)
+
+
+def test_load_config_rejects_openrouter_model_endpoint_with_oauth_only(tmp_path):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: local-test
+  model: fake-model
+  models:
+    - base_url: "https://openrouter.ai/api/v1"
+      model: "anthropic/claude-opus-4-6"
+      oauth_token: oauth-token-for-test
+profiles:
+  enterprise:
+    validators:
+      - ruff
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        load_config(str(cfg_path))
+
+    assert "OpenRouter requires an API key" in str(exc.value)

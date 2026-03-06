@@ -1,0 +1,3 @@
+Invalid config:
+- llm authentication is required. Set llm.api_key/llm.oauth_token in config.yaml or define AUTODEV_LLM_API_KEY/AUTODEV_CLAUDE_CODE_OAUTH_TOKEN in environment.
+- profiles.enterprise.quality_profile has unknown key(s): ['validator_graph']. Allowed keys: ['by_level', 'escalation', 'final_soft', 'name', 'per_task_soft', 'validator_policy'].

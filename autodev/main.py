@@ -6,6 +6,7 @@ import logging
 from uuid import uuid4
 import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -158,8 +159,7 @@ def _resolve_profile_name(requested: str | None, profiles: dict[str, Any]) -> st
     )
 
 
-def cli():
-    _configure_logging()
+def _cli_run(argv: list[str]) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--prd", required=True)
     ap.add_argument(
@@ -188,7 +188,7 @@ def cli():
         default=None,
         help="Override llm.model at runtime (highest precedence; then AUTODEV_LLM_MODEL env, then config).",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     try:
         cfg = load_config(args.config)
@@ -429,6 +429,34 @@ def cli():
     print({"ok": ok, "out": os.path.abspath(run_out), "llm_usage": llm_usage})
     if not ok:
         raise SystemExit(1)
+
+
+def _cli_gui(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(prog="autodev gui", description="Serve AutoDev GUI MVP")
+    ap.add_argument("--host", default="127.0.0.1", help="bind host (default: 127.0.0.1)")
+    ap.add_argument("--port", type=int, default=8787, help="bind port (default: 8787)")
+    ap.add_argument(
+        "--runs-root",
+        default="generated_runs",
+        help="run directories root containing <run_id>/.autodev/* (default: generated_runs)",
+    )
+    args = ap.parse_args(argv)
+
+    from .gui_mvp_server import serve
+
+    runs_root = Path(args.runs_root).expanduser()
+    if not runs_root.is_absolute():
+        runs_root = Path.cwd() / runs_root
+    serve(args.host, args.port, runs_root)
+
+
+def cli(argv: list[str] | None = None) -> None:
+    _configure_logging()
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] == "gui":
+        _cli_gui(raw_argv[1:])
+        return
+    _cli_run(raw_argv)
 
 
 if __name__ == "__main__":

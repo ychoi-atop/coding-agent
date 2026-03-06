@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoDev GUI MVP</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>AutoDev GUI MVP</h1>
+      <div class="topbar-meta">
+        <div id="statusLine" class="muted">Loading runs…</div>
+        <label class="live-update-toggle">
+          <input type="checkbox" id="liveUpdateToggle" checked />
+          Live update
+        </label>
+        <select id="pollInterval" class="poll-select" aria-label="Polling interval">
+          <option value="5000">5s</option>
+          <option value="8000" selected>8s</option>
+          <option value="10000">10s</option>
+        </select>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel runs-panel">
+        <h2>Dashboard</h2>
+        <div id="runsList" class="list"></div>
+      </aside>
+
+      <section class="panel detail-panel">
+        <div class="detail-header">
+          <h2 id="runTitle">Run Detail</h2>
+          <span id="runStatusChip" class="chip chip-unknown">UNKNOWN</span>
+        </div>
+
+        <div class="tabs">
+          <button class="tab is-active" data-tab="overview">Overview</button>
+          <button class="tab" data-tab="validation">Validation</button>
+        </div>
+
+        <div id="tab-overview" class="tab-content is-active">
+          <section>
+            <h3>Run Metadata</h3>
+            <div id="metaGrid" class="meta-grid"></div>
+            <div id="metaEmpty" class="empty">Run metadata not available.</div>
+          </section>
+
+          <section>
+            <h3>Phase Timeline</h3>
+            <div id="phaseTimeline" class="timeline"></div>
+            <div id="phaseEmpty" class="empty">No phase timeline yet.</div>
+          </section>
+
+          <section>
+            <h3>Task Table</h3>
+            <table id="tasksTable" class="table hidden">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Status</th>
+                  <th>Attempts</th>
+                  <th>Hard</th>
+                  <th>Soft</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <div id="tasksEmpty" class="empty">No task rows available.</div>
+          </section>
+
+          <section>
+            <h3>Blockers</h3>
+            <ul id="blockersList" class="blockers hidden"></ul>
+            <div id="blockersEmpty" class="empty">No unresolved blockers.</div>
+          </section>
+        </div>
+
+        <div id="tab-validation" class="tab-content">
+          <section>
+            <h3>Validators</h3>
+            <div class="validation-controls">
+              <input id="validationSearch" type="search" placeholder="Search validator…" />
+              <select id="validationStatusFilter" aria-label="Filter by status">
+                <option value="all">All statuses</option>
+                <option value="passed">Passed</option>
+                <option value="failed">Failed</option>
+                <option value="unknown">Unknown</option>
+              </select>
+              <select id="validationNameFilter" aria-label="Filter by validator">
+                <option value="all">All validators</option>
+              </select>
+            </div>
+            <div id="validationCards" class="validation-cards"></div>
+            <div id="validationEmpty" class="empty">Validation artifact not found.</div>
+          </section>
+
+          <section>
+            <h3>task_quality_index</h3>
+            <div id="qualityPanel" class="json-panel"></div>
+            <div id="qualityEmpty" class="empty">Quality index artifact not found.</div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

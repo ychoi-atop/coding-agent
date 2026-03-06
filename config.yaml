@@ -1,8 +1,12 @@
 llm:
-  base_url: "http://127.0.0.1:11434/v1"
-  api_key: ${AUTODEV_LLM_API_KEY}  # 우선순위 1 (하위호환)
-  oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}  # api_key 비어있을 때 사용
-  model: "anthropic/claude-sonnet-4-6"
+  # OpenClaw OAuth bridge (OpenAI-compatible chat/completions endpoint)
+  # Bridge path (confirmed): http://127.0.0.1:18789/v1
+  # NOTE: AutoDev always sends Authorization: Bearer <token>.
+  #       Use a non-empty dummy API key placeholder when bridge auth is handled upstream.
+  base_url: "http://127.0.0.1:18789/v1"
+  api_key: ${AUTODEV_LLM_API_KEY}
+  oauth_token: ""
+  model: "anthropic/claude-opus-4-6"
   timeout_sec: 600
   role_temperatures:
     prd_analyst: 0.2
@@ -16,24 +20,25 @@ llm:
     db_schema_generator: 0.1
     reviewer: 0.15
 
-  # -- Multi-model routing (optional) --
-  # Uncomment to route roles to different model endpoints.
-  # Fallback: if a primary endpoint fails, the next endpoint in the list is tried.
-  #
-  # models:
-  #   - base_url: "http://127.0.0.1:11434/v1"
-  #     model: "anthropic/claude-opus-4-6"
-  #     api_key: ${AUTODEV_LLM_API_KEY}
-  #   - base_url: "http://127.0.0.1:11434/v1"
-  #     model: "anthropic/claude-sonnet-4-6"
-  #     api_key: ${AUTODEV_LLM_API_KEY}
+  # -- Multi-model routing + fallback (optional) --
+  # Default endpoint = index 0. On retryable transport failures, AutoDev tries the next endpoint.
+  models:
+    - base_url: "http://127.0.0.1:18789/v1"
+      model: "anthropic/claude-opus-4-6"
+      api_key: ${AUTODEV_LLM_API_KEY}
+      oauth_token: ""
+
+  # OAuth profile example (only for gateways that explicitly support OAuth Bearer on chat/completions):
+  # base_url: "https://<oauth-compatible-gateway>/v1"
+  # api_key: ""
+  # oauth_token: ${AUTODEV_CLAUDE_CODE_OAUTH_TOKEN}
+  # model: "<provider-model-id>"
   # role_mapping:
-  #   planner: 0        # Use Opus for planning (stronger reasoning)
-  #   architect: 0      # Use Opus for architecture design
-  #   prd_normalizer: 1 # Use Sonnet for PRD normalization (fast)
-  #   implementer: 1    # Use Sonnet for implementation (fast, cheap)
-  #   fixer: 1          # Use Sonnet for fixes
-  #   reviewer: 1       # Use Sonnet for code review
+  #   planner: 0
+  #   architect: 0
+  #   implementer: 1
+  #   fixer: 1
+  #   reviewer: 1
 
 run:
   max_json_repair: 2
@@ -77,13 +82,6 @@ profiles:
       name: balanced
       per_task_soft: ["docker_build", "pip_audit", "sbom"]
       final_soft: ["pip_audit", "sbom", "semgrep"]
-      # Validator dependency graph is disabled by default.
-      # Enable only after stabilization gates are green.
-      validator_graph:
-        enabled: false
-        mode: strict
-        skip_on_soft_fail: false
-        custom_edges: {}
       by_level:
         minimal:
           per_task_soft: ["docker_build", "pip_audit", "sbom", "semgrep"]
@@ -104,6 +102,20 @@ profiles:
       - "python_cli"
     validators:
       - ruff
+      - pytest
+    security:
+      audit_required: false
+    quality_profile:
+      name: minimal
+      per_task_soft: []
+      final_soft: []
+
+  openclaw-oauth-bridge:
+    # Convenience profile for bridge connectivity smoke/dev runs.
+    # Keep only pytest to make bridge smoke checks deterministic/minimal.
+    template_candidates:
+      - "python_cli"
+    validators:
       - pytest
     security:
       audit_required: false

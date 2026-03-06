@@ -1,0 +1,88 @@
+[INFO] Repo root: /Users/ychoi/Documents/GitHub/coding-agent
+[INFO] Using Python interpreter: python3.11 (3.11.14)
+[INFO] Virtual environment already exists at /Users/ychoi/Documents/GitHub/coding-agent/.venv (reusing)
+[INFO] Installing dependencies from requirements.txt
+Requirement already satisfied: httpx==0.27.0 in ./.venv/lib/python3.11/site-packages (from -r requirements.txt (line 1)) (0.27.0)
+Requirement already satisfied: pyyaml==6.0.2 in ./.venv/lib/python3.11/site-packages (from -r requirements.txt (line 2)) (6.0.2)
+Requirement already satisfied: jsonschema==4.23.0 in ./.venv/lib/python3.11/site-packages (from -r requirements.txt (line 3)) (4.23.0)
+Requirement already satisfied: rich==13.7.1 in ./.venv/lib/python3.11/site-packages (from -r requirements.txt (line 4)) (13.7.1)
+Requirement already satisfied: anyio in ./.venv/lib/python3.11/site-packages (from httpx==0.27.0->-r requirements.txt (line 1)) (4.12.1)
+Requirement already satisfied: certifi in ./.venv/lib/python3.11/site-packages (from httpx==0.27.0->-r requirements.txt (line 1)) (2026.2.25)
+Requirement already satisfied: httpcore==1.* in ./.venv/lib/python3.11/site-packages (from httpx==0.27.0->-r requirements.txt (line 1)) (1.0.9)
+Requirement already satisfied: idna in ./.venv/lib/python3.11/site-packages (from httpx==0.27.0->-r requirements.txt (line 1)) (3.11)
+Requirement already satisfied: sniffio in ./.venv/lib/python3.11/site-packages (from httpx==0.27.0->-r requirements.txt (line 1)) (1.3.1)
+Requirement already satisfied: attrs>=22.2.0 in ./.venv/lib/python3.11/site-packages (from jsonschema==4.23.0->-r requirements.txt (line 3)) (25.4.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in ./.venv/lib/python3.11/site-packages (from jsonschema==4.23.0->-r requirements.txt (line 3)) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in ./.venv/lib/python3.11/site-packages (from jsonschema==4.23.0->-r requirements.txt (line 3)) (0.37.0)
+Requirement already satisfied: rpds-py>=0.7.1 in ./.venv/lib/python3.11/site-packages (from jsonschema==4.23.0->-r requirements.txt (line 3)) (0.30.0)
+Requirement already satisfied: markdown-it-py>=2.2.0 in ./.venv/lib/python3.11/site-packages (from rich==13.7.1->-r requirements.txt (line 4)) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in ./.venv/lib/python3.11/site-packages (from rich==13.7.1->-r requirements.txt (line 4)) (2.19.2)
+Requirement already satisfied: h11>=0.16 in ./.venv/lib/python3.11/site-packages (from httpcore==1.*->httpx==0.27.0->-r requirements.txt (line 1)) (0.16.0)
+Requirement already satisfied: mdurl~=0.1 in ./.venv/lib/python3.11/site-packages (from markdown-it-py>=2.2.0->rich==13.7.1->-r requirements.txt (line 4)) (0.1.2)
+Requirement already satisfied: typing-extensions>=4.4.0 in ./.venv/lib/python3.11/site-packages (from referencing>=0.28.4->jsonschema==4.23.0->-r requirements.txt (line 3)) (4.15.0)
+[INFO] Installing dev tooling from requirements-dev.txt (for ci-fast health checks)
+Requirement already satisfied: ruff==0.3.5 in ./.venv/lib/python3.11/site-packages (from -r requirements-dev.txt (line 2)) (0.3.5)
+Requirement already satisfied: mypy==1.13.0 in ./.venv/lib/python3.11/site-packages (from -r requirements-dev.txt (line 3)) (1.13.0)
+Requirement already satisfied: pytest==8.3.2 in ./.venv/lib/python3.11/site-packages (from -r requirements-dev.txt (line 4)) (8.3.2)
+Requirement already satisfied: bandit==1.8.2 in ./.venv/lib/python3.11/site-packages (from -r requirements-dev.txt (line 5)) (1.8.2)
+Requirement already satisfied: pip-audit==2.8.0 in ./.venv/lib/python3.11/site-packages (from -r requirements-dev.txt (line 6)) (2.8.0)
+Requirement already satisfied: filelock==3.20.3 in ./.venv/lib/python3.11/site-packages (from -r requirements-dev.txt (line 7)) (3.20.3)
+Requirement already satisfied: typing-extensions>=4.6.0 in ./.venv/lib/python3.11/site-packages (from mypy==1.13.0->-r requirements-dev.txt (line 3)) (4.15.0)
+Requirement already satisfied: mypy-extensions>=1.0.0 in ./.venv/lib/python3.11/site-packages (from mypy==1.13.0->-r requirements-dev.txt (line 3)) (1.1.0)
+Requirement already satisfied: iniconfig in ./.venv/lib/python3.11/site-packages (from pytest==8.3.2->-r requirements-dev.txt (line 4)) (2.3.0)
+Requirement already satisfied: packaging in ./.venv/lib/python3.11/site-packages (from pytest==8.3.2->-r requirements-dev.txt (line 4)) (26.0)
+Requirement already satisfied: pluggy<2,>=1.5 in ./.venv/lib/python3.11/site-packages (from pytest==8.3.2->-r requirements-dev.txt (line 4)) (1.6.0)
+Requirement already satisfied: PyYAML>=5.3.1 in ./.venv/lib/python3.11/site-packages (from bandit==1.8.2->-r requirements-dev.txt (line 5)) (6.0.2)
+Requirement already satisfied: stevedore>=1.20.0 in ./.venv/lib/python3.11/site-packages (from bandit==1.8.2->-r requirements-dev.txt (line 5)) (5.7.0)
+Requirement already satisfied: rich in ./.venv/lib/python3.11/site-packages (from bandit==1.8.2->-r requirements-dev.txt (line 5)) (13.7.1)
+Requirement already satisfied: CacheControl>=0.13.0 in ./.venv/lib/python3.11/site-packages (from CacheControl[filecache]>=0.13.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (0.14.4)
+Requirement already satisfied: cyclonedx-python-lib<9,>=5 in ./.venv/lib/python3.11/site-packages (from pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (8.9.0)
+Requirement already satisfied: pip-api>=0.0.28 in ./.venv/lib/python3.11/site-packages (from pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (0.0.34)
+Requirement already satisfied: pip-requirements-parser>=32.0.0 in ./.venv/lib/python3.11/site-packages (from pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (32.0.1)
+Requirement already satisfied: requests>=2.31.0 in ./.venv/lib/python3.11/site-packages (from pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (2.32.5)
+Requirement already satisfied: toml>=0.10 in ./.venv/lib/python3.11/site-packages (from pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (0.10.2)
+Requirement already satisfied: platformdirs>=4.2.0 in ./.venv/lib/python3.11/site-packages (from pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (4.9.2)
+Requirement already satisfied: license-expression<31,>=30 in ./.venv/lib/python3.11/site-packages (from cyclonedx-python-lib<9,>=5->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (30.4.4)
+Requirement already satisfied: packageurl-python<2,>=0.11 in ./.venv/lib/python3.11/site-packages (from cyclonedx-python-lib<9,>=5->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (0.17.6)
+Requirement already satisfied: py-serializable<2.0.0,>=1.1.1 in ./.venv/lib/python3.11/site-packages (from cyclonedx-python-lib<9,>=5->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (1.1.2)
+Requirement already satisfied: sortedcontainers<3.0.0,>=2.4.0 in ./.venv/lib/python3.11/site-packages (from cyclonedx-python-lib<9,>=5->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (2.4.0)
+Requirement already satisfied: boolean.py>=4.0 in ./.venv/lib/python3.11/site-packages (from license-expression<31,>=30->cyclonedx-python-lib<9,>=5->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (5.0)
+Requirement already satisfied: defusedxml<0.8.0,>=0.7.1 in ./.venv/lib/python3.11/site-packages (from py-serializable<2.0.0,>=1.1.1->cyclonedx-python-lib<9,>=5->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (0.7.1)
+Requirement already satisfied: msgpack<2.0.0,>=0.5.2 in ./.venv/lib/python3.11/site-packages (from CacheControl>=0.13.0->CacheControl[filecache]>=0.13.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (1.1.2)
+Requirement already satisfied: pip in ./.venv/lib/python3.11/site-packages (from pip-api>=0.0.28->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (26.0.1)
+Requirement already satisfied: pyparsing in ./.venv/lib/python3.11/site-packages (from pip-requirements-parser>=32.0.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (3.3.2)
+Requirement already satisfied: charset_normalizer<4,>=2 in ./.venv/lib/python3.11/site-packages (from requests>=2.31.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (3.4.4)
+Requirement already satisfied: idna<4,>=2.5 in ./.venv/lib/python3.11/site-packages (from requests>=2.31.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (3.11)
+Requirement already satisfied: urllib3<3,>=1.21.1 in ./.venv/lib/python3.11/site-packages (from requests>=2.31.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (2.6.3)
+Requirement already satisfied: certifi>=2017.4.17 in ./.venv/lib/python3.11/site-packages (from requests>=2.31.0->pip-audit==2.8.0->-r requirements-dev.txt (line 6)) (2026.2.25)
+Requirement already satisfied: markdown-it-py>=2.2.0 in ./.venv/lib/python3.11/site-packages (from rich->bandit==1.8.2->-r requirements-dev.txt (line 5)) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in ./.venv/lib/python3.11/site-packages (from rich->bandit==1.8.2->-r requirements-dev.txt (line 5)) (2.19.2)
+Requirement already satisfied: mdurl~=0.1 in ./.venv/lib/python3.11/site-packages (from markdown-it-py>=2.2.0->rich->bandit==1.8.2->-r requirements-dev.txt (line 5)) (0.1.2)
+[INFO] Health check: python -m autodev.main --help
+[INFO] Health check: make PYTHON=python3.11 ci-fast
+python3.11 -m compileall -q autodev
+python3.11 -m ruff check autodev
+All checks passed!
+python3.11 -m pytest -q autodev/tests
+........................................................................ [ 12%]
+........................................................................ [ 25%]
+........................................................................ [ 38%]
+........................................................................ [ 51%]
+........................................................................ [ 64%]
+........................................................................ [ 77%]
+........................................................................ [ 90%]
+........................................................                 [100%]
+560 passed in 1.79s
+
+✅ Demo bootstrap complete.
+
+Next steps:
+  1) Activate environment:
+     source "/Users/ychoi/Documents/GitHub/coding-agent/.venv/bin/activate"
+
+  2) Verify CLI:
+     python -m autodev.main --help
+
+  3) Run demo PRD:
+     autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise
+
