@@ -1,0 +1,70 @@
+{
+  "cases": [
+    {
+      "name": "legacy-event-stream-v0",
+      "input": {
+        "llm": { "model": "claude-legacy" },
+        "run": { "profile": "minimal" },
+        "run_id": "run-legacy",
+        "request_id": "req-legacy",
+        "total_elapsed_ms": 4200,
+        "events": [
+          { "event_type": "run.start", "timestamp": "2026-03-01T10:00:00Z" },
+          { "event_type": "phase.start", "phase": "planning", "elapsed_ms": 200 },
+          { "event_type": "phase.end", "phase": "planning", "elapsed_ms": 800, "status": "ok" },
+          { "event_type": "phase.start", "phase": "implementation", "elapsed_ms": 900 },
+          { "event_type": "phase.end", "phase": "implementation", "elapsed_ms": 3000, "status": "failed" },
+          { "event_type": "run.completed", "timestamp": "2026-03-01T10:00:04Z" }
+        ]
+      },
+      "expected": {
+        "model": "claude-legacy",
+        "profile": "minimal",
+        "run_id": "run-legacy",
+        "request_id": "req-legacy",
+        "total_elapsed_ms": 4200,
+        "event_count": 6,
+        "started_at": "2026-03-01T10:00:00Z",
+        "completed_at": "2026-03-01T10:00:04Z",
+        "phase_timeline": [
+          { "phase": "planning", "duration_ms": 600, "status": "ok" },
+          { "phase": "implementation", "duration_ms": 2100, "status": "failed" }
+        ]
+      }
+    },
+    {
+      "name": "modern-phases-v1",
+      "input": {
+        "schema_version": "v1",
+        "model": "claude-modern",
+        "profile": "enterprise",
+        "run_id": "run-modern",
+        "request_id": "req-modern",
+        "total_elapsed_ms": 7600,
+        "event_count": 9,
+        "phases": [
+          { "name": "planning", "start_ms": 100, "end_ms": 900, "status": "ok" },
+          { "phase": "implementation", "duration_ms": 5100, "status": "ok" }
+        ],
+        "events": [
+          { "event_type": "run.start", "timestamp": "2026-03-01T11:00:00Z" },
+          { "event_type": "run.completed", "timestamp": "2026-03-01T11:00:08Z" }
+        ]
+      },
+      "expected": {
+        "model": "claude-modern",
+        "profile": "enterprise",
+        "run_id": "run-modern",
+        "request_id": "req-modern",
+        "total_elapsed_ms": 7600,
+        "event_count": 9,
+        "started_at": "2026-03-01T11:00:00Z",
+        "completed_at": "2026-03-01T11:00:08Z",
+        "phase_timeline": [
+          { "phase": "planning", "duration_ms": 800, "status": "ok" },
+          { "phase": "implementation", "duration_ms": 5100, "status": "ok" }
+        ]
+      }
+    }
+  ]
+}

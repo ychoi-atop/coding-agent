@@ -97,14 +97,16 @@ References:
   - Script documented in demo playbook.
 - **Dependencies:** None
 
-### SHW-009 — Demo smoke script for GUI/API
+### SHW-009 — Validation UX polish (GUI MVP) ✅ done
 - **Priority:** P0
-- **Effort:** S
-- **Owner role:** platform
+- **Effort:** M
+- **Owner role:** frontend
 - **Acceptance Criteria:**
-  - Script starts GUI server, checks `/healthz`, `/api/runs`, and one detail endpoint.
-  - Non-zero exit on failed check.
-  - Works against generated fixtures.
+  - Validation tab surfaces clear status badges, grouped sections, and summary chips.
+  - Validator cards support severity-based sorting with failed-first toggle.
+  - stderr/stdout details are expandable and searchable.
+  - Empty and filter-zero states remain explicit and non-breaking.
+  - DTO tests cover transformed validation rows (status aliases, output fields, severity rank).
 - **Dependencies:** SHW-008
 
 ### SHW-010 — Phase timeline enrichment
@@ -117,7 +119,7 @@ References:
   - Rendering remains responsive for larger traces.
 - **Dependencies:** SHW-001
 
-### SHW-011 — Validation triage deep-linking
+### SHW-011 — Validation triage deep-linking ✅ done
 - **Priority:** P1
 - **Effort:** M
 - **Owner role:** frontend
@@ -127,7 +129,7 @@ References:
   - Works for final and per-task validation data.
 - **Dependencies:** SHW-010
 
-### SHW-012 — Run comparison API and DTO
+### SHW-012 — Run comparison API and DTO ✅ done
 - **Priority:** P1
 - **Effort:** M
 - **Owner role:** backend
@@ -137,7 +139,7 @@ References:
   - Tests cover mixed schema/version cases.
 - **Dependencies:** SHW-001, SHW-002
 
-### SHW-013 — Run comparison UI
+### SHW-013 — Run comparison UI ✅ done
 - **Priority:** P1
 - **Effort:** M
 - **Owner role:** frontend
@@ -145,9 +147,11 @@ References:
   - User can select two runs and see side-by-side summary.
   - Differences in status, blockers, and key validator outcomes are highlighted.
   - Handles missing data without blank-page errors.
+  - UI consumes SHW-012 compare API (`/api/runs/compare`) when available.
+  - Adapter fallback computes compare payload from per-run detail endpoints if compare API is unavailable.
 - **Dependencies:** SHW-012
 
-### SHW-014 — Artifact schema version marker
+### SHW-014 — Artifact schema version marker ✅ done
 - **Priority:** P1
 - **Effort:** S
 - **Owner role:** backend
@@ -157,7 +161,7 @@ References:
   - Backward-compatible fallback path documented.
 - **Dependencies:** SHW-002
 
-### SHW-015 — Compatibility adapter layer
+### SHW-015 — Compatibility adapter layer ✅ done
 - **Priority:** P1
 - **Effort:** L
 - **Owner role:** backend
@@ -165,6 +169,10 @@ References:
   - Adapter supports at least two known artifact variations.
   - Coverage includes run trace + validation normalization.
   - Compatibility tests added with fixture snapshots.
+- **Completion notes (2026-03-06):**
+  - `normalize_run_trace`가 `events`(legacy) + `phases/phase_timeline`(modern) 변형을 공통 DTO로 정규화.
+  - `normalize_validation`이 `validation/results/final.validations/quality fallback` 변형을 공통 `summary + validator_cards`로 정규화.
+  - fixture snapshot 테스트 추가: `autodev/tests/fixtures/gui_compat/*.json`.
 - **Dependencies:** SHW-014
 
 ### SHW-016 — Extended RBAC & auth integration (future)
@@ -201,8 +209,6 @@ References:
 
 ## Suggested Immediate Start Queue (No Blocking Dependencies)
 
-1. SHW-009 — Demo smoke script for GUI/API
-2. SHW-010 — Phase timeline enrichment
-3. SHW-011 — Validation triage deep-linking
-4. SHW-012 — Run comparison API and DTO
-5. SHW-014 — Artifact schema version marker
+1. SHW-017 — Controlled stop/retry process manager
+2. SHW-018 — Cross-run quality trend aggregation
+3. SHW-016 — Extended RBAC & auth integration (future)

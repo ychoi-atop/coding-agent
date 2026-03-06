@@ -13,6 +13,7 @@ from autodev.gui_mvp_server import (
     GuiRequestHandler,
     _list_runs,
     _resolve_request_role,
+    _run_compare,
     _run_detail,
 )
 
@@ -67,6 +68,8 @@ def test_list_runs_and_detail(tmp_path):
     assert rows[0]["project_type"] == "python_cli"
     assert rows[0]["model"] == "anthropic/claude-sonnet-4-6"
     assert rows[0]["artifact_errors"] == []
+    assert rows[0]["artifact_schema_versions"]["task_quality_index"]["effective_version"] == "legacy-v0"
+    assert rows[0]["artifact_schema_warnings"] == []
 
     detail = _run_detail(run_dir)
     assert detail["status"] == "failed"
@@ -81,6 +84,8 @@ def test_list_runs_and_detail(tmp_path):
     assert detail["validation_normalized"]["summary"]["total"] == 1
     assert detail["validation_normalized"]["summary"]["failed"] == 1
     assert detail["artifact_errors"] == []
+    assert detail["artifact_schema_versions"]["run_trace"]["effective_version"] == "legacy-v0"
+    assert detail["artifact_schema_warnings"] == []
 
 
 def test_list_runs_normalizes_quality_status_alias(tmp_path):
@@ -156,6 +161,109 @@ def test_malformed_json_returns_artifact_errors_without_crash(tmp_path):
         "task_quality_index.json",
         "run_trace.json",
     }
+
+
+def test_unknown_artifact_schema_version_includes_warning_and_fallback(tmp_path):
+    run_dir = tmp_path / "run-schema-unknown"
+    _write_json(
+        run_dir / ".autodev" / "task_quality_index.json",
+        {
+            "schema_version": "future-v3",
+            "final": {"status": "running"},
+        },
+    )
+    _write_json(run_dir / ".autodev" / "task_final_last_validation.json", {"validation": []})
+
+    rows = _list_runs(tmp_path)
+    assert rows[0]["artifact_schema_versions"]["task_quality_index"]["known_version"] is False
+    assert rows[0]["artifact_schema_versions"]["task_quality_index"]["effective_version"] == "legacy-v0"
+    assert rows[0]["artifact_schema_warnings"][0]["code"] == "unknown_schema_version"
+
+    detail = _run_detail(run_dir)
+    warning = detail["artifact_schema_warnings"][0]
+    assert warning["artifact"] == "task_quality_index"
+    assert warning["fallback_version"] == "legacy-v0"
+
+
+def test_run_compare_returns_normalized_summary_for_two_runs(tmp_path):
+    run_a = tmp_path / "run-a"
+    _write_json(
+        run_a / ".autodev" / "task_quality_index.json",
+        {
+            "project": {"type": "python_cli"},
+            "resolved_quality_profile": {"name": "minimal"},
+            "totals": {"total_task_attempts": 3, "hard_failures": 1, "soft_failures": 0},
+            "unresolved_blockers": ["final_validation"],
+            "final": {"status": "failed"},
+        },
+    )
+    _write_json(
+        run_a / ".autodev" / "task_final_last_validation.json",
+        {"validation": [{"name": "ruff", "status": "failed", "ok": False}]},
+    )
+    _write_json(
+        run_a / ".autodev" / "run_trace.json",
+        {"llm": {"model": "m-a"}, "phase_timeline": [{"phase": "planning", "duration_ms": 100}]},
+    )
+
+    run_b = tmp_path / "run-b"
+    _write_json(
+        run_b / ".autodev" / "task_quality_index.json",
+        {
+            "project": {"type": "python_cli"},
+            "resolved_quality_profile": {"name": "enterprise"},
+            "totals": {"attempts": 5, "hard": 0, "soft": 1},
+            "final": {"status": "completed"},
+        },
+    )
+    _write_json(
+        run_b / ".autodev" / "task_final_last_validation.json",
+        {
+            "results": [
+                {"name": "ruff", "status": "ok"},
+                {"name": "pytest", "status": "ok"},
+            ]
+        },
+    )
+    _write_json(run_b / ".autodev" / "run_trace.json", {"model": "m-b"})
+
+    payload, status = _run_compare(tmp_path, "run-a", "run-b")
+    assert status == 200
+    assert payload["left"]["status"] == "failed"
+    assert payload["right"]["status"] == "ok"
+    assert payload["left"]["totals"]["blocker_count"] == 1
+    assert payload["right"]["totals"]["total_task_attempts"] == 5
+    assert payload["right"]["validation"]["passed"] == 2
+    assert payload["delta"]["validation_passed"] == 2
+    assert payload["delta"]["hard_failures"] == -1
+
+
+def test_compare_endpoint_supports_legacy_query_aliases(gui_server):
+    base_url, runs_root = gui_server
+
+    for run_id in ("run-1", "run-2"):
+        _write_json(runs_root / run_id / ".autodev" / "task_quality_index.json", {"final": {"status": "ok"}})
+        _write_json(runs_root / run_id / ".autodev" / "task_final_last_validation.json", {"validation": []})
+        _write_json(runs_root / run_id / ".autodev" / "run_trace.json", {"model": "m"})
+
+    with request.urlopen(f"{base_url}/api/runs/compare?run_a=run-1&run_b=run-2", timeout=5) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+        assert resp.status == 200
+
+    assert body["left"]["run_id"] == "run-1"
+    assert body["right"]["run_id"] == "run-2"
+    assert body["left"]["totals"]["total_task_attempts"] == 0
+
+
+def test_compare_endpoint_requires_both_run_ids(gui_server):
+    base_url, _ = gui_server
+
+    with pytest.raises(error.HTTPError) as excinfo:
+        request.urlopen(f"{base_url}/api/runs/compare?left=run-1", timeout=5)
+
+    assert excinfo.value.code == 400
+    body = json.loads(excinfo.value.read().decode("utf-8"))
+    assert body["error"]["code"] == "invalid_compare_query"
 
 
 def test_role_resolution_header_precedence(monkeypatch):

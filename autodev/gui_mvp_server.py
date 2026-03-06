@@ -9,11 +9,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .gui_api import GuiApiError, trigger_resume, trigger_start, validate_resume_target
+from .gui_artifact_schema import summarize_schema_markers
 from .gui_audit import persist_audit_event
-from .gui_mvp_dto import normalize_run_trace, normalize_tasks, normalize_validation
+from .gui_mvp_dto import normalize_run_comparison_summary, normalize_run_trace, normalize_tasks, normalize_validation
 from .run_status import normalize_run_status
 
 
@@ -116,6 +117,12 @@ def _list_runs(runs_root: Path) -> list[dict[str, Any]]:
             profile = quality.get("resolved_quality_profile", {}) if isinstance(quality.get("resolved_quality_profile"), dict) else {}
 
         artifact_errors = [err for err in [quality_error, run_trace_error] if err]
+        schema_versions, schema_warnings = summarize_schema_markers(
+            {
+                "task_quality_index": quality,
+                "run_trace": run_trace,
+            }
+        )
         rows.append(
             {
                 "run_id": d.name,
@@ -126,6 +133,8 @@ def _list_runs(runs_root: Path) -> list[dict[str, Any]]:
                 "profile": profile.get("name", "") if isinstance(profile, dict) else "",
                 "model": trace_dto.get("model", ""),
                 "artifact_errors": artifact_errors,
+                "artifact_schema_versions": schema_versions,
+                "artifact_schema_warnings": schema_warnings,
             }
         )
     return rows
@@ -147,6 +156,13 @@ def _run_detail(run_dir: Path) -> dict[str, Any]:
     resolved_profile = quality_dict.get("resolved_quality_profile", {}) if isinstance(quality_dict.get("resolved_quality_profile"), dict) else {}
 
     artifact_errors = [err for err in [quality_error, validation_error, run_trace_error] if err]
+    schema_versions, schema_warnings = summarize_schema_markers(
+        {
+            "task_quality_index": quality,
+            "task_final_last_validation": final_validation,
+            "run_trace": run_trace,
+        }
+    )
     return {
         "run_id": run_dir.name,
         "status": _run_status(quality_dict),
@@ -178,7 +194,47 @@ def _run_detail(run_dir: Path) -> dict[str, Any]:
         "validation_normalized": validation_normalized,
         "quality_index": quality_dict,
         "artifact_errors": artifact_errors,
+        "artifact_schema_versions": schema_versions,
+        "artifact_schema_warnings": schema_warnings,
     }
+
+
+def _run_compare(runs_root: Path, left_run_id: str, right_run_id: str) -> tuple[dict[str, Any], HTTPStatus]:
+    left_id = left_run_id.strip()
+    right_id = right_run_id.strip()
+
+    if not left_id or not right_id:
+        return {
+            "error": {
+                "code": "invalid_compare_query",
+                "message": "query params 'left' and 'right' are required",
+            }
+        }, HTTPStatus.BAD_REQUEST
+
+    left_dir = runs_root / left_id
+    right_dir = runs_root / right_id
+
+    if not left_dir.exists() or not left_dir.is_dir():
+        return {"error": "run not found", "side": "left", "run_id": left_id}, HTTPStatus.NOT_FOUND
+    if not right_dir.exists() or not right_dir.is_dir():
+        return {"error": "run not found", "side": "right", "run_id": right_id}, HTTPStatus.NOT_FOUND
+
+    left_summary = normalize_run_comparison_summary(_run_detail(left_dir))
+    right_summary = normalize_run_comparison_summary(_run_detail(right_dir))
+
+    return {
+        "left": left_summary,
+        "right": right_summary,
+        "delta": {
+            "total_task_attempts": right_summary["totals"]["total_task_attempts"] - left_summary["totals"]["total_task_attempts"],
+            "hard_failures": right_summary["totals"]["hard_failures"] - left_summary["totals"]["hard_failures"],
+            "soft_failures": right_summary["totals"]["soft_failures"] - left_summary["totals"]["soft_failures"],
+            "blocker_count": right_summary["totals"]["blocker_count"] - left_summary["totals"]["blocker_count"],
+            "validation_failed": right_summary["validation"]["failed"] - left_summary["validation"]["failed"],
+            "validation_passed": right_summary["validation"]["passed"] - left_summary["validation"]["passed"],
+            "timeline_total_duration_ms": right_summary["timeline"]["total_duration_ms"] - left_summary["timeline"]["total_duration_ms"],
+        },
+    }, HTTPStatus.OK
 
 
 class GuiRequestHandler(BaseHTTPRequestHandler):
@@ -194,6 +250,14 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/runs":
             self._json_response({"runs": _list_runs(self.config.runs_root)})
+            return
+
+        if path == "/api/runs/compare":
+            query = parse_qs(parsed.query)
+            left = str((query.get("left") or query.get("run_a") or [""])[0])
+            right = str((query.get("right") or query.get("run_b") or [""])[0])
+            payload, status = _run_compare(self.config.runs_root, left, right)
+            self._json_response(payload, status=status)
             return
 
         if path.startswith("/api/runs/"):

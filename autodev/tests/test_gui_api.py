@@ -60,12 +60,16 @@ def test_list_runs_and_get_run_detail(tmp_path: Path) -> None:
     assert by_id["rid-a"]["status"] == "ok"
     assert by_id["rid-b"]["status"] == "failed"
     assert by_id["rid-a"]["artifact_errors"] == []
+    assert by_id["rid-a"]["artifact_schema_versions"]["run_metadata"]["effective_version"] == "legacy-v0"
+    assert by_id["rid-a"]["artifact_schema_warnings"] == []
 
     detail = get_run_detail(str(out_root), "rid-a")
     assert detail["run_name"] == "run-a"
     assert detail["status"] == "ok"
     assert detail["run_metadata"]["request_id"] == "req-a"
     assert detail["artifact_errors"] == []
+    assert detail["artifact_schema_versions"]["run_trace"]["effective_version"] == "legacy-v0"
+    assert detail["artifact_schema_warnings"] == []
 
 
 def test_read_artifact_json_and_markdown(tmp_path: Path) -> None:
@@ -133,6 +137,49 @@ def test_list_runs_and_detail_include_json_parse_errors(tmp_path: Path) -> None:
     assert detail["status"] == "running"
     assert detail["run_metadata"] is None
     assert detail["artifact_errors"][0]["code"] == "artifact_json_malformed"
+
+
+def test_unknown_artifact_schema_version_adds_warning_with_fallback(tmp_path: Path) -> None:
+    out_root = tmp_path / "generated_runs"
+    run = out_root / "run-unknown"
+    _write_json(
+        run / ".autodev" / "run_metadata.json",
+        {
+            "run_id": "rid-unknown",
+            "schema_version": "future-v99",
+        },
+    )
+    _write_json(run / ".autodev" / "checkpoint.json", {"status": "running"})
+
+    rows = list_runs(str(out_root), limit=10)
+    assert rows[0]["artifact_schema_versions"]["run_metadata"]["declared_version"] == "future-v99"
+    assert rows[0]["artifact_schema_versions"]["run_metadata"]["effective_version"] == "legacy-v0"
+    assert rows[0]["artifact_schema_versions"]["run_metadata"]["known_version"] is False
+    assert rows[0]["artifact_schema_warnings"][0]["code"] == "unknown_schema_version"
+
+    detail = get_run_detail(str(out_root), "rid-unknown")
+    warning = detail["artifact_schema_warnings"][0]
+    assert warning["artifact"] == "run_metadata"
+    assert warning["fallback_version"] == "legacy-v0"
+
+
+def test_read_artifact_includes_schema_marker_and_unknown_warning(tmp_path: Path) -> None:
+    out_root = tmp_path / "generated_runs"
+    run = out_root / "run-artifact"
+    _write_json(run / ".autodev" / "run_metadata.json", {"run_id": "rid-artifact"})
+    _write_json(
+        run / ".autodev" / "run_trace.json",
+        {
+            "schema_version": "future-v2",
+            "events": [],
+        },
+    )
+
+    res = read_artifact(str(out_root), "rid-artifact", "run_trace.json")
+    assert res["artifact_schema"]["artifact"] == "run_trace"
+    assert res["artifact_schema"]["known_version"] is False
+    assert res["artifact_schema"]["effective_version"] == "legacy-v0"
+    assert res["warning"]["code"] == "unknown_schema_version"
 
 
 def test_read_artifact_blocks_traversal(tmp_path: Path) -> None:

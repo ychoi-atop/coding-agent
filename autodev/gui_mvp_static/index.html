@@ -38,6 +38,7 @@
         <div class="tabs">
           <button class="tab is-active" data-tab="overview">Overview</button>
           <button class="tab" data-tab="validation">Validation</button>
+          <button class="tab" data-tab="compare">Compare</button>
         </div>
 
         <div id="tab-overview" class="tab-content is-active">
@@ -81,25 +82,62 @@
           <section>
             <h3>Validators</h3>
             <div class="validation-controls">
-              <input id="validationSearch" type="search" placeholder="Search validator…" />
+              <input id="validationSearch" type="search" placeholder="Search validator/output…" />
               <select id="validationStatusFilter" aria-label="Filter by status">
                 <option value="all">All statuses</option>
-                <option value="passed">Passed</option>
                 <option value="failed">Failed</option>
+                <option value="soft_fail">Soft fail</option>
+                <option value="skipped_dependency">Skipped</option>
+                <option value="passed">Passed</option>
                 <option value="unknown">Unknown</option>
               </select>
               <select id="validationNameFilter" aria-label="Filter by validator">
                 <option value="all">All validators</option>
               </select>
+              <select id="validationSort" aria-label="Sort validators">
+                <option value="severity">Severity</option>
+                <option value="name">Name</option>
+                <option value="duration">Duration</option>
+              </select>
+              <label class="inline-toggle" for="failedFirstToggle">
+                <input id="failedFirstToggle" type="checkbox" checked />
+                Failed first
+              </label>
             </div>
-            <div id="validationCards" class="validation-cards"></div>
+            <div id="validationSummaryChips" class="summary-chips" aria-live="polite"></div>
+            <div id="validationCards" class="validation-groups"></div>
             <div id="validationEmpty" class="empty">Validation artifact not found.</div>
+
+            <div id="validationTriagePanel" class="triage-panel hidden">
+              <h4>Triage Context</h4>
+              <div id="validationTriageBody"></div>
+            </div>
+            <div id="validationTriageEmpty" class="empty">Click a failed validator to open task/artifact context.</div>
           </section>
 
           <section>
             <h3>task_quality_index</h3>
             <div id="qualityPanel" class="json-panel"></div>
             <div id="qualityEmpty" class="empty">Quality index artifact not found.</div>
+          </section>
+        </div>
+
+        <div id="tab-compare" class="tab-content">
+          <section>
+            <h3>Run Comparison (A/B)</h3>
+            <div class="compare-controls">
+              <select id="compareLeftRun" aria-label="Baseline run"></select>
+              <select id="compareRightRun" aria-label="Candidate run"></select>
+              <button id="compareSwapBtn" type="button">Swap</button>
+              <button id="compareRefreshBtn" type="button">Compare</button>
+              <span id="compareSourceBadge" class="muted"></span>
+            </div>
+            <div id="compareError" class="empty hidden"></div>
+            <div id="compareGrid" class="compare-grid hidden"></div>
+          </section>
+          <section>
+            <h3>Highlighted differences</h3>
+            <div id="compareDiffs" class="compare-diffs"></div>
           </section>
         </div>
       </section>

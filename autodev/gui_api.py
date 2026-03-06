@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .gui_artifact_schema import build_schema_marker, summarize_schema_markers
 from .run_status import normalize_run_status
 
 
@@ -65,6 +66,12 @@ def list_runs(out_root: str, limit: int = 50) -> list[dict[str, Any]]:
         started_at = _infer_started_at(run_dir, metadata)
         completed_at = _coerce_str(metadata.get("run_completed_at")) if isinstance(metadata, dict) else ""
         artifact_errors = [err for err in [metadata_error, checkpoint_error] if err]
+        schema_versions, schema_warnings = summarize_schema_markers(
+            {
+                "run_metadata": metadata,
+                "checkpoint": checkpoint,
+            }
+        )
 
         rows.append(
             {
@@ -78,6 +85,8 @@ def list_runs(out_root: str, limit: int = 50) -> list[dict[str, Any]]:
                 "started_at": started_at,
                 "completed_at": completed_at,
                 "artifact_errors": artifact_errors,
+                "artifact_schema_versions": schema_versions,
+                "artifact_schema_warnings": schema_warnings,
             }
         )
 
@@ -102,6 +111,13 @@ def get_run_detail(out_root: str, run_key: str) -> dict[str, Any]:
 
     status = _derive_status(metadata, checkpoint)
     artifact_errors = [err for err in [metadata_error, checkpoint_error, run_trace_error] if err]
+    schema_versions, schema_warnings = summarize_schema_markers(
+        {
+            "run_metadata": metadata,
+            "checkpoint": checkpoint,
+            "run_trace": run_trace,
+        }
+    )
     return {
         "run_id": _coerce_str((metadata or {}).get("run_id")) or run_dir.name,
         "run_name": run_dir.name,
@@ -111,6 +127,8 @@ def get_run_detail(out_root: str, run_key: str) -> dict[str, Any]:
         "checkpoint": checkpoint,
         "run_trace": run_trace,
         "artifact_errors": artifact_errors,
+        "artifact_schema_versions": schema_versions,
+        "artifact_schema_warnings": schema_warnings,
     }
 
 
@@ -158,6 +176,13 @@ def read_artifact(
     }
     if parse_error:
         result["error"] = parse_error
+
+    artifact_name = _artifact_name_from_path(safe_rel)
+    if artifact_name is not None:
+        marker, warning = build_schema_marker(artifact_name, content)
+        result["artifact_schema"] = marker
+        if warning is not None:
+            result["warning"] = warning
 
     return result
 
@@ -400,6 +425,18 @@ def _normalize_artifact_path(artifact_rel_path: str) -> Path:
     if not str(candidate).startswith(f"{AUTODEV_DIR}/"):
         raise GuiApiError("artifact path must stay under .autodev/")
     return candidate
+
+
+def _artifact_name_from_path(path: Path) -> str | None:
+    filename = path.name
+    mapping = {
+        "run_metadata.json": "run_metadata",
+        "checkpoint.json": "checkpoint",
+        "run_trace.json": "run_trace",
+        "task_quality_index.json": "task_quality_index",
+        "task_final_last_validation.json": "task_final_last_validation",
+    }
+    return mapping.get(filename)
 
 
 def _parse_command_request(payload: Mapping[str, Any]) -> RunCommandRequest:

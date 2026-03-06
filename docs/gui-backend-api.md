@@ -37,6 +37,9 @@ get_run_detail(out_root: str, run_key: str) -> dict
   - `.autodev/checkpoint.json`
   - `.autodev/run_trace.json`
 - JSON 파싱 실패가 있어도 함수는 crash하지 않으며, `artifact_errors` 배열로 구조화된 에러를 반환
+- 응답에 `artifact_schema_versions`, `artifact_schema_warnings` 필드 포함
+  - 버전 필드(`schema_version`, `artifact_schema_version`)가 없으면 `legacy-v0` fallback marker 사용
+  - 알 수 없는 버전이면 warning object(`code=unknown_schema_version`)를 payload에 포함하고 fallback 경로 유지
 
 ### 3) Artifact read
 
@@ -51,6 +54,8 @@ read_artifact(out_root: str, run_key: str, artifact_rel_path: str, max_bytes: in
   - `error.code = "artifact_json_malformed" | "artifact_json_truncated"`
   - `error.path`, `error.message`, `error.line`, `error.column`, `error.position`
 - 대용량 응답은 `truncated=True`로 표시 (JSON 파싱 실패 시 `artifact_json_truncated` code)
+- key artifact JSON (`run_metadata/checkpoint/run_trace/task_quality_index/task_final_last_validation`)는
+  `artifact_schema` marker를 포함하며, unknown version이면 `warning` object를 함께 반환
 
 ## Run status normalization contract (SHW-001)
 
@@ -77,6 +82,26 @@ read_artifact(out_root: str, run_key: str, artifact_rel_path: str, max_bytes: in
 - `in_progress`, `queued`, `partial` → `running`
 
 `gui_api`와 `gui_mvp_server` 모두 동일 모듈을 사용해 상태를 계산한다.
+
+## Compatibility adapter layer (SHW-015)
+
+구현 모듈: `autodev/gui_mvp_dto.py`
+
+`/api/runs/<run_id>` 상세 응답에서 run artifact를 버전 차이와 무관하게 안정적인 DTO로 정규화한다.
+
+- run trace 정규화 (`normalize_run_trace`)
+  - 지원 변형 1: legacy event stream (`events[]` + `phase.start/phase.end`)
+  - 지원 변형 2: modern timeline (`phases[]` 또는 `phase_timeline[]`)
+  - 안정 필드: `model`, `profile`, `run_id`, `request_id`, `started_at`, `completed_at`, `phase_timeline[]`
+- validation 정규화 (`normalize_validation`)
+  - 지원 변형 1: `validation|validations|results|rows`
+  - 지원 변형 2: legacy nested (`final.validations[]`) + quality fallback (`quality_index.final.validations[]`)
+  - per-task `tasks[].last_validation[]`를 triage용 row로 병합
+  - 안정 필드: `summary(total/passed/failed/soft_fail/skipped/blocking_failed)`, `validator_cards[]`
+
+테스트:
+- unit + fixture snapshot: `autodev/tests/test_gui_mvp_dto.py`
+- fixture 파일: `autodev/tests/fixtures/gui_compat/*.json`
 
 ## Run control 스캐폴딩
 
@@ -159,6 +184,37 @@ mutating endpoint(`POST /api/runs/start`, `POST /api/runs/resume`)는 모든 요
   - `run_id` consistency(checkpoint/run_metadata)
 - terminal 상태(`ok/failed`) run은 resume 대상에서 거부
 
+### `GET /api/runs/compare?left=<run_id>&right=<run_id>` (SHW-012)
+
+두 개의 run을 비교 가능한 공통 요약 스키마로 반환한다.
+
+- query params
+  - required: `left`, `right`
+  - legacy alias 지원: `run_a`, `run_b`
+- 반환 payload
+  - `left`, `right`: normalized run summary
+  - `delta`: `right - left` 기준 핵심 수치 차이
+
+normalized summary 필드(핵심):
+- `run_id`, `status`, `project_type`, `profile`, `model`
+- `started_at`, `completed_at`, `updated_at`
+- `totals`: `total_task_attempts`, `hard_failures`, `soft_failures`, `task_count`, `blocker_count`
+- `validation`: `total`, `passed`, `failed`, `soft_fail`, `skipped`, `blocking_failed`
+- `timeline`: `phase_count`, `total_duration_ms`
+- `blockers`
+
+누락 필드는 모두 explicit default로 정규화된다(문자열=`""`, 숫자=`0`, 배열=`[]`).
+
+오류 semantics:
+- `400 invalid_compare_query`: `left/right` 누락
+- `404 run not found`: 지정한 run 디렉터리 없음
+
+예시:
+
+```bash
+curl "http://127.0.0.1:8787/api/runs/compare?left=showoff_failed_001&right=showoff_ok_001"
+```
+
 ### RBAC (SHW-006)
 
 mutating endpoint는 최소 role matrix를 강제한다.
@@ -198,4 +254,4 @@ role source 우선순위:
 ## 현재 단계의 의도적 제한
 
 - stop/retry/cancel, live streaming(SSE/WebSocket)은 미구현
-- artifact schema versioning/compat layer는 미구현
+- compatibility adapter는 run_trace + validation 범위(SHW-015)까지 구현됨. 기타 artifact별 세부 adapter는 후속 확장 대상
