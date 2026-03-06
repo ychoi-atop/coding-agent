@@ -18,6 +18,9 @@ const state = {
   compareRightId: null,
   comparePayload: null,
   compareSource: '',
+  guiContext: null,
+  lastProcessId: '',
+  trendPayload: null,
 };
 
 const PHASE_COLORS = {
@@ -338,6 +341,215 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function friendlyApiError(payload, fallback = 'Request failed') {
+  if (!payload || typeof payload !== 'object') return fallback;
+  const err = payload.error;
+  if (typeof err === 'string' && err.trim()) return err;
+  if (err && typeof err === 'object') {
+    const code = String(err.code || '').trim();
+    const message = String(err.message || '').trim();
+    if (message && code) return `${code}: ${message}`;
+    if (message) return message;
+    if (code) return code;
+  }
+  return fallback;
+}
+
+class ApiError extends Error {
+  constructor(message, payload = null) {
+    super(message);
+    this.name = 'ApiError';
+    this.payload = payload;
+  }
+}
+
+function setRunControlStatus(message, { error = false } = {}) {
+  const node = el('runControlStatus');
+  if (!node) return;
+  node.textContent = message;
+  node.classList.toggle('error-text', Boolean(error));
+}
+
+function setRunControlHints(hints) {
+  const node = el('runControlHints');
+  if (!node) return;
+
+  const rows = Array.isArray(hints)
+    ? [...new Set(hints.map((v) => String(v || '').trim()).filter(Boolean))].slice(0, 4)
+    : [];
+
+  node.innerHTML = '';
+  if (!rows.length) {
+    node.classList.add('hidden');
+    return;
+  }
+
+  rows.forEach((hint) => {
+    const li = document.createElement('li');
+    li.textContent = hint;
+    node.appendChild(li);
+  });
+  node.classList.remove('hidden');
+}
+
+function selectedRunValidatorHint() {
+  const rows = normalizeValidationRows(state.selectedDetail || {});
+  const failed = rows
+    .filter((row) => ['failed', 'soft_fail'].includes(row.status))
+    .map((row) => String(row.name || '').trim())
+    .filter(Boolean);
+  const unique = [...new Set(failed)].slice(0, 3);
+  if (!unique.length) return '';
+  return unique.length === 1
+    ? `Selected run has a failed validator (${unique[0]}). Check Validation tab before retry/resume.`
+    : `Selected run has failed validators (${unique.join(', ')}). Check Validation tab before retry/resume.`;
+}
+
+function deriveRunControlHints(action, payload) {
+  const err = payload?.error;
+  const hints = [];
+
+  const push = (text) => {
+    const val = String(text || '').trim();
+    if (val && !hints.includes(val)) hints.push(val);
+  };
+
+  const apiHints = err?.fix_hints;
+  if (Array.isArray(apiHints)) {
+    apiHints.forEach((hint) => push(hint));
+  }
+
+  const code = String(err?.code || '').toLowerCase();
+  const message = String(err?.message || '').toLowerCase();
+
+  if (!hints.length) {
+    if (code === 'missing_prd' || code === 'invalid_prd') {
+      push('Set PRD to an existing file path (for example: examples/PRD.md).');
+    }
+    if (code === 'invalid_out' || code === 'missing_out') {
+      push('Set Out to a directory path (not a file).');
+    }
+    if (code === 'forbidden_role') {
+      push('Use developer/operator role or local-simple mode for mutating actions.');
+    }
+    if (code === 'missing_retry_target') {
+      push('For Retry, provide process_id or run_id.');
+    }
+    if (code === 'invalid_payload' && (message.includes('appears finalized') || message.includes('status is terminal'))) {
+      push('This run is finalized; use Retry instead of Resume.');
+    }
+  }
+
+  if ((action === 'retry' || action === 'resume') && !hints.some((h) => h.toLowerCase().includes('validator'))) {
+    const validatorHint = selectedRunValidatorHint();
+    if (validatorHint) push(validatorHint);
+  }
+
+  return hints.slice(0, 4);
+}
+
+function updateProcessIdInput(processId) {
+  if (!processId) return;
+  state.lastProcessId = processId;
+  const input = el('controlProcessId');
+  if (input && !input.value) {
+    input.value = processId;
+  }
+}
+
+function normalizeLocalPath(raw) {
+  const val = String(raw || '').trim();
+  if (!val) return '';
+  return val;
+}
+
+function firstNonEmpty(values) {
+  for (const raw of values) {
+    const value = normalizeLocalPath(raw);
+    if (value) return value;
+  }
+  return '';
+}
+
+function resolveQuickRunPrdPath() {
+  return firstNonEmpty([
+    el('controlPrd')?.value,
+    state.detail?.metadata?.prd,
+    state.detail?.quality_index?.request?.prd,
+    state.selectedRun?.prd,
+    state.guiContext?.defaults?.prd,
+  ]);
+}
+
+function updateQuickRunHint() {
+  const node = el('quickRunHint');
+  if (!node) return;
+
+  const defaults = state.guiContext?.defaults || {};
+  const profile = normalizeLocalPath(defaults.profile) || 'local_simple';
+  const out = normalizeLocalPath(el('controlOut')?.value) || normalizeLocalPath(defaults.out) || './generated_runs';
+  const prd = resolveQuickRunPrdPath();
+
+  if (!prd) {
+    node.textContent = `Quick Run preset: profile=${profile}, out=${out}. Set PRD path to enable one-click run.`;
+    node.classList.add('error-text');
+    return;
+  }
+
+  node.textContent = `Quick Run preset: profile=${profile}, out=${out}, prd=${prd}`;
+  node.classList.remove('error-text');
+}
+
+function buildRunPayload(action) {
+  const payload = {
+    execute: Boolean(el('controlExecute')?.checked),
+    interactive: Boolean(el('controlInteractive')?.checked),
+  };
+
+  const prd = normalizeLocalPath(el('controlPrd')?.value);
+  const out = normalizeLocalPath(el('controlOut')?.value);
+  const profile = normalizeLocalPath(el('controlProfile')?.value);
+  const model = normalizeLocalPath(el('controlModel')?.value);
+  const config = normalizeLocalPath(el('controlConfig')?.value);
+
+  if (action === 'start' || action === 'resume') {
+    if (prd) payload.prd = prd;
+    if (out) payload.out = out;
+    if (profile) payload.profile = profile;
+    if (model) payload.model = model;
+    if (config) payload.config = config;
+  }
+
+  if (action === 'stop' || action === 'retry') {
+    const processId = normalizeLocalPath(el('controlProcessId')?.value) || state.lastProcessId;
+    if (processId) payload.process_id = processId;
+  }
+
+  if (action === 'stop') {
+    const timeoutRaw = Number(el('controlGracefulTimeout')?.value || 2.0);
+    payload.graceful_timeout_sec = Number.isFinite(timeoutRaw) ? timeoutRaw : 2.0;
+  }
+
+  if (action === 'retry' && state.selectedRunId && !payload.process_id) {
+    payload.run_id = state.selectedRunId;
+  }
+
+  return payload;
+}
+
+async function postJson(url, payload) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(friendlyApiError(body, `${url} -> ${res.status}`), body);
+  }
+  return body;
+}
+
 function normalizeValidationStatus(status, ok) {
   const raw = String(status || '').trim().toLowerCase();
   if (raw) return VALIDATION_STATUS_ALIASES[raw] || raw;
@@ -609,6 +821,19 @@ function renderValidationPanels(detail) {
     && rows.some((row) => row.name === state.triageContext.name && row.status === state.triageContext.status);
   if (state.triageContext && !contextStillExists) {
     state.triageContext = null;
+  }
+
+  if (!state.triageContext) {
+    const firstFailed = rows.find((row) => row.status === 'failed');
+    if (firstFailed) {
+      state.triageContext = {
+        name: firstFailed.name,
+        status: firstFailed.status,
+        scope: firstFailed.scope,
+        task_id: firstFailed.task_id,
+        artifact_path: firstFailed.artifact_path,
+      };
+    }
   }
 
   renderValidationSummaryChips(rows, filtered);
@@ -1053,6 +1278,8 @@ async function refreshCurrentRun({ silent = false } = {}) {
 
 async function loadRuns() {
   state.useMock = new URLSearchParams(window.location.search).get('mock') === '1';
+  await loadGuiContext();
+
   if (state.useMock) {
     state.runs = mock.runs;
     state.selectedRunId = mock.runs[0].run_id;
@@ -1062,6 +1289,7 @@ async function loadRuns() {
     initComparisonState();
     refreshCompareRunOptions();
     await refreshComparison({ silent: true });
+    await refreshTrends({ silent: true });
     el('statusLine').textContent = 'Mock mode enabled (?mock=1).';
     setupPolling();
     return;
@@ -1084,6 +1312,7 @@ async function loadRuns() {
     initComparisonState();
     refreshCompareRunOptions();
     await refreshComparison({ silent: true });
+    await refreshTrends({ silent: true });
     setupPolling();
   } catch (err) {
     el('statusLine').textContent = `Failed to load runs. Try ?mock=1 (${err.message})`;
@@ -1091,6 +1320,7 @@ async function loadRuns() {
     renderRuns(state.runs);
     refreshCompareRunOptions();
     renderComparison(null, { error: 'Unable to load runs for comparison.' });
+    renderTrends(null);
     setupPolling();
   }
 }
@@ -1111,6 +1341,11 @@ function renderDetail(detail) {
 async function selectRun(runId, options = { rerenderList: true }) {
   state.selectedRunId = runId;
   state.selectedRun = state.runs.find((run) => run.run_id === runId) || null;
+  if (state.selectedRun?.run_dir) {
+    const outInput = el('controlOut');
+    if (outInput) outInput.value = state.selectedRun.run_dir;
+    updateQuickRunHint();
+  }
   if (options.rerenderList) renderRuns(state.runs);
 
   try {
@@ -1165,6 +1400,236 @@ function initValidationControls() {
   failedFirst.addEventListener('change', () => {
     state.failedFirst = failedFirst.checked;
     if (state.detail) renderValidationPanels(state.detail);
+  });
+}
+
+async function loadGuiContext() {
+  if (state.useMock) {
+    state.guiContext = {
+      mode: 'local_simple',
+      local_simple_mode: true,
+      defaults: {
+        profile: 'local_simple',
+        out: './generated_runs',
+        config: './config.yaml',
+        prd: './examples/PRD.md',
+      },
+    };
+  } else {
+    try {
+      state.guiContext = await fetchJson('/api/gui/context');
+    } catch {
+      state.guiContext = null;
+    }
+  }
+
+  const modeBadge = el('runModeBadge');
+  const profileInput = el('controlProfile');
+  const outInput = el('controlOut');
+  const configInput = el('controlConfig');
+  const prdInput = el('controlPrd');
+
+  const defaults = state.guiContext?.defaults || {};
+  if (profileInput && !profileInput.value) {
+    profileInput.value = defaults.profile || 'enterprise';
+  }
+  if (outInput && !outInput.value) {
+    outInput.value = defaults.out || './generated_runs';
+  }
+  if (configInput && !configInput.value && defaults.config) {
+    configInput.value = defaults.config;
+  }
+  if (prdInput && !prdInput.value && defaults.prd) {
+    prdInput.value = defaults.prd;
+  }
+
+  if (modeBadge) {
+    const local = Boolean(state.guiContext?.local_simple_mode);
+    modeBadge.textContent = local
+      ? 'Mode: Local Simple (single-user localhost defaults)'
+      : 'Mode: Hardened (explicit auth/policy expected)';
+    modeBadge.classList.toggle('is-local', local);
+  }
+
+  updateQuickRunHint();
+}
+
+async function runControlAction(action, payloadOverride = null) {
+  const payload = payloadOverride || buildRunPayload(action);
+  try {
+    const body = await postJson(`/api/runs/${action}`, payload);
+    const processId = body?.process?.process_id;
+    if (processId) {
+      updateProcessIdInput(processId);
+    }
+
+    const summary = [];
+    if (body?.spawned === true) summary.push('spawned');
+    if (body?.stopped === true) summary.push('stopped');
+    if (body?.retry_of) summary.push(`retry_of=${body.retry_of}`);
+    if (body?.run_link?.run_id) summary.push(`run_id=${body.run_link.run_id}`);
+    if (processId) summary.push(`process=${processId}`);
+    setRunControlStatus(`${action.toUpperCase()} OK${summary.length ? ` • ${summary.join(' • ')}` : ''}`);
+    setRunControlHints([]);
+
+    await loadRuns();
+    if (state.selectedRunId) {
+      await refreshCurrentRun({ silent: true });
+    }
+  } catch (err) {
+    setRunControlStatus(`${action.toUpperCase()} failed: ${err.message}`, { error: true });
+    const hints = deriveRunControlHints(action, err?.payload || null);
+    setRunControlHints(hints);
+  }
+}
+
+async function runQuickPreset() {
+  const defaults = state.guiContext?.defaults || {};
+  const quickPrd = resolveQuickRunPrdPath();
+  if (!quickPrd) {
+    setRunControlStatus('QUICK RUN failed: PRD path is empty. Set PRD file path first.', { error: true });
+    updateQuickRunHint();
+    return;
+  }
+
+  const profileInput = el('controlProfile');
+  const outInput = el('controlOut');
+  const configInput = el('controlConfig');
+  const prdInput = el('controlPrd');
+
+  const quickProfile = normalizeLocalPath(defaults.profile) || 'local_simple';
+  const quickOut = normalizeLocalPath(outInput?.value) || normalizeLocalPath(defaults.out) || './generated_runs';
+  const quickConfig = normalizeLocalPath(configInput?.value) || normalizeLocalPath(defaults.config);
+
+  if (profileInput) profileInput.value = quickProfile;
+  if (outInput) outInput.value = quickOut;
+  if (prdInput) prdInput.value = quickPrd;
+
+  updateQuickRunHint();
+
+  const payload = buildRunPayload('start');
+  payload.execute = true;
+  payload.profile = quickProfile;
+  payload.out = quickOut;
+  payload.prd = quickPrd;
+  if (quickConfig) {
+    payload.config = quickConfig;
+  } else {
+    delete payload.config;
+  }
+
+  await runControlAction('start', payload);
+}
+
+function initRunControls() {
+  const quickBtn = el('runQuickBtn');
+  const startBtn = el('runStartBtn');
+  const resumeBtn = el('runResumeBtn');
+  const retryBtn = el('runRetryBtn');
+  const stopBtn = el('runStopBtn');
+
+  if (!quickBtn || !startBtn || !resumeBtn || !retryBtn || !stopBtn) return;
+
+  quickBtn.addEventListener('click', async () => {
+    await runQuickPreset();
+  });
+
+  startBtn.addEventListener('click', async () => {
+    await runControlAction('start');
+  });
+
+  resumeBtn.addEventListener('click', async () => {
+    await runControlAction('resume');
+  });
+
+  retryBtn.addEventListener('click', async () => {
+    await runControlAction('retry');
+  });
+
+  stopBtn.addEventListener('click', async () => {
+    await runControlAction('stop');
+  });
+
+  ['controlPrd', 'controlOut', 'controlProfile'].forEach((id) => {
+    const input = el(id);
+    if (!input) return;
+    input.addEventListener('input', () => {
+      updateQuickRunHint();
+    });
+  });
+}
+
+function renderTrends(payload) {
+  state.trendPayload = payload;
+  const summary = el('trendSummary');
+  const panel = el('trendPanel');
+  if (!summary || !panel) return;
+
+  summary.classList.remove('error-text');
+
+  if (!payload) {
+    summary.textContent = 'No trend data yet.';
+    panel.classList.add('hidden');
+    panel.textContent = '';
+    return;
+  }
+
+  const counters = payload.counters || {};
+  summary.textContent = [
+    `window=${payload.window?.applied || '-'}`,
+    `included=${counters.runs_included ?? 0}`,
+    `skipped=${counters.runs_skipped_missing_or_invalid_artifacts ?? 0}`,
+    `failed_validators=${payload.aggregates?.validators?.totals?.failed ?? 0}`,
+    `blockers=${payload.aggregates?.blockers?.total ?? 0}`,
+  ].join(' • ');
+
+  panel.classList.remove('hidden');
+  panel.textContent = JSON.stringify(payload, null, 2);
+}
+
+async function refreshTrends({ silent = false } = {}) {
+  if (state.useMock) {
+    renderTrends({
+      window: { requested: 20, applied: 20 },
+      counters: { runs_included: 2, runs_skipped_missing_or_invalid_artifacts: 0 },
+      aggregates: { validators: { totals: { failed: 1 } }, blockers: { total: 1 } },
+    });
+    return;
+  }
+
+  const windowVal = Number(el('trendWindow')?.value || 20);
+  const boundedWindow = Math.max(1, Math.min(200, Number.isFinite(windowVal) ? windowVal : 20));
+  const allowPartial = Boolean(el('trendPartialToggle')?.checked);
+
+  try {
+    const payload = await fetchJson(`/api/runs/trends?window=${boundedWindow}&partial=${allowPartial ? 'true' : 'false'}`);
+    renderTrends(payload);
+  } catch (err) {
+    if (!silent) {
+      renderTrends(null);
+      el('trendSummary').textContent = `Trend query failed: ${err.message}`;
+      el('trendSummary').classList.add('error-text');
+    }
+  }
+}
+
+function initTrendControls() {
+  const refreshBtn = el('trendRefreshBtn');
+  const partial = el('trendPartialToggle');
+  const windowInput = el('trendWindow');
+
+  if (!refreshBtn || !partial || !windowInput) return;
+
+  refreshBtn.addEventListener('click', async () => {
+    await refreshTrends();
+  });
+
+  partial.addEventListener('change', async () => {
+    await refreshTrends({ silent: true });
+  });
+
+  windowInput.addEventListener('change', async () => {
+    await refreshTrends({ silent: true });
   });
 }
 
@@ -1226,6 +1691,8 @@ function initLiveUpdateControls() {
 
 initTabs();
 initValidationControls();
+initRunControls();
 initCompareControls();
+initTrendControls();
 initLiveUpdateControls();
 loadRuns();

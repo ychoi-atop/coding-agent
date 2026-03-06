@@ -6,14 +6,26 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .gui_api import GuiApiError, trigger_resume, trigger_start, validate_resume_target
+from .gui_api import (
+    GuiApiError,
+    get_process_detail,
+    get_process_history,
+    list_processes,
+    trigger_resume,
+    trigger_retry,
+    trigger_start,
+    trigger_stop,
+    validate_resume_target,
+)
 from .gui_artifact_schema import summarize_schema_markers
 from .gui_audit import persist_audit_event
+from .gui_failure_hints import build_run_control_fix_hints
 from .gui_mvp_dto import normalize_run_comparison_summary, normalize_run_trace, normalize_tasks, normalize_validation
 from .run_status import normalize_run_status
 
@@ -22,13 +34,39 @@ from .run_status import normalize_run_status
 class GuiConfig:
     runs_root: Path
     static_root: Path
+    local_simple_mode: bool = False
+    default_profile: str = "enterprise"
+    default_config_path: str = ""
+    default_prd_path: str = ""
 
 
 ROLE_HEADER = "X-Autodev-Role"
 ROLE_ENV = "AUTODEV_GUI_ROLE"
 AUDIT_DIR_ENV = "AUTODEV_GUI_AUDIT_DIR"
+AUTH_CONFIG_ENV = "AUTODEV_GUI_AUTH_CONFIG"
+LOCAL_SIMPLE_ENV = "AUTODEV_GUI_LOCAL_SIMPLE"
+DEFAULT_PROFILE_ENV = "AUTODEV_GUI_DEFAULT_PROFILE"
+DEFAULT_CONFIG_ENV = "AUTODEV_GUI_DEFAULT_CONFIG"
+DEFAULT_PRD_ENV = "AUTODEV_GUI_DEFAULT_PRD"
+TOKEN_HEADER = "X-Autodev-Token"
+SESSION_HEADER = "X-Autodev-Session"
+AUTHORIZATION_HEADER = "Authorization"
+SESSION_COOKIE_NAME = "autodev_session"
 READ_ONLY_ROLE = "evaluator"
 MUTATING_ROLES = {"operator", "developer"}
+
+DEFAULT_TREND_WINDOW = 20
+MAX_TREND_WINDOW = 200
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    role: str
+    source: str
+    subject: str | None = None
+    scope: dict[str, str] | None = None
+    policy_name: str | None = None
+    policy_allowed_roles: list[str] | None = None
 
 
 def _resolve_request_role(headers: Any, env: dict[str, str] | None = None) -> str:
@@ -45,11 +83,280 @@ def _resolve_request_role(headers: Any, env: dict[str, str] | None = None) -> st
     if isinstance(env_role, str) and env_role.strip():
         return env_role.strip().lower()
 
+    if _is_local_simple_mode(env_map):
+        return "developer"
+
     return READ_ONLY_ROLE
 
 
 def _is_mutation_allowed(role: str) -> bool:
     return role in MUTATING_ROLES
+
+
+def _is_local_simple_mode(env: dict[str, str] | None = None) -> bool:
+    env_map = env if env is not None else os.environ
+    raw = str(env_map.get(LOCAL_SIMPLE_ENV, "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _resolve_request_auth(
+    *,
+    headers: Any,
+    payload: dict[str, Any],
+    action: str,
+    env: dict[str, str] | None = None,
+) -> AuthContext:
+    env_map = env if env is not None else os.environ
+    auth_cfg = _load_auth_config(env_map)
+    scope = _resolve_policy_scope(payload, env_map)
+
+    token = _extract_bearer_token(headers) or _extract_header_value(headers, TOKEN_HEADER)
+    if token:
+        token_entry = _lookup_auth_principal(auth_cfg.get("tokens"), token)
+        if token_entry is not None:
+            role = _coerce_auth_role(token_entry)
+            return _apply_scoped_policy(
+                role=role,
+                action=action,
+                scope=scope,
+                auth_cfg=auth_cfg,
+                source="token",
+                subject=_coerce_auth_subject(token_entry, token),
+            )
+
+    session_id = _extract_header_value(headers, SESSION_HEADER) or _extract_session_cookie(headers)
+    if session_id:
+        session_entry = _lookup_auth_principal(auth_cfg.get("sessions"), session_id)
+        if session_entry is not None:
+            role = _coerce_auth_role(session_entry)
+            return _apply_scoped_policy(
+                role=role,
+                action=action,
+                scope=scope,
+                auth_cfg=auth_cfg,
+                source="session",
+                subject=_coerce_auth_subject(session_entry, session_id),
+            )
+
+    role = _resolve_request_role(headers, env=env_map)
+    return _apply_scoped_policy(
+        role=role,
+        action=action,
+        scope=scope,
+        auth_cfg=auth_cfg,
+        source="header_or_env",
+        subject=None,
+    )
+
+
+def _extract_header_value(headers: Any, key: str) -> str:
+    if headers is None:
+        return ""
+    value = headers.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _extract_bearer_token(headers: Any) -> str:
+    raw = _extract_header_value(headers, AUTHORIZATION_HEADER)
+    if not raw:
+        return ""
+    if raw.lower().startswith("bearer "):
+        return raw[7:].strip()
+    return ""
+
+
+def _extract_session_cookie(headers: Any) -> str:
+    raw_cookie = _extract_header_value(headers, "Cookie")
+    if not raw_cookie:
+        return ""
+    jar = SimpleCookie()
+    try:
+        jar.load(raw_cookie)
+    except Exception:
+        return ""
+    morsel = jar.get(SESSION_COOKIE_NAME)
+    if morsel is None:
+        return ""
+    return morsel.value.strip()
+
+
+def _load_auth_config(env_map: dict[str, str]) -> dict[str, Any]:
+    cfg_path_raw = env_map.get(AUTH_CONFIG_ENV, "")
+    if not isinstance(cfg_path_raw, str) or not cfg_path_raw.strip():
+        return {}
+    cfg_path = Path(cfg_path_raw.strip()).expanduser()
+    if not cfg_path.is_file():
+        return {}
+    try:
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _lookup_auth_principal(container: Any, key: str) -> Any:
+    if not isinstance(container, dict):
+        return None
+    entry = container.get(key)
+    if entry is None:
+        return None
+    if isinstance(entry, str):
+        return {"role": entry, "subject": key}
+    if isinstance(entry, dict):
+        return entry
+    return None
+
+
+def _coerce_auth_role(entry: Any) -> str:
+    if isinstance(entry, dict):
+        role_val = entry.get("role")
+        if isinstance(role_val, str) and role_val.strip():
+            return role_val.strip().lower()
+    return READ_ONLY_ROLE
+
+
+def _coerce_auth_subject(entry: Any, fallback: str) -> str:
+    if isinstance(entry, dict):
+        subject = entry.get("subject")
+        if isinstance(subject, str) and subject.strip():
+            return subject.strip()
+    return fallback
+
+
+def _resolve_policy_scope(payload: dict[str, Any], env_map: dict[str, str]) -> dict[str, str]:
+    project = ""
+    environment = ""
+
+    project_val = payload.get("project")
+    if isinstance(project_val, str) and project_val.strip():
+        project = project_val.strip()
+    env_val = payload.get("environment")
+    if isinstance(env_val, str) and env_val.strip():
+        environment = env_val.strip()
+
+    if not project:
+        scoped_project = env_map.get("AUTODEV_GUI_PROJECT", "")
+        if isinstance(scoped_project, str) and scoped_project.strip():
+            project = scoped_project.strip()
+    if not environment:
+        scoped_env = env_map.get("AUTODEV_GUI_ENVIRONMENT", "")
+        if isinstance(scoped_env, str) and scoped_env.strip():
+            environment = scoped_env.strip()
+
+    return {
+        "project": project,
+        "environment": environment,
+    }
+
+
+def _apply_scoped_policy(
+    *,
+    role: str,
+    action: str,
+    scope: dict[str, str],
+    auth_cfg: dict[str, Any],
+    source: str,
+    subject: str | None,
+) -> AuthContext:
+    policy = _select_policy(auth_cfg.get("policies"), scope)
+    if policy is None and isinstance(auth_cfg.get("default_policy"), dict):
+        policy = auth_cfg["default_policy"]
+
+    allowed_roles = _policy_allowed_roles(policy, action)
+    effective_role = role
+    if allowed_roles is not None and role not in allowed_roles:
+        effective_role = READ_ONLY_ROLE
+
+    policy_name = None
+    if isinstance(policy, dict):
+        name = policy.get("name")
+        if isinstance(name, str) and name.strip():
+            policy_name = name.strip()
+
+    return AuthContext(
+        role=effective_role,
+        source=source,
+        subject=subject,
+        scope=scope,
+        policy_name=policy_name,
+        policy_allowed_roles=sorted(allowed_roles) if allowed_roles is not None else None,
+    )
+
+
+def _select_policy(policies: Any, scope: dict[str, str]) -> dict[str, Any] | None:
+    if not isinstance(policies, list):
+        return None
+
+    best: tuple[int, dict[str, Any]] | None = None
+    for row in policies:
+        if not isinstance(row, dict):
+            continue
+        matched, score = _policy_matches_scope(row, scope)
+        if not matched:
+            continue
+        if best is None or score > best[0]:
+            best = (score, row)
+
+    return best[1] if best else None
+
+
+def _policy_matches_scope(policy: dict[str, Any], scope: dict[str, str]) -> tuple[bool, int]:
+    project = scope.get("project", "")
+    environment = scope.get("environment", "")
+
+    project_match = _match_scope_value(policy, "project", "projects", project)
+    if project_match is None:
+        return False, 0
+    env_match = _match_scope_value(policy, "environment", "environments", environment)
+    if env_match is None:
+        return False, 0
+
+    score = 0
+    if project_match:
+        score += 2
+    if env_match:
+        score += 1
+    return True, score
+
+
+def _match_scope_value(policy: dict[str, Any], singular_key: str, plural_key: str, current: str) -> bool | None:
+    singular = policy.get(singular_key)
+    plural = policy.get(plural_key)
+    configured: list[str] = []
+
+    if isinstance(singular, str) and singular.strip():
+        configured.append(singular.strip())
+    if isinstance(plural, list):
+        configured.extend([str(v).strip() for v in plural if str(v).strip()])
+
+    if not configured:
+        return False
+    if not current:
+        return None
+    return current in configured
+
+
+def _policy_allowed_roles(policy: dict[str, Any] | None, action: str) -> set[str] | None:
+    if not isinstance(policy, dict):
+        return None
+
+    actions = policy.get("actions")
+    if isinstance(actions, dict):
+        action_roles = actions.get(action)
+        parsed = _parse_allowed_roles(action_roles)
+        if parsed is not None:
+            return parsed
+
+    return _parse_allowed_roles(policy.get("allowed_roles"))
+
+
+def _parse_allowed_roles(raw: Any) -> set[str] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return set()
+    out = {str(v).strip().lower() for v in raw if str(v).strip()}
+    return out
 
 
 def _error_payload(code: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -65,6 +372,11 @@ def _audit_payload_summary(payload: dict[str, Any], *, execute: bool) -> dict[st
         "profile": str(payload.get("profile", "")),
         "model": str(payload.get("model", "")) if payload.get("model") is not None else None,
         "interactive": bool(payload.get("interactive", False)),
+        "process_id": str(payload.get("process_id", "")),
+        "run_id": str(payload.get("run_id", "")),
+        "graceful_timeout_sec": payload.get("graceful_timeout_sec", None),
+        "project": str(payload.get("project", "")),
+        "environment": str(payload.get("environment", "")),
         "execute": bool(execute),
     }
 
@@ -237,6 +549,215 @@ def _run_compare(runs_root: Path, left_run_id: str, right_run_id: str) -> tuple[
     }, HTTPStatus.OK
 
 
+def _parse_trend_window(raw: str | None) -> int:
+    if raw is None or not raw.strip():
+        return DEFAULT_TREND_WINDOW
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_TREND_WINDOW
+    if parsed < 1:
+        return 1
+    if parsed > MAX_TREND_WINDOW:
+        return MAX_TREND_WINDOW
+    return parsed
+
+
+def _parse_bool_flag(raw: str | None, *, default: bool = False) -> bool:
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _quality_trends(runs_root: Path, window: int, *, allow_partial: bool = False) -> dict[str, Any]:
+    trend_window = max(1, min(int(window), MAX_TREND_WINDOW))
+    if not runs_root.exists():
+        return {
+            "window": {"requested": int(window), "applied": trend_window},
+            "mode": {"allow_partial": bool(allow_partial)},
+            "counters": {
+                "runs_total": 0,
+                "runs_windowed": 0,
+                "runs_included": 0,
+                "runs_included_full": 0,
+                "runs_included_partial": 0,
+                "runs_included_partial_missing_quality": 0,
+                "runs_included_partial_missing_validation": 0,
+                "runs_skipped_missing_quality": 0,
+                "runs_skipped_invalid_quality": 0,
+                "runs_skipped_missing_validation": 0,
+                "runs_skipped_invalid_validation": 0,
+                "runs_skipped_missing_or_invalid_artifacts": 0,
+            },
+            "runs": [],
+            "aggregates": {
+                "validators": {"totals": {"total": 0, "passed": 0, "failed": 0, "soft_fail": 0, "skipped": 0, "blocking_failed": 0}, "by_name": {}},
+                "blockers": {"total": 0, "unique": 0, "by_name": {}},
+            },
+        }
+
+    run_dirs = sorted((p for p in runs_root.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
+    windowed = run_dirs[:trend_window]
+
+    counters = {
+        "runs_total": len(run_dirs),
+        "runs_windowed": len(windowed),
+        "runs_included": 0,
+        "runs_included_full": 0,
+        "runs_included_partial": 0,
+        "runs_included_partial_missing_quality": 0,
+        "runs_included_partial_missing_validation": 0,
+        "runs_skipped_missing_quality": 0,
+        "runs_skipped_invalid_quality": 0,
+        "runs_skipped_missing_validation": 0,
+        "runs_skipped_invalid_validation": 0,
+        "runs_skipped_missing_or_invalid_artifacts": 0,
+    }
+
+    validator_totals = {"total": 0, "passed": 0, "failed": 0, "soft_fail": 0, "skipped": 0, "blocking_failed": 0}
+    validator_by_name: dict[str, dict[str, int]] = {}
+    blocker_by_name: dict[str, int] = {}
+    run_rows: list[dict[str, Any]] = []
+
+    for run_dir in windowed:
+        quality_raw, quality_error = _load_json(run_dir / ".autodev" / "task_quality_index.json")
+        validation_raw, validation_error = _load_json(run_dir / ".autodev" / "task_final_last_validation.json")
+
+        quality_missing = quality_raw is None and quality_error is None
+        validation_missing = validation_raw is None and validation_error is None
+        quality_invalid = quality_error is not None
+        validation_invalid = validation_error is not None
+
+        if quality_missing:
+            counters["runs_skipped_missing_quality"] += 1
+        if quality_invalid:
+            counters["runs_skipped_invalid_quality"] += 1
+        if validation_missing:
+            counters["runs_skipped_missing_validation"] += 1
+        if validation_invalid:
+            counters["runs_skipped_invalid_validation"] += 1
+
+        quality_available = not quality_missing and not quality_invalid
+        validation_available = not validation_missing and not validation_invalid
+        include_partial = (
+            allow_partial
+            and (quality_missing ^ validation_missing)
+            and not quality_invalid
+            and not validation_invalid
+        )
+
+        if not (quality_available and validation_available) and not include_partial:
+            counters["runs_skipped_missing_or_invalid_artifacts"] += 1
+            continue
+
+        quality = quality_raw if isinstance(quality_raw, dict) else {}
+        validation = validation_raw if isinstance(validation_raw, dict) else {}
+
+        if validation_available:
+            validation_norm = normalize_validation(validation, quality)
+            summary = validation_norm.get("summary") if isinstance(validation_norm, dict) else {}
+            cards = validation_norm.get("validator_cards") if isinstance(validation_norm, dict) else []
+        else:
+            summary = {}
+            cards = []
+
+        run_validator_counts = {
+            "total": int(summary.get("total", 0)) if isinstance(summary, dict) else 0,
+            "passed": int(summary.get("passed", 0)) if isinstance(summary, dict) else 0,
+            "failed": int(summary.get("failed", 0)) if isinstance(summary, dict) else 0,
+            "soft_fail": int(summary.get("soft_fail", 0)) if isinstance(summary, dict) else 0,
+            "skipped": int(summary.get("skipped", 0)) if isinstance(summary, dict) else 0,
+            "blocking_failed": int(summary.get("blocking_failed", 0)) if isinstance(summary, dict) else 0,
+        }
+
+        for key, value in run_validator_counts.items():
+            validator_totals[key] += value
+
+        if isinstance(cards, list):
+            for row in cards:
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get("name") or row.get("validator") or "unknown").strip() or "unknown"
+                status = str(row.get("status") or "unknown").strip().lower()
+                bucket = validator_by_name.setdefault(
+                    name,
+                    {"total": 0, "passed": 0, "failed": 0, "soft_fail": 0, "skipped": 0, "blocking_failed": 0},
+                )
+                bucket["total"] += 1
+                if status == "passed":
+                    bucket["passed"] += 1
+                elif status == "failed":
+                    bucket["failed"] += 1
+                elif status == "soft_fail":
+                    bucket["soft_fail"] += 1
+                elif status == "skipped_dependency":
+                    bucket["skipped"] += 1
+                else:
+                    if row.get("ok") is True:
+                        bucket["passed"] += 1
+                    elif row.get("ok") is False:
+                        bucket["failed"] += 1
+                if status in {"failed", "soft_fail"}:
+                    bucket["blocking_failed"] += 1
+
+        blockers_raw = quality.get("unresolved_blockers") if quality_available and isinstance(quality.get("unresolved_blockers"), list) else []
+        blockers = [str(b) for b in blockers_raw]
+        for blocker in blockers:
+            blocker_by_name[blocker] = blocker_by_name.get(blocker, 0) + 1
+
+        counters["runs_included"] += 1
+        if quality_available and validation_available:
+            counters["runs_included_full"] += 1
+            inclusion_mode = "full"
+        else:
+            counters["runs_included_partial"] += 1
+            inclusion_mode = "partial"
+            if not quality_available:
+                counters["runs_included_partial_missing_quality"] += 1
+            if not validation_available:
+                counters["runs_included_partial_missing_validation"] += 1
+
+        run_rows.append(
+            {
+                "run_id": run_dir.name,
+                "updated_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+                "status": _run_status(quality) if quality_available else "unknown",
+                "inclusion_mode": inclusion_mode,
+                "artifact_availability": {
+                    "quality": quality_available,
+                    "validation": validation_available,
+                },
+                "validator": run_validator_counts,
+                "blockers": {"count": len(blockers), "names": blockers},
+            }
+        )
+
+    return {
+        "window": {"requested": int(window), "applied": trend_window},
+        "mode": {"allow_partial": bool(allow_partial)},
+        "counters": counters,
+        "runs": run_rows,
+        "aggregates": {
+            "validators": {
+                "totals": validator_totals,
+                "by_name": dict(sorted(validator_by_name.items(), key=lambda item: item[0])),
+            },
+            "blockers": {
+                "total": sum(blocker_by_name.values()),
+                "unique": len(blocker_by_name),
+                "by_name": dict(sorted(blocker_by_name.items(), key=lambda item: item[0])),
+            },
+        },
+    }
+
+
 class GuiRequestHandler(BaseHTTPRequestHandler):
     server_version = "AutoDevGuiMvp/0.1"
 
@@ -248,6 +769,63 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        if path == "/api/gui/context":
+            self._json_response(
+                {
+                    "mode": "local_simple" if self.config.local_simple_mode else "hardened",
+                    "local_simple_mode": self.config.local_simple_mode,
+                    "defaults": {
+                        "profile": self.config.default_profile,
+                        "out": str(self.config.runs_root),
+                        "config": self.config.default_config_path,
+                        "prd": self.config.default_prd_path,
+                    },
+                    "roles": {
+                        "read_only": READ_ONLY_ROLE,
+                        "mutating": sorted(MUTATING_ROLES),
+                    },
+                    "api": {
+                        "run_controls": ["start", "resume", "stop", "retry"],
+                        "trends": True,
+                    },
+                }
+            )
+            return
+
+        if path == "/api/processes":
+            query = parse_qs(parsed.query)
+            limit_raw = str((query.get("limit") or ["100"])[0]).strip()
+            state = str((query.get("state") or [""])[0]).strip() or None
+            run_id = str((query.get("run_id") or [""])[0]).strip() or None
+            try:
+                limit = int(limit_raw)
+            except ValueError:
+                limit = 100
+            self._json_response(list_processes(limit=limit, state=state, run_id=run_id))
+            return
+
+        if path.startswith("/api/processes/") and path.endswith("/history"):
+            process_id = unquote(path.removeprefix("/api/processes/").removesuffix("/history")).strip("/")
+            if not process_id:
+                self._json_response({"error": "process not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            try:
+                self._json_response(get_process_history(process_id))
+            except FileNotFoundError as exc:
+                self._json_response({"error": "process not found", "detail": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        if path.startswith("/api/processes/"):
+            process_id = unquote(path.removeprefix("/api/processes/")).strip()
+            if not process_id:
+                self._json_response({"error": "process not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            try:
+                self._json_response(get_process_detail(process_id))
+            except FileNotFoundError as exc:
+                self._json_response({"error": "process not found", "detail": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+
         if path == "/api/runs":
             self._json_response({"runs": _list_runs(self.config.runs_root)})
             return
@@ -258,6 +836,13 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
             right = str((query.get("right") or query.get("run_b") or [""])[0])
             payload, status = _run_compare(self.config.runs_root, left, right)
             self._json_response(payload, status=status)
+            return
+
+        if path == "/api/runs/trends":
+            query = parse_qs(parsed.query)
+            window = _parse_trend_window(str((query.get("window") or [""])[0]))
+            allow_partial = _parse_bool_flag(str((query.get("partial") or query.get("allow_partial") or [""])[0]))
+            self._json_response(_quality_trends(self.config.runs_root, window, allow_partial=allow_partial))
             return
 
         if path.startswith("/api/runs/"):
@@ -294,6 +879,12 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/runs/resume":
             self._handle_run_control(action="resume")
             return
+        if path == "/api/runs/stop":
+            self._handle_run_control(action="stop")
+            return
+        if path == "/api/runs/retry":
+            self._handle_run_control(action="retry")
+            return
         self._json_response({"error": "not found", "path": path}, status=HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -304,27 +895,44 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
 
-        role = _resolve_request_role(self.headers)
+        auth = _resolve_request_auth(headers=self.headers, payload=payload, action=action)
+        role = auth.role
         execute = bool(payload.get("execute", False))
         event = {
             "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "action": action,
             "role": role,
+            "auth": {
+                "source": auth.source,
+                "subject": auth.subject,
+                "scope": auth.scope,
+                "policy_name": auth.policy_name,
+                "policy_allowed_roles": auth.policy_allowed_roles,
+            },
             "payload": _audit_payload_summary(payload, execute=execute),
         }
 
         if not _is_mutation_allowed(role):
             event["result_status"] = "forbidden"
             event["error"] = f"role '{role}' is not allowed to call mutating endpoints"
+            error_payload = _error_payload(
+                "forbidden_role",
+                f"Role '{role}' cannot perform '{action}'.",
+                role=role,
+                allowed_roles=sorted(MUTATING_ROLES),
+                auth_source=auth.source,
+                project_scope=(auth.scope or {}).get("project", ""),
+                environment_scope=(auth.scope or {}).get("environment", ""),
+                policy_allowed_roles=auth.policy_allowed_roles,
+            )
+            error_payload["fix_hints"] = build_run_control_fix_hints(
+                action=action,
+                error=error_payload,
+                payload=payload,
+                runs_root=self.config.runs_root,
+            )
             self._audit_then_respond(
-                body={
-                    "error": _error_payload(
-                        "forbidden_role",
-                        f"Role '{role}' cannot perform '{action}'.",
-                        role=role,
-                        allowed_roles=sorted(MUTATING_ROLES),
-                    )
-                },
+                body={"error": error_payload},
                 status=HTTPStatus.FORBIDDEN,
                 audit_event=event,
             )
@@ -334,6 +942,12 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         if validation_error:
             event["result_status"] = "invalid_request"
             event["error"] = validation_error["message"]
+            validation_error["fix_hints"] = build_run_control_fix_hints(
+                action=action,
+                error=validation_error,
+                payload=payload,
+                runs_root=self.config.runs_root,
+            )
             self._audit_then_respond(
                 body={"error": validation_error},
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -341,6 +955,7 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        graceful_timeout_sec = float(payload.get("graceful_timeout_sec", 2.0))
         payload.pop("execute", None)
 
         try:
@@ -348,13 +963,24 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
                 resume_info = validate_resume_target(str(payload.get("out", "")))
                 result = trigger_resume(payload, execute=execute)
                 result["resume_target"] = resume_info
+            elif action == "stop":
+                result = trigger_stop(payload, graceful_timeout_sec=graceful_timeout_sec)
+            elif action == "retry":
+                result = trigger_retry(payload, execute=execute)
             else:
                 result = trigger_start(payload, execute=execute)
         except GuiApiError as exc:
             event["result_status"] = "invalid_request"
             event["error"] = str(exc)
+            error_payload = _error_payload("invalid_payload", str(exc))
+            error_payload["fix_hints"] = build_run_control_fix_hints(
+                action=action,
+                error=error_payload,
+                payload=payload,
+                runs_root=self.config.runs_root,
+            )
             self._audit_then_respond(
-                body={"error": _error_payload("invalid_payload", str(exc))},
+                body={"error": error_payload},
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
                 audit_event=event,
             )
@@ -362,8 +988,15 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         except FileNotFoundError as exc:
             event["result_status"] = "not_found"
             event["error"] = str(exc)
+            error_payload = _error_payload("not_found", str(exc))
+            error_payload["fix_hints"] = build_run_control_fix_hints(
+                action=action,
+                error=error_payload,
+                payload=payload,
+                runs_root=self.config.runs_root,
+            )
             self._audit_then_respond(
-                body={"error": _error_payload("not_found", str(exc))},
+                body={"error": error_payload},
                 status=HTTPStatus.NOT_FOUND,
                 audit_event=event,
             )
@@ -371,14 +1004,24 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         except OSError as exc:
             event["result_status"] = "launch_failed"
             event["error"] = str(exc)
+            error_payload = _error_payload("launch_failed", f"failed to launch autodev: {exc}")
+            error_payload["fix_hints"] = build_run_control_fix_hints(
+                action=action,
+                error=error_payload,
+                payload=payload,
+                runs_root=self.config.runs_root,
+            )
             self._audit_then_respond(
-                body={"error": _error_payload("launch_failed", f"failed to launch autodev: {exc}")},
+                body={"error": error_payload},
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 audit_event=event,
             )
             return
 
-        event["result_status"] = "spawned" if result.get("spawned") else "dry_run"
+        if action == "stop":
+            event["result_status"] = "stopped"
+        else:
+            event["result_status"] = "spawned" if result.get("spawned") else "dry_run"
         self._audit_then_respond(body=result, status=HTTPStatus.OK, audit_event=event)
 
     def _read_json_payload(self) -> dict[str, Any] | None:
@@ -463,6 +1106,27 @@ def _validate_run_control_payload(payload: dict[str, Any], *, action: str) -> di
     if not isinstance(execute, bool):
         return _error_payload("invalid_execute", "'execute' must be a boolean")
 
+    if action in {"stop", "retry"}:
+        process_id = payload.get("process_id")
+        run_id = payload.get("run_id")
+        if action == "stop":
+            if not isinstance(process_id, str) or not process_id.strip():
+                return _error_payload("missing_process_id", "'process_id' is required")
+            timeout_val = payload.get("graceful_timeout_sec", 2.0)
+            if not isinstance(timeout_val, (int, float)):
+                return _error_payload("invalid_graceful_timeout", "'graceful_timeout_sec' must be a number")
+            if float(timeout_val) <= 0:
+                return _error_payload(
+                    "invalid_graceful_timeout", "'graceful_timeout_sec' must be greater than zero"
+                )
+            return None
+
+        process_id_ok = isinstance(process_id, str) and bool(process_id.strip())
+        run_id_ok = isinstance(run_id, str) and bool(run_id.strip())
+        if not process_id_ok and not run_id_ok:
+            return _error_payload("missing_retry_target", "'process_id' or 'run_id' is required")
+        return None
+
     prd = payload.get("prd")
     if not isinstance(prd, str) or not prd.strip():
         return _error_payload("missing_prd", "'prd' is required")
@@ -502,13 +1166,27 @@ def _validate_run_control_payload(payload: dict[str, Any], *, action: str) -> di
 
 def serve(host: str, port: int, runs_root: Path) -> None:
     static_root = Path(__file__).resolve().parent / "gui_mvp_static"
-    config = GuiConfig(runs_root=runs_root.resolve(), static_root=static_root)
+    local_simple_mode = _is_local_simple_mode()
+    default_profile = str(os.environ.get(DEFAULT_PROFILE_ENV, "")).strip() or (
+        "local_simple" if local_simple_mode else "enterprise"
+    )
+    default_config_path = str(os.environ.get(DEFAULT_CONFIG_ENV, "")).strip()
+    default_prd_path = str(os.environ.get(DEFAULT_PRD_ENV, "")).strip()
+    config = GuiConfig(
+        runs_root=runs_root.resolve(),
+        static_root=static_root,
+        local_simple_mode=local_simple_mode,
+        default_profile=default_profile,
+        default_config_path=default_config_path,
+        default_prd_path=default_prd_path,
+    )
 
     httpd = ThreadingHTTPServer((host, port), GuiRequestHandler)
     httpd.config = config  # type: ignore[attr-defined]
 
     print(f"[gui-mvp] serving http://{host}:{port}")
     print(f"[gui-mvp] runs root: {config.runs_root}")
+    print(f"[gui-mvp] mode: {'local_simple' if config.local_simple_mode else 'hardened'}")
     httpd.serve_forever()
 
 

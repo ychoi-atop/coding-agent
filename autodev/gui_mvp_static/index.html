@@ -43,6 +43,40 @@
 
         <div id="tab-overview" class="tab-content is-active">
           <section>
+            <h3>Run Controls</h3>
+            <div id="runModeBadge" class="mode-badge">Loading mode…</div>
+            <div class="run-controls-grid">
+              <input id="controlPrd" type="text" placeholder="PRD file path (required for start/resume)" />
+              <input id="controlOut" type="text" placeholder="Output root or run directory" />
+              <input id="controlProfile" type="text" placeholder="Profile (ex: local_simple)" />
+              <input id="controlModel" type="text" placeholder="Model override (optional)" />
+              <input id="controlConfig" type="text" placeholder="Config path (optional)" />
+              <label class="inline-toggle" for="controlInteractive">
+                <input id="controlInteractive" type="checkbox" />
+                Interactive
+              </label>
+              <label class="inline-toggle" for="controlExecute">
+                <input id="controlExecute" type="checkbox" checked />
+                Execute now
+              </label>
+            </div>
+            <div class="run-actions">
+              <button id="runQuickBtn" class="quick-run" type="button">⚡ Quick Run (local_simple)</button>
+              <button id="runStartBtn" type="button">Start</button>
+              <button id="runResumeBtn" type="button">Resume</button>
+              <button id="runRetryBtn" type="button">Retry selected run</button>
+              <button id="runStopBtn" type="button">Stop process</button>
+            </div>
+            <div class="run-controls-grid compact">
+              <input id="controlProcessId" type="text" placeholder="Process ID (for stop/retry)" />
+              <input id="controlGracefulTimeout" type="number" min="0.1" step="0.1" value="2.0" placeholder="Graceful timeout sec" />
+            </div>
+            <div id="runControlStatus" class="empty">Run actions are ready.</div>
+            <ul id="runControlHints" class="run-control-hints hidden"></ul>
+            <div id="quickRunHint" class="empty subtle"></div>
+          </section>
+
+          <section>
             <h3>Run Metadata</h3>
             <div id="metaGrid" class="meta-grid"></div>
             <div id="metaEmpty" class="empty">Run metadata not available.</div>
@@ -138,6 +172,20 @@
           <section>
             <h3>Highlighted differences</h3>
             <div id="compareDiffs" class="compare-diffs"></div>
+          </section>
+
+          <section>
+            <h3>Quality trends</h3>
+            <div class="compare-controls">
+              <input id="trendWindow" type="number" min="1" max="200" value="20" />
+              <label class="inline-toggle" for="trendPartialToggle">
+                <input id="trendPartialToggle" type="checkbox" />
+                Include partial artifacts
+              </label>
+              <button id="trendRefreshBtn" type="button">Refresh trends</button>
+            </div>
+            <div id="trendSummary" class="empty">No trend data yet.</div>
+            <pre id="trendPanel" class="json-panel hidden"></pre>
           </section>
         </div>
       </section>

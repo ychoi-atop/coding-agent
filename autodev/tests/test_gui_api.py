@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from autodev.gui_api import (
     GuiApiError,
+    _reset_process_manager_for_tests,
     build_resume_command,
     build_start_command,
+    get_process_detail,
+    get_process_history,
     get_run_detail,
+    list_processes,
     list_runs,
     read_artifact,
     trigger_resume,
+    trigger_retry,
     trigger_start,
+    trigger_stop,
     validate_resume_target,
 )
 
@@ -21,6 +28,46 @@ from autodev.gui_api import (
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_file = tmp_path / "gui-process-state.json"
+    monkeypatch.setenv("AUTODEV_GUI_PROCESS_STATE_FILE", str(state_file))
+    _reset_process_manager_for_tests()
+
+
+class _FakeProcess:
+    _next_pid = 1000
+
+    def __init__(self, *, poll_result: int | None = None, terminate_timeout: bool = False, wait_returncode: int = 0) -> None:
+        type(self)._next_pid += 1
+        self.pid = type(self)._next_pid
+        self._poll_result = poll_result
+        self._terminate_timeout = terminate_timeout
+        self._wait_returncode = wait_returncode
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        if self.killed:
+            return -9
+        if self.terminated and not self._terminate_timeout:
+            return self._wait_returncode
+        return self._poll_result
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.killed:
+            return -9
+        if self.terminated and self._terminate_timeout:
+            raise subprocess.TimeoutExpired(cmd="autodev", timeout=timeout or 0)
+        return self._wait_returncode
 
 
 def test_list_runs_and_get_run_detail(tmp_path: Path) -> None:
@@ -292,3 +339,164 @@ def test_validate_resume_target_rejects_terminal_run(tmp_path: Path) -> None:
 
     with pytest.raises(GuiApiError, match="finalized"):
         validate_resume_target(str(run))
+
+
+def test_trigger_start_execute_tracks_process_and_stop_graceful(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeProcess(poll_result=None, terminate_timeout=False, wait_returncode=0)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    payload = {
+        "prd": "examples/PRD.md",
+        "out": "./generated_runs",
+        "profile": "enterprise",
+    }
+    started = trigger_start(payload, execute=True)
+    assert started["spawned"] is True
+    assert started["process"]["state"] == "running"
+    process_id = started["process"]["process_id"]
+
+    stopped = trigger_stop({"process_id": process_id}, graceful_timeout_sec=0.1)
+    assert stopped["ok"] is True
+    assert stopped["stopped"] is True
+    assert stopped["process"]["state"] == "terminated"
+    assert stopped["process"]["stop_reason"] == "graceful"
+
+
+def test_trigger_stop_forced_kill_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeProcess(poll_result=None, terminate_timeout=True, wait_returncode=0)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    payload = {
+        "prd": "examples/PRD.md",
+        "out": "./generated_runs",
+        "profile": "enterprise",
+    }
+    started = trigger_start(payload, execute=True)
+    process_id = started["process"]["process_id"]
+
+    stopped = trigger_stop({"process_id": process_id}, graceful_timeout_sec=0.1)
+    assert stopped["process"]["state"] == "killed"
+    assert stopped["process"]["stop_reason"] == "forced"
+
+
+def test_trigger_retry_preserves_chain_and_linkage(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = [_FakeProcess(poll_result=None), _FakeProcess(poll_result=None)]
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fakes.pop(0)
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    payload = {
+        "prd": "examples/PRD.md",
+        "out": "./generated_runs/run-a",
+        "profile": "enterprise",
+    }
+    first = trigger_start(payload, execute=True)
+    first_process = first["process"]
+
+    retried = trigger_retry({"process_id": first_process["process_id"]}, execute=True)
+    assert retried["spawned"] is True
+    assert retried["retry_of"] == first_process["process_id"]
+    assert retried["process"]["retry_root"] == first_process["retry_root"]
+    assert retried["process"]["retry_attempt"] == 2
+    assert retried["run_link"]["out"] == "./generated_runs/run-a"
+
+
+def test_trigger_retry_unknown_process_raises_not_found() -> None:
+    with pytest.raises(FileNotFoundError, match="Unknown process_id"):
+        trigger_retry({"process_id": "proc-missing"}, execute=False)
+
+
+def test_process_state_persists_and_reloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeProcess(poll_result=None)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    started = trigger_start(
+        {
+            "prd": "examples/PRD.md",
+            "out": "./generated_runs/run-persist",
+            "profile": "enterprise",
+        },
+        execute=True,
+    )
+    process_id = started["process"]["process_id"]
+
+    # Simulate server restart: manager should reload from persisted state file.
+    _reset_process_manager_for_tests()
+
+    reloaded = get_process_detail(process_id)
+    assert reloaded["process_id"] == process_id
+    assert reloaded["run_link"]["run_id"] == "run-persist"
+    assert reloaded["command"][0] == "autodev"
+
+
+def test_list_detail_history_read_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeProcess(poll_result=None)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    started = trigger_start(
+        {
+            "prd": "examples/PRD.md",
+            "out": "./generated_runs/run-read",
+            "profile": "enterprise",
+        },
+        execute=True,
+    )
+    process_id = started["process"]["process_id"]
+
+    listed = list_processes(limit=10)
+    assert listed["count"] == 1
+    assert listed["processes"][0]["process_id"] == process_id
+
+    detail = get_process_detail(process_id)
+    assert detail["run_link"]["run_id"] == "run-read"
+
+    history = get_process_history(process_id)
+    assert history["process_id"] == process_id
+    assert [row["state"] for row in history["history"]][:2] == ["spawned", "running"]
+
+
+def test_trigger_retry_by_run_id_preserves_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = [_FakeProcess(poll_result=None), _FakeProcess(poll_result=None)]
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fakes.pop(0)
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    first = trigger_start(
+        {
+            "prd": "examples/PRD.md",
+            "out": "./generated_runs/run-by-id",
+            "profile": "enterprise",
+        },
+        execute=True,
+    )
+
+    retried = trigger_retry({"run_id": "run-by-id"}, execute=True)
+    assert retried["spawned"] is True
+    assert retried["retry_of"] == first["process"]["process_id"]
+    assert retried["process"]["retry_root"] == first["process"]["retry_root"]
+    assert retried["process"]["retry_attempt"] == 2
+
+
+def test_trigger_retry_requires_process_or_run_id() -> None:
+    with pytest.raises(GuiApiError, match="'process_id' or 'run_id' is required"):
+        trigger_retry({}, execute=False)

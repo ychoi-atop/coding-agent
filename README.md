@@ -325,6 +325,12 @@ profiles:
 ## Profiles
 Profile-specific execution settings live under `profiles` in `config.yaml`.
 
+Built-in examples in this repo:
+- `local_simple`: laptop/single-user fast loop (ruff + pytest, minimal policy friction)
+- `enterprise`: broader validation set for hardened/release-oriented runs
+- `enterprise_smoke`: smallest smoke lane
+- `openclaw-oauth-bridge`: bridge connectivity smoke/dev lane
+
 Required profile fields:
 - `template_candidates` (non-empty list)
 - `validators` (non-empty list)
@@ -360,21 +366,35 @@ autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise --inte
 ```
 
 ### GUI launcher (MVP)
-Run the static GUI + read-only API server:
+Hardened/default mode:
 ```bash
 autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787
 ```
 
-Then open `http://127.0.0.1:8787` in a browser.
+Local simple mode (recommended for single-user laptop workflow):
+```bash
+autodev local-simple --runs-root ./generated_runs
+# optional: auto-open browser
+autodev local-simple --runs-root ./generated_runs --open
+```
 
 Options:
 - `--runs-root`: scan target for `<run_dir>/.autodev/*` artifacts (default: `generated_runs`)
 - `--host`: bind address (default: `127.0.0.1`)
 - `--port`: bind port (default: `8787`)
+- `--open` (local-simple): best-effort open GUI URL in default browser on startup
+
+Local simple mode quick notes:
+- localhost-first bind safety (`127.0.0.1` by default)
+- default GUI role becomes `developer` for low-friction run controls
+- default GUI profile hint becomes `local_simple`
+- Overview tab has **Quick Run** (one-click `/api/runs/start` execute mode) using local-simple defaults + selected/default PRD path
+
+See `docs/LOCAL_SIMPLE_MODE.md` for quickstart + when to switch to hardened mode.
 
 Known limits (MVP):
-- Run list/detail and artifact read only; no live streaming updates.
-- No stop/kill/retry control for active runs.
+- Polling-based updates only (no live stream/WebSocket yet).
+- Process control is best-effort (depends on tracked process lifecycle).
 - JSON artifact schema is not versioned yet; breaking changes may require GUI updates.
 
 Showoff planning bundle (execution-oriented):

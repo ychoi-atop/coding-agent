@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -8,10 +9,13 @@ from urllib import error, request
 
 import pytest
 
+from autodev.gui_api import _reset_process_manager_for_tests
 from autodev.gui_mvp_server import (
     GuiConfig,
     GuiRequestHandler,
     _list_runs,
+    _quality_trends,
+    _resolve_request_auth,
     _resolve_request_role,
     _run_compare,
     _run_detail,
@@ -21,6 +25,53 @@ from autodev.gui_mvp_server import (
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_auth_config(path: Path, payload: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_manager_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_file = tmp_path / "gui-process-state.json"
+    monkeypatch.setenv("AUTODEV_GUI_PROCESS_STATE_FILE", str(state_file))
+    monkeypatch.delenv("AUTODEV_GUI_LOCAL_SIMPLE", raising=False)
+    monkeypatch.delenv("AUTODEV_GUI_ROLE", raising=False)
+    _reset_process_manager_for_tests()
+
+
+class _FakeProcess:
+    _next_pid = 2000
+
+    def __init__(self, *, terminate_timeout: bool = False, wait_returncode: int = 0):
+        type(self)._next_pid += 1
+        self.pid = type(self)._next_pid
+        self.terminate_timeout = terminate_timeout
+        self.wait_returncode = wait_returncode
+        self.terminated = False
+        self.killed = False
+
+    def poll(self):
+        if self.killed:
+            return -9
+        if self.terminated and not self.terminate_timeout:
+            return self.wait_returncode
+        return None
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        if self.killed:
+            return -9
+        if self.terminated and self.terminate_timeout:
+            raise subprocess.TimeoutExpired(cmd="autodev", timeout=timeout or 0)
+        return self.wait_returncode
 
 
 def test_list_runs_empty(tmp_path):
@@ -266,6 +317,152 @@ def test_compare_endpoint_requires_both_run_ids(gui_server):
     assert body["error"]["code"] == "invalid_compare_query"
 
 
+def test_gui_context_endpoint_defaults(gui_server):
+    base_url, _ = gui_server
+
+    with request.urlopen(f"{base_url}/api/gui/context", timeout=5) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+
+    assert resp.status == 200
+    assert body["defaults"]["out"]
+    assert body["defaults"]["profile"]
+    assert "prd" in body["defaults"]
+    assert body["api"]["run_controls"] == ["start", "resume", "stop", "retry"]
+
+
+def test_quality_trends_aggregates_validators_and_blockers(tmp_path):
+    run_a = tmp_path / "run-a"
+    _write_json(
+        run_a / ".autodev" / "task_quality_index.json",
+        {
+            "unresolved_blockers": ["final_validation"],
+            "final": {"status": "failed"},
+        },
+    )
+    _write_json(
+        run_a / ".autodev" / "task_final_last_validation.json",
+        {
+            "validation": [
+                {"name": "ruff", "status": "failed", "ok": False, "blocking": True},
+                {"name": "pytest", "status": "passed", "ok": True},
+            ]
+        },
+    )
+
+    run_b = tmp_path / "run-b"
+    _write_json(
+        run_b / ".autodev" / "task_quality_index.json",
+        {
+            "unresolved_blockers": [],
+            "final": {"status": "ok"},
+        },
+    )
+    _write_json(
+        run_b / ".autodev" / "task_final_last_validation.json",
+        {
+            "results": [
+                {"name": "ruff", "status": "passed", "ok": True},
+            ]
+        },
+    )
+
+    payload = _quality_trends(tmp_path, window=10)
+
+    assert payload["counters"]["runs_total"] == 2
+    assert payload["counters"]["runs_windowed"] == 2
+    assert payload["counters"]["runs_included"] == 2
+    assert payload["aggregates"]["validators"]["totals"]["total"] == 3
+    assert payload["aggregates"]["validators"]["by_name"]["ruff"]["failed"] == 1
+    assert payload["aggregates"]["validators"]["by_name"]["ruff"]["passed"] == 1
+    assert payload["aggregates"]["validators"]["by_name"]["ruff"]["blocking_failed"] == 1
+    assert payload["aggregates"]["blockers"]["total"] == 1
+    assert payload["aggregates"]["blockers"]["by_name"]["final_validation"] == 1
+
+
+def test_quality_trends_counts_sparse_missing_artifacts(tmp_path):
+    valid = tmp_path / "run-valid"
+    _write_json(valid / ".autodev" / "task_quality_index.json", {"final": {"status": "ok"}})
+    _write_json(valid / ".autodev" / "task_final_last_validation.json", {"validation": []})
+
+    missing_quality = tmp_path / "run-missing-quality"
+    (missing_quality / ".autodev").mkdir(parents=True, exist_ok=True)
+    _write_json(missing_quality / ".autodev" / "task_final_last_validation.json", {"validation": []})
+
+    invalid_quality = tmp_path / "run-invalid-quality"
+    (invalid_quality / ".autodev").mkdir(parents=True, exist_ok=True)
+    (invalid_quality / ".autodev" / "task_quality_index.json").write_text('{"final": ', encoding="utf-8")
+    _write_json(invalid_quality / ".autodev" / "task_final_last_validation.json", {"validation": []})
+
+    missing_validation = tmp_path / "run-missing-validation"
+    _write_json(missing_validation / ".autodev" / "task_quality_index.json", {"final": {"status": "ok"}})
+
+    payload = _quality_trends(tmp_path, window=10)
+
+    assert payload["counters"]["runs_total"] == 4
+    assert payload["counters"]["runs_included"] == 1
+    assert payload["counters"]["runs_skipped_missing_quality"] == 1
+    assert payload["counters"]["runs_skipped_invalid_quality"] == 1
+    assert payload["counters"]["runs_skipped_missing_validation"] == 1
+    assert payload["counters"]["runs_skipped_invalid_validation"] == 0
+    assert payload["counters"]["runs_skipped_missing_or_invalid_artifacts"] == 3
+
+
+def test_trends_endpoint_supports_bounded_window(gui_server):
+    base_url, runs_root = gui_server
+
+    for idx in range(3):
+        run = runs_root / f"run-{idx}"
+        _write_json(run / ".autodev" / "task_quality_index.json", {"final": {"status": "ok"}})
+        _write_json(run / ".autodev" / "task_final_last_validation.json", {"validation": []})
+
+    with request.urlopen(f"{base_url}/api/runs/trends?window=2", timeout=5) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+
+    assert resp.status == 200
+    assert body["window"]["applied"] == 2
+    assert body["counters"]["runs_total"] == 3
+    assert body["counters"]["runs_windowed"] == 2
+    assert len(body["runs"]) == 2
+
+
+def test_quality_trends_partial_mode_includes_single_missing_artifact(tmp_path):
+    only_validation = tmp_path / "run-only-validation"
+    _write_json(only_validation / ".autodev" / "task_final_last_validation.json", {"validation": [{"name": "pytest", "status": "passed", "ok": True}]})
+
+    only_quality = tmp_path / "run-only-quality"
+    _write_json(
+        only_quality / ".autodev" / "task_quality_index.json",
+        {"final": {"status": "failed"}, "unresolved_blockers": ["final_validation"]},
+    )
+
+    strict_payload = _quality_trends(tmp_path, window=10, allow_partial=False)
+    assert strict_payload["counters"]["runs_included"] == 0
+    assert strict_payload["counters"]["runs_skipped_missing_or_invalid_artifacts"] == 2
+
+    partial_payload = _quality_trends(tmp_path, window=10, allow_partial=True)
+    assert partial_payload["mode"]["allow_partial"] is True
+    assert partial_payload["counters"]["runs_included"] == 2
+    assert partial_payload["counters"]["runs_included_partial"] == 2
+    assert partial_payload["counters"]["runs_included_partial_missing_quality"] == 1
+    assert partial_payload["counters"]["runs_included_partial_missing_validation"] == 1
+    assert partial_payload["aggregates"]["validators"]["totals"]["passed"] == 1
+    assert partial_payload["aggregates"]["blockers"]["by_name"]["final_validation"] == 1
+
+
+def test_trends_endpoint_partial_query_flag(gui_server):
+    base_url, runs_root = gui_server
+    run = runs_root / "run-only-validation"
+    _write_json(run / ".autodev" / "task_final_last_validation.json", {"validation": [{"name": "ruff", "status": "passed", "ok": True}]})
+
+    with request.urlopen(f"{base_url}/api/runs/trends?window=5&partial=true", timeout=5) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+
+    assert resp.status == 200
+    assert body["mode"]["allow_partial"] is True
+    assert body["counters"]["runs_included"] == 1
+    assert body["runs"][0]["inclusion_mode"] == "partial"
+
+
 def test_role_resolution_header_precedence(monkeypatch):
     monkeypatch.setenv("AUTODEV_GUI_ROLE", "operator")
     assert _resolve_request_role({"X-Autodev-Role": "developer"}) == "developer"
@@ -276,7 +473,74 @@ def test_role_resolution_env_and_default(monkeypatch):
     monkeypatch.setenv("AUTODEV_GUI_ROLE", "operator")
     assert _resolve_request_role({}) == "operator"
     monkeypatch.delenv("AUTODEV_GUI_ROLE", raising=False)
+    monkeypatch.delenv("AUTODEV_GUI_LOCAL_SIMPLE", raising=False)
     assert _resolve_request_role({}) == "evaluator"
+
+
+def test_role_resolution_local_simple_default(monkeypatch):
+    monkeypatch.delenv("AUTODEV_GUI_ROLE", raising=False)
+    monkeypatch.setenv("AUTODEV_GUI_LOCAL_SIMPLE", "1")
+    assert _resolve_request_role({}) == "developer"
+
+
+def test_auth_resolution_prefers_token_and_applies_scoped_policy(tmp_path, monkeypatch):
+    cfg = _write_auth_config(
+        tmp_path / "auth.json",
+        {
+            "tokens": {
+                "tok-op": {"role": "operator", "subject": "svc-op"},
+                "tok-dev": {"role": "developer", "subject": "svc-dev"},
+            },
+            "policies": [
+                {
+                    "name": "payments-prod",
+                    "project": "payments",
+                    "environment": "prod",
+                    "actions": {"start": ["operator"]},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("AUTODEV_GUI_AUTH_CONFIG", str(cfg))
+
+    denied = _resolve_request_auth(
+        headers={"Authorization": "Bearer tok-dev", "X-Autodev-Role": "operator"},
+        payload={"project": "payments", "environment": "prod"},
+        action="start",
+    )
+    assert denied.source == "token"
+    assert denied.subject == "svc-dev"
+    assert denied.policy_name == "payments-prod"
+    assert denied.role == "evaluator"
+
+    allowed = _resolve_request_auth(
+        headers={"Authorization": "Bearer tok-op", "X-Autodev-Role": "evaluator"},
+        payload={"project": "payments", "environment": "prod"},
+        action="start",
+    )
+    assert allowed.source == "token"
+    assert allowed.role == "operator"
+
+
+def test_auth_resolution_supports_session_cookie(tmp_path, monkeypatch):
+    cfg = _write_auth_config(
+        tmp_path / "auth.json",
+        {
+            "sessions": {
+                "sess-001": {"role": "developer", "subject": "alice"},
+            }
+        },
+    )
+    monkeypatch.setenv("AUTODEV_GUI_AUTH_CONFIG", str(cfg))
+
+    auth = _resolve_request_auth(
+        headers={"Cookie": "foo=bar; autodev_session=sess-001"},
+        payload={},
+        action="resume",
+    )
+    assert auth.source == "session"
+    assert auth.subject == "alice"
+    assert auth.role == "developer"
 
 
 def _start_http_server(runs_root: Path):
@@ -332,6 +596,8 @@ def test_start_endpoint_forbidden_by_default_role(gui_server, tmp_path, monkeypa
     )
     assert status == 403
     assert body["error"]["code"] == "forbidden_role"
+    assert isinstance(body["error"].get("fix_hints"), list)
+    assert any("role" in hint.lower() or "policy" in hint.lower() for hint in body["error"]["fix_hints"])
 
     logs = sorted(audit_dir.glob("gui-audit-*.jsonl"))
     assert logs
@@ -339,6 +605,22 @@ def test_start_endpoint_forbidden_by_default_role(gui_server, tmp_path, monkeypa
     event = json.loads(line)
     assert event["action"] == "start"
     assert event["result_status"] == "forbidden"
+
+
+def test_start_endpoint_validation_error_contains_fix_hints(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/start",
+        {"out": str(tmp_path / "out"), "profile": "enterprise", "execute": False},
+        headers={"X-Autodev-Role": "developer"},
+    )
+    assert status == 422
+    assert body["error"]["code"] == "missing_prd"
+    assert isinstance(body["error"].get("fix_hints"), list)
+    assert any("PRD" in hint for hint in body["error"]["fix_hints"])
 
 
 def test_start_endpoint_operator_dry_run_persists_audit(gui_server, tmp_path, monkeypatch):
@@ -365,6 +647,54 @@ def test_start_endpoint_operator_dry_run_persists_audit(gui_server, tmp_path, mo
     assert event["payload"]["profile"] == "enterprise"
 
 
+def test_start_endpoint_accepts_bearer_token_role_and_scope_policy(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    auth_cfg = _write_auth_config(
+        tmp_path / "auth.json",
+        {
+            "tokens": {
+                "tok-operator": {"role": "operator", "subject": "svc-operator"},
+            },
+            "policies": [
+                {
+                    "name": "payments-prod",
+                    "project": "payments",
+                    "environment": "prod",
+                    "actions": {"start": ["operator"]},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("AUTODEV_GUI_AUTH_CONFIG", str(auth_cfg))
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/start",
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out"),
+            "profile": "enterprise",
+            "project": "payments",
+            "environment": "prod",
+            "execute": False,
+        },
+        headers={"Authorization": "Bearer tok-operator"},
+    )
+    assert status == 200
+    assert body["spawned"] is False
+
+    logs = sorted(audit_dir.glob("gui-audit-*.jsonl"))
+    event = json.loads(logs[-1].read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert event["role"] == "operator"
+    assert event["auth"]["source"] == "token"
+    assert event["auth"]["policy_name"] == "payments-prod"
+
+
 def test_start_endpoint_returns_500_when_audit_persist_fails(gui_server, tmp_path, monkeypatch):
     base_url, _ = gui_server
     audit_file = tmp_path / "audit-file"
@@ -381,6 +711,50 @@ def test_start_endpoint_returns_500_when_audit_persist_fails(gui_server, tmp_pat
     )
     assert status == 500
     assert body["error"]["code"] == "audit_persist_failed"
+
+
+def test_start_endpoint_scoped_policy_can_deny_token_role(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    auth_cfg = _write_auth_config(
+        tmp_path / "auth.json",
+        {
+            "tokens": {
+                "tok-dev": {"role": "developer", "subject": "svc-dev"},
+            },
+            "policies": [
+                {
+                    "name": "payments-prod",
+                    "project": "payments",
+                    "environment": "prod",
+                    "actions": {"start": ["operator"]},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("AUTODEV_GUI_AUTH_CONFIG", str(auth_cfg))
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/start",
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out"),
+            "profile": "enterprise",
+            "project": "payments",
+            "environment": "prod",
+            "execute": False,
+        },
+        headers={"Authorization": "Bearer tok-dev"},
+    )
+    assert status == 403
+    assert body["error"]["code"] == "forbidden_role"
+    assert body["error"]["auth_source"] == "token"
+    assert body["error"]["policy_allowed_roles"] == ["operator"]
 
 
 def test_resume_endpoint_requires_resumable_target(gui_server, tmp_path, monkeypatch):
@@ -428,3 +802,146 @@ def test_resume_endpoint_success_with_valid_markers(gui_server, tmp_path, monkey
     assert status == 200
     assert "--resume" in body["command"]
     assert body["resume_target"]["run_id"] == "rid-001"
+
+
+def test_stop_and_retry_endpoints_happy_path(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    fakes = [_FakeProcess(terminate_timeout=False), _FakeProcess(terminate_timeout=False)]
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fakes.pop(0)
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    start_status, start_body = _post_json(
+        f"{base_url}/api/runs/start",
+        {"prd": str(prd), "out": str(tmp_path / "out"), "profile": "enterprise", "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert start_status == 200
+    process_id = start_body["process"]["process_id"]
+
+    retry_status, retry_body = _post_json(
+        f"{base_url}/api/runs/retry",
+        {"process_id": process_id, "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert retry_status == 200
+    assert retry_body["retry_of"] == process_id
+    assert retry_body["process"]["retry_attempt"] == 2
+
+    stop_status, stop_body = _post_json(
+        f"{base_url}/api/runs/stop",
+        {"process_id": process_id, "graceful_timeout_sec": 0.1},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert stop_status == 200
+    assert stop_body["process"]["state"] in {"terminated", "exited"}
+
+
+def test_stop_endpoint_unknown_process_returns_404(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/stop",
+        {"process_id": "proc-missing", "graceful_timeout_sec": 0.1},
+        headers={"X-Autodev-Role": "developer"},
+    )
+    assert status == 404
+    assert body["error"]["code"] == "not_found"
+
+
+def test_retry_endpoint_requires_process_or_run_id(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/retry",
+        {"execute": False},
+        headers={"X-Autodev-Role": "developer"},
+    )
+    assert status == 422
+    assert body["error"]["code"] == "missing_retry_target"
+
+
+def test_process_read_endpoints_list_detail_history(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    fake = _FakeProcess(terminate_timeout=False)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    start_status, start_body = _post_json(
+        f"{base_url}/api/runs/start",
+        {"prd": str(prd), "out": str(tmp_path / "runs" / "run-read"), "profile": "enterprise", "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert start_status == 200
+    process_id = start_body["process"]["process_id"]
+
+    with request.urlopen(f"{base_url}/api/processes?limit=10", timeout=5) as resp:
+        list_body = json.loads(resp.read().decode("utf-8"))
+    assert resp.status == 200
+    assert list_body["count"] == 1
+    assert list_body["processes"][0]["process_id"] == process_id
+
+    with request.urlopen(f"{base_url}/api/processes/{process_id}", timeout=5) as resp:
+        detail_body = json.loads(resp.read().decode("utf-8"))
+    assert resp.status == 200
+    assert detail_body["run_link"]["run_id"] == "run-read"
+
+    with request.urlopen(f"{base_url}/api/processes/{process_id}/history", timeout=5) as resp:
+        history_body = json.loads(resp.read().decode("utf-8"))
+    assert resp.status == 200
+    assert history_body["process_id"] == process_id
+    assert [row["state"] for row in history_body["history"]][:2] == ["spawned", "running"]
+
+
+def test_retry_endpoint_supports_run_id_target(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    fakes = [_FakeProcess(terminate_timeout=False), _FakeProcess(terminate_timeout=False)]
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fakes.pop(0)
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    start_status, start_body = _post_json(
+        f"{base_url}/api/runs/start",
+        {"prd": str(prd), "out": str(tmp_path / "runs" / "run-by-id"), "profile": "enterprise", "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert start_status == 200
+
+    retry_status, retry_body = _post_json(
+        f"{base_url}/api/runs/retry",
+        {"run_id": "run-by-id", "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert retry_status == 200
+    assert retry_body["retry_of"] == start_body["process"]["process_id"]
+    assert retry_body["process"]["retry_root"] == start_body["process"]["retry_root"]
+    assert retry_body["process"]["retry_attempt"] == 2
