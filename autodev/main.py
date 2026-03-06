@@ -481,6 +481,11 @@ def _cli_local_simple(argv: list[str]) -> None:
         action="store_true",
         help="open the GUI URL in your default browser on startup (best-effort)",
     )
+    ap.add_argument(
+        "--run",
+        default="",
+        help="optional PRD path for immediate quick-run kickoff (spawns autodev run on startup)",
+    )
     args = ap.parse_args(argv)
 
     host = str(args.host).strip()
@@ -511,6 +516,13 @@ def _cli_local_simple(argv: list[str]) -> None:
         runs_root = Path.cwd() / runs_root
 
     gui_url = f"http://{host}:{args.port}"
+    run_prd = str(args.run).strip()
+    if run_prd:
+        run_prd_path = Path(run_prd).expanduser()
+        if not run_prd_path.is_absolute():
+            run_prd_path = (Path.cwd() / run_prd_path).resolve()
+        run_prd = str(run_prd_path)
+        os.environ["AUTODEV_GUI_DEFAULT_PRD"] = run_prd
 
     print("[gui-mvp] local-simple mode enabled")
     print("[gui-mvp] defaults: role=%s auth_config=%s" % (os.environ.get("AUTODEV_GUI_ROLE"), "disabled"))
@@ -520,6 +532,29 @@ def _cli_local_simple(argv: list[str]) -> None:
             webbrowser.open(gui_url, new=2)
         except Exception as e:
             print(f"[gui-mvp] warning: failed to open browser automatically ({e})")
+
+    if run_prd:
+        try:
+            from .gui_api import trigger_start
+
+            run_payload: dict[str, Any] = {
+                "prd": run_prd,
+                "out": str(runs_root),
+                "profile": str(os.environ.get("AUTODEV_GUI_DEFAULT_PROFILE", "")).strip() or "local_simple",
+                "interactive": False,
+            }
+            default_config = str(os.environ.get("AUTODEV_GUI_DEFAULT_CONFIG", "")).strip()
+            if default_config:
+                run_payload["config"] = default_config
+
+            run_result = trigger_start(run_payload, execute=True)
+            process_id = ""
+            if isinstance(run_result.get("process"), dict):
+                process_id = str(run_result["process"].get("process_id", "")).strip()
+            print(f"[gui-mvp] quick-run kickoff: prd={run_prd} process_id={process_id or 'n/a'}")
+        except Exception as e:
+            print(f"[gui-mvp] warning: quick-run kickoff failed ({e})")
+
     serve(host, args.port, runs_root)
 
 
