@@ -49,6 +49,21 @@ run:
     max_tokens: 500000
 
 profiles:
+  local_simple:
+    # Single-user local laptop defaults: fast feedback, low setup friction.
+    template_candidates:
+      - "python_cli"
+      - "python_fastapi"
+    validators:
+      - ruff
+      - pytest
+    security:
+      audit_required: false
+    quality_profile:
+      name: minimal
+      per_task_soft: []
+      final_soft: []
+
   enterprise:
     template_candidates:
       - "python_fastapi"

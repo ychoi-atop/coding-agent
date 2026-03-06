@@ -7,6 +7,7 @@ from uuid import uuid4
 import os
 import re
 import sys
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -20,6 +21,8 @@ from .report import write_report
 from .json_utils import json_dumps
 
 logger = logging.getLogger("autodev")
+
+_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _configure_logging() -> None:
@@ -450,11 +453,84 @@ def _cli_gui(argv: list[str]) -> None:
     serve(args.host, args.port, runs_root)
 
 
+def _cli_local_simple(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="autodev local-simple",
+        description="Run AutoDev GUI in local simple mode (localhost-first, single-user defaults)",
+    )
+    ap.add_argument("--host", default="127.0.0.1", help="bind host (default: 127.0.0.1)")
+    ap.add_argument("--port", type=int, default=8787, help="bind port (default: 8787)")
+    ap.add_argument(
+        "--runs-root",
+        default="generated_runs",
+        help="run directories root containing <run_id>/.autodev/* (default: generated_runs)",
+    )
+    ap.add_argument(
+        "--allow-non-localhost",
+        action="store_true",
+        help="allow binding local-simple mode to non-localhost host values",
+    )
+    ap.add_argument(
+        "--role",
+        default="developer",
+        choices=["evaluator", "operator", "developer"],
+        help="default GUI role used for local-simple mutating actions (default: developer)",
+    )
+    ap.add_argument(
+        "--open",
+        action="store_true",
+        help="open the GUI URL in your default browser on startup (best-effort)",
+    )
+    args = ap.parse_args(argv)
+
+    host = str(args.host).strip()
+    if not args.allow_non_localhost and host not in _LOCALHOST_HOSTS:
+        raise SystemExit(
+            "local-simple mode is localhost-first. "
+            "Use --host 127.0.0.1/localhost (or --allow-non-localhost to override)."
+        )
+
+    # Minimal-friction local defaults. Keep explicit user env values if already configured.
+    os.environ.setdefault("AUTODEV_GUI_ROLE", str(args.role))
+    os.environ.setdefault("AUTODEV_GUI_LOCAL_SIMPLE", "1")
+    if "AUTODEV_GUI_AUTH_CONFIG" not in os.environ:
+        os.environ["AUTODEV_GUI_AUTH_CONFIG"] = ""
+
+    default_config = Path.cwd() / "config.yaml"
+    if default_config.is_file():
+        os.environ.setdefault("AUTODEV_GUI_DEFAULT_CONFIG", str(default_config.resolve()))
+
+    default_prd = Path.cwd() / "examples" / "PRD.md"
+    if default_prd.is_file():
+        os.environ.setdefault("AUTODEV_GUI_DEFAULT_PRD", str(default_prd.resolve()))
+
+    from .gui_mvp_server import serve
+
+    runs_root = Path(args.runs_root).expanduser()
+    if not runs_root.is_absolute():
+        runs_root = Path.cwd() / runs_root
+
+    gui_url = f"http://{host}:{args.port}"
+
+    print("[gui-mvp] local-simple mode enabled")
+    print("[gui-mvp] defaults: role=%s auth_config=%s" % (os.environ.get("AUTODEV_GUI_ROLE"), "disabled"))
+    print(f"[gui-mvp] open: {gui_url}")
+    if args.open:
+        try:
+            webbrowser.open(gui_url, new=2)
+        except Exception as e:
+            print(f"[gui-mvp] warning: failed to open browser automatically ({e})")
+    serve(host, args.port, runs_root)
+
+
 def cli(argv: list[str] | None = None) -> None:
     _configure_logging()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if raw_argv and raw_argv[0] == "gui":
         _cli_gui(raw_argv[1:])
+        return
+    if raw_argv and raw_argv[0] in {"local-simple", "local"}:
+        _cli_local_simple(raw_argv[1:])
         return
     _cli_run(raw_argv)
 

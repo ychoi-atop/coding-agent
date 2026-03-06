@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .gui_artifact_schema import build_schema_marker, summarize_schema_markers
+from .gui_process_manager import GuiRunProcessManager
 from .run_status import normalize_run_status
 
 
@@ -18,6 +18,7 @@ CHECKPOINT_FILE = f"{AUTODEV_DIR}/checkpoint.json"
 RUN_TRACE_FILE = f"{AUTODEV_DIR}/run_trace.json"
 
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:/@+-]+$")
+_PROCESS_MANAGER = GuiRunProcessManager()
 
 
 class GuiApiError(ValueError):
@@ -65,6 +66,12 @@ def list_runs(out_root: str, limit: int = 50) -> list[dict[str, Any]]:
         started_at = _infer_started_at(run_dir, metadata)
         completed_at = _coerce_str(metadata.get("run_completed_at")) if isinstance(metadata, dict) else ""
         artifact_errors = [err for err in [metadata_error, checkpoint_error] if err]
+        schema_versions, schema_warnings = summarize_schema_markers(
+            {
+                "run_metadata": metadata,
+                "checkpoint": checkpoint,
+            }
+        )
 
         rows.append(
             {
@@ -78,6 +85,8 @@ def list_runs(out_root: str, limit: int = 50) -> list[dict[str, Any]]:
                 "started_at": started_at,
                 "completed_at": completed_at,
                 "artifact_errors": artifact_errors,
+                "artifact_schema_versions": schema_versions,
+                "artifact_schema_warnings": schema_warnings,
             }
         )
 
@@ -102,6 +111,13 @@ def get_run_detail(out_root: str, run_key: str) -> dict[str, Any]:
 
     status = _derive_status(metadata, checkpoint)
     artifact_errors = [err for err in [metadata_error, checkpoint_error, run_trace_error] if err]
+    schema_versions, schema_warnings = summarize_schema_markers(
+        {
+            "run_metadata": metadata,
+            "checkpoint": checkpoint,
+            "run_trace": run_trace,
+        }
+    )
     return {
         "run_id": _coerce_str((metadata or {}).get("run_id")) or run_dir.name,
         "run_name": run_dir.name,
@@ -111,6 +127,8 @@ def get_run_detail(out_root: str, run_key: str) -> dict[str, Any]:
         "checkpoint": checkpoint,
         "run_trace": run_trace,
         "artifact_errors": artifact_errors,
+        "artifact_schema_versions": schema_versions,
+        "artifact_schema_warnings": schema_warnings,
     }
 
 
@@ -158,6 +176,13 @@ def read_artifact(
     }
     if parse_error:
         result["error"] = parse_error
+
+    artifact_name = _artifact_name_from_path(safe_rel)
+    if artifact_name is not None:
+        marker, warning = build_schema_marker(artifact_name, content)
+        result["artifact_schema"] = marker
+        if warning is not None:
+            result["warning"] = warning
 
     return result
 
@@ -274,6 +299,89 @@ def trigger_resume(payload: Mapping[str, Any], *, execute: bool = False) -> dict
     return _trigger(payload, resume=True, execute=execute)
 
 
+def trigger_stop(payload: Mapping[str, Any], *, graceful_timeout_sec: float = 2.0) -> dict[str, Any]:
+    process_id = _required_str(payload, "process_id")
+    if graceful_timeout_sec <= 0:
+        raise GuiApiError("'graceful_timeout_sec' must be greater than zero")
+    try:
+        process = _PROCESS_MANAGER.stop(process_id, graceful_timeout_sec=graceful_timeout_sec)
+    except KeyError as exc:
+        raise FileNotFoundError(f"Unknown process_id: {process_id}") from exc
+
+    return {
+        "ok": True,
+        "stopped": process.get("state") in {"terminated", "killed", "exited"},
+        "process": process,
+        "audit_event": {
+            "action": "stop",
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "process_id": process_id,
+            "graceful_timeout_sec": graceful_timeout_sec,
+            "result_state": process.get("state"),
+        },
+    }
+
+
+def trigger_retry(payload: Mapping[str, Any], *, execute: bool = False) -> dict[str, Any]:
+    process_id = _optional_str(payload, "process_id")
+    run_id = _optional_str(payload, "run_id")
+    if not process_id and not run_id:
+        raise GuiApiError("'process_id' or 'run_id' is required")
+
+    try:
+        result = _PROCESS_MANAGER.retry(process_id=process_id, run_id=run_id, execute=execute)
+    except KeyError as exc:
+        if process_id:
+            raise FileNotFoundError(f"Unknown process_id: {process_id}") from exc
+        raise FileNotFoundError(f"Unknown run_id: {run_id}") from exc
+
+    retry_of = result.get("retry_of")
+    event = {
+        "action": "retry",
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "process_id": process_id,
+        "run_id": run_id,
+        "retry_of": retry_of,
+        "spawned": result.get("spawned", False),
+    }
+    if isinstance(result.get("process"), dict):
+        event["new_process_id"] = result["process"].get("process_id")
+        event["retry_root"] = result["process"].get("retry_root")
+        event["retry_attempt"] = result["process"].get("retry_attempt")
+
+    result["audit_event"] = event
+    return result
+
+
+def list_processes(*, limit: int = 100, state: str | None = None, run_id: str | None = None) -> dict[str, Any]:
+    rows = _PROCESS_MANAGER.list(limit=limit, state=state, run_id=run_id)
+    return {"processes": rows, "count": len(rows)}
+
+
+def get_process_detail(process_id: str) -> dict[str, Any]:
+    process = _PROCESS_MANAGER.get(process_id)
+    if process is None:
+        raise FileNotFoundError(f"Unknown process_id: {process_id}")
+    return process
+
+
+def get_process_history(process_id: str) -> dict[str, Any]:
+    process = _PROCESS_MANAGER.get(process_id)
+    if process is None:
+        raise FileNotFoundError(f"Unknown process_id: {process_id}")
+    try:
+        transitions = _PROCESS_MANAGER.history(process_id)
+    except KeyError as exc:
+        raise FileNotFoundError(f"Unknown process_id: {process_id}") from exc
+    return {
+        "process_id": process_id,
+        "state": process.get("state"),
+        "retry_root": process.get("retry_root"),
+        "retry_attempt": process.get("retry_attempt"),
+        "history": transitions,
+    }
+
+
 def _trigger(
     payload: Mapping[str, Any],
     *,
@@ -290,18 +398,22 @@ def _trigger(
     if not execute:
         return {"ok": True, "spawned": False, "command": cmd, "audit_event": event}
 
-    proc = subprocess.Popen(  # noqa: S603 - shell=False and sanitized args
-        cmd,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
+    payload_dict = dict(payload)
+    run_link = {"out": payload_dict.get("out", "")}
+    process = _PROCESS_MANAGER.spawn(
+        action=event["action"],
+        payload=payload_dict,
+        command=cmd,
+        run_link=run_link,
     )
+    event["process_id"] = process.get("process_id")
+    event["state"] = process.get("state")
+
     return {
         "ok": True,
         "spawned": True,
-        "pid": proc.pid,
+        "pid": process.get("pid"),
+        "process": process,
         "command": cmd,
         "audit_event": event,
     }
@@ -310,6 +422,11 @@ def _trigger(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _reset_process_manager_for_tests() -> None:
+    global _PROCESS_MANAGER
+    _PROCESS_MANAGER = GuiRunProcessManager()
 
 
 def _read_json_optional(path: Path) -> dict[str, Any] | None:
@@ -400,6 +517,18 @@ def _normalize_artifact_path(artifact_rel_path: str) -> Path:
     if not str(candidate).startswith(f"{AUTODEV_DIR}/"):
         raise GuiApiError("artifact path must stay under .autodev/")
     return candidate
+
+
+def _artifact_name_from_path(path: Path) -> str | None:
+    filename = path.name
+    mapping = {
+        "run_metadata.json": "run_metadata",
+        "checkpoint.json": "checkpoint",
+        "run_trace.json": "run_trace",
+        "task_quality_index.json": "task_quality_index",
+        "task_final_last_validation.json": "task_final_last_validation",
+    }
+    return mapping.get(filename)
 
 
 def _parse_command_request(payload: Mapping[str, Any]) -> RunCommandRequest:
