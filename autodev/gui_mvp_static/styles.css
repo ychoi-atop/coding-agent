@@ -435,6 +435,26 @@ section { margin-bottom: 16px; }
   color: #166534;
 }
 
+.health-banner {
+  margin-bottom: 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 6px 10px;
+}
+.health-banner.is-healthy {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+.health-banner.is-warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
 .run-controls-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

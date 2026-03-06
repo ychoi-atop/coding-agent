@@ -18,7 +18,9 @@ const state = {
   compareRightId: null,
   comparePayload: null,
   compareSource: '',
+  compareManualSelection: false,
   guiContext: null,
+  healthSnapshot: null,
   lastProcessId: '',
   trendPayload: null,
 };
@@ -500,6 +502,54 @@ function updateQuickRunHint() {
   node.classList.remove('error-text');
 }
 
+function renderHealthBanner(snapshot) {
+  const banner = el('localHealthBanner');
+  if (!banner) return;
+
+  const gatewayOk = snapshot?.gateway_ok === true;
+  const model = normalizeLocalPath(snapshot?.model);
+  const contextOk = snapshot?.context_ok === true;
+  const mode = normalizeLocalPath(snapshot?.mode) || 'unknown';
+
+  banner.textContent = [
+    `Gateway: ${gatewayOk ? 'OK' : 'Unavailable'}`,
+    `Model: ${model || 'Unknown'}`,
+    `Context: ${contextOk ? 'OK' : 'Unavailable'} (${mode})`,
+  ].join(' • ');
+
+  banner.classList.toggle('is-healthy', gatewayOk && contextOk);
+  banner.classList.toggle('is-warning', !gatewayOk || !contextOk || !model);
+}
+
+async function refreshHealthBanner() {
+  let gatewayOk = false;
+  if (state.useMock) {
+    gatewayOk = true;
+  } else {
+    try {
+      const payload = await fetchJson('/healthz');
+      gatewayOk = Boolean(payload?.ok);
+    } catch {
+      gatewayOk = false;
+    }
+  }
+
+  const model = firstNonEmpty([
+    state.detail?.model,
+    state.selectedRun?.model,
+    state.runs?.[0]?.model,
+  ]);
+
+  const snapshot = {
+    gateway_ok: gatewayOk,
+    model,
+    context_ok: Boolean(state.guiContext),
+    mode: state.guiContext?.mode || 'unknown',
+  };
+  state.healthSnapshot = snapshot;
+  renderHealthBanner(snapshot);
+}
+
 function buildRunPayload(action) {
   const payload = {
     execute: Boolean(el('controlExecute')?.checked),
@@ -930,7 +980,7 @@ function renderValidationPanels(detail) {
   }
 }
 
-function initComparisonState() {
+function initComparisonState({ forceLatest = false } = {}) {
   const ids = state.runs.map((run) => run.run_id).filter(Boolean);
   if (!ids.length) {
     state.compareLeftId = null;
@@ -938,13 +988,20 @@ function initComparisonState() {
     return;
   }
 
-  if (!state.compareLeftId || !ids.includes(state.compareLeftId)) {
-    state.compareLeftId = ids[0];
+  const existingValid =
+    !forceLatest
+    && state.compareLeftId
+    && state.compareRightId
+    && ids.includes(state.compareLeftId)
+    && ids.includes(state.compareRightId)
+    && state.compareLeftId !== state.compareRightId;
+
+  if (existingValid) {
+    return;
   }
 
-  if (!state.compareRightId || !ids.includes(state.compareRightId)) {
-    state.compareRightId = ids.find((id) => id !== state.compareLeftId) || ids[0];
-  }
+  state.compareLeftId = ids[0] || null;
+  state.compareRightId = ids.length >= 2 ? ids[1] : null;
 }
 
 function refreshCompareRunOptions() {
@@ -979,8 +1036,15 @@ function refreshCompareRunOptions() {
     right.appendChild(rightOpt);
   });
 
+  if (state.compareRightId === null) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select second run';
+    right.insertBefore(placeholder, right.firstChild);
+  }
+
   left.value = state.compareLeftId || state.runs[0].run_id;
-  right.value = state.compareRightId || state.runs[0].run_id;
+  right.value = state.compareRightId || '';
 }
 
 function toComparisonSummary(detail) {
@@ -1198,7 +1262,7 @@ function renderComparison(payload, { source = state.compareSource, error = '' } 
 
 async function refreshComparison({ silent = false } = {}) {
   if (!state.compareLeftId || !state.compareRightId) {
-    renderComparison(null);
+    renderComparison(null, { error: 'Need at least two runs to compare.' });
     return;
   }
 
@@ -1286,10 +1350,11 @@ async function loadRuns() {
     state.selectedRun = mock.runs[0];
     renderRuns(state.runs);
     renderDetail(mock.details[state.selectedRunId] || { run_id: state.selectedRunId, status: 'unknown' });
-    initComparisonState();
+    initComparisonState({ forceLatest: !state.compareManualSelection });
     refreshCompareRunOptions();
     await refreshComparison({ silent: true });
     await refreshTrends({ silent: true });
+    await refreshHealthBanner();
     el('statusLine').textContent = 'Mock mode enabled (?mock=1).';
     setupPolling();
     return;
@@ -1309,10 +1374,11 @@ async function loadRuns() {
       renderDetail({ run_id: '-', status: 'unknown', phase_timeline: [], tasks: [], blockers: [] });
     }
 
-    initComparisonState();
+    initComparisonState({ forceLatest: !state.compareManualSelection });
     refreshCompareRunOptions();
     await refreshComparison({ silent: true });
     await refreshTrends({ silent: true });
+    await refreshHealthBanner();
     setupPolling();
   } catch (err) {
     el('statusLine').textContent = `Failed to load runs. Try ?mock=1 (${err.message})`;
@@ -1321,6 +1387,7 @@ async function loadRuns() {
     refreshCompareRunOptions();
     renderComparison(null, { error: 'Unable to load runs for comparison.' });
     renderTrends(null);
+    await refreshHealthBanner();
     setupPolling();
   }
 }
@@ -1336,6 +1403,12 @@ function renderDetail(detail) {
   renderTasks(detail.tasks || []);
   renderBlockers(detail.blockers || []);
   renderValidationPanels(detail);
+  renderHealthBanner({
+    ...(state.healthSnapshot || {}),
+    model: firstNonEmpty([detail?.model, state.healthSnapshot?.model]),
+    context_ok: Boolean(state.guiContext),
+    mode: state.guiContext?.mode || 'unknown',
+  });
 }
 
 async function selectRun(runId, options = { rerenderList: true }) {
@@ -1452,6 +1525,7 @@ async function loadGuiContext() {
   }
 
   updateQuickRunHint();
+  await refreshHealthBanner();
 }
 
 async function runControlAction(action, payloadOverride = null) {
@@ -1642,16 +1716,19 @@ function initCompareControls() {
   if (!left || !right || !swap || !refresh) return;
 
   left.addEventListener('change', async () => {
+    state.compareManualSelection = true;
     state.compareLeftId = left.value;
     await refreshComparison();
   });
 
   right.addEventListener('change', async () => {
+    state.compareManualSelection = true;
     state.compareRightId = right.value;
     await refreshComparison();
   });
 
   swap.addEventListener('click', async () => {
+    state.compareManualSelection = true;
     const prevLeft = state.compareLeftId;
     state.compareLeftId = state.compareRightId;
     state.compareRightId = prevLeft;

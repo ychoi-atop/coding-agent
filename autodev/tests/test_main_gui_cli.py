@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import autodev.main as main  # noqa: E402
+import autodev.gui_api as gui_api  # noqa: E402
 import autodev.gui_mvp_server as gui_server  # noqa: E402
 
 
@@ -174,3 +175,83 @@ def test_cli_local_simple_open_failure_is_non_fatal(monkeypatch, tmp_path: Path)
     main.os.environ.pop("AUTODEV_GUI_ROLE", None)
     main.os.environ.pop("AUTODEV_GUI_LOCAL_SIMPLE", None)
     main.os.environ.pop("AUTODEV_GUI_AUTH_CONFIG", None)
+
+
+def test_cli_local_simple_run_flag_triggers_quick_run_kickoff(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_serve(host: str, port: int, runs_root: Path) -> None:
+        captured["served"] = (host, port, runs_root)
+
+    def _fake_trigger_start(payload: dict[str, object], *, execute: bool = False) -> dict[str, object]:
+        captured["payload"] = dict(payload)
+        captured["execute"] = execute
+        return {"ok": True, "spawned": True, "process": {"process_id": "proc-quick-001"}}
+
+    monkeypatch.setattr(gui_server, "serve", _fake_serve)
+    monkeypatch.setattr(gui_api, "trigger_start", _fake_trigger_start)
+
+    prd = tmp_path / "docs" / "PRD_PHASE3.md"
+    prd.parent.mkdir(parents=True, exist_ok=True)
+    prd.write_text("# PRD\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("profiles: {}\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "autodev",
+            "local-simple",
+            "--run",
+            str(prd),
+            "--runs-root",
+            "generated_runs",
+        ],
+    )
+
+    main.cli()
+
+    assert captured["served"] == ("127.0.0.1", 8787, tmp_path / "generated_runs")
+    assert captured["execute"] is True
+    assert captured["payload"]["prd"] == str(prd.resolve())
+    assert captured["payload"]["out"] == str((tmp_path / "generated_runs").resolve())
+    assert captured["payload"]["profile"] == "local_simple"
+    assert captured["payload"]["interactive"] is False
+    assert captured["payload"]["config"] == str((tmp_path / "config.yaml").resolve())
+    assert main.os.environ["AUTODEV_GUI_DEFAULT_PRD"] == str(prd.resolve())
+
+    main.os.environ.pop("AUTODEV_GUI_ROLE", None)
+    main.os.environ.pop("AUTODEV_GUI_LOCAL_SIMPLE", None)
+    main.os.environ.pop("AUTODEV_GUI_AUTH_CONFIG", None)
+    main.os.environ.pop("AUTODEV_GUI_DEFAULT_CONFIG", None)
+    main.os.environ.pop("AUTODEV_GUI_DEFAULT_PRD", None)
+
+
+def test_cli_local_simple_run_kickoff_failure_is_non_fatal(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_serve(host: str, port: int, runs_root: Path) -> None:
+        captured["served"] = (host, port, runs_root)
+
+    def _failing_trigger_start(payload: dict[str, object], *, execute: bool = False) -> dict[str, object]:  # noqa: ARG001
+        raise RuntimeError("spawn failed")
+
+    monkeypatch.setattr(gui_server, "serve", _fake_serve)
+    monkeypatch.setattr(gui_api, "trigger_start", _failing_trigger_start)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD\n", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["autodev", "local-simple", "--run", str(prd)])
+
+    main.cli()
+
+    assert captured["served"] == ("127.0.0.1", 8787, tmp_path / "generated_runs")
+
+    main.os.environ.pop("AUTODEV_GUI_ROLE", None)
+    main.os.environ.pop("AUTODEV_GUI_LOCAL_SIMPLE", None)
+    main.os.environ.pop("AUTODEV_GUI_AUTH_CONFIG", None)
+    main.os.environ.pop("AUTODEV_GUI_DEFAULT_CONFIG", None)
+    main.os.environ.pop("AUTODEV_GUI_DEFAULT_PRD", None)
