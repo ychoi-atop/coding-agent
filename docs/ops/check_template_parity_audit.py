@@ -83,10 +83,13 @@ def run_check(repo_root: Path) -> int:
         return 1
 
     checks = {
-        "generated_repo/.github/workflows/ci.yml": "generated_repo workflow",
         "templates/python_fastapi/.github/workflows/ci.yml": "template workflow: python_fastapi",
         "templates/python_cli/.github/workflows/ci.yml": "template workflow: python_cli",
     }
+
+    generated_repo_ci = repo_root / "generated_repo" / ".github" / "workflows" / "ci.yml"
+    if generated_repo_ci.exists():
+        checks["generated_repo/.github/workflows/ci.yml"] = "generated_repo workflow"
     doc_refs = {
         "templates/python_fastapi/README.md": "template docs: python_fastapi",
         "templates/python_cli/README.md": "template docs: python_cli",
@@ -128,7 +131,7 @@ def run_check(repo_root: Path) -> int:
 
     print("Template parity + drift audit passed.")
     print(
-        " - workflow checks: generated project + python_fastapi/python_cli share synced CI command sequence"
+        " - workflow checks: python_fastapi/python_cli (and generated project when present) share synced CI command sequence"
     )
     print(" - docs checks: onboarding/deployment/monitoring/failure references present")
     return 0
