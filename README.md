@@ -435,6 +435,8 @@ Autonomous artifacts are written under the run directory:
 See `docs/AUTONOMOUS_MODE.md` for detailed policy and operational behavior.
 For commercial-grade autonomous delivery strategy and rollout governance, see `docs/AUTONOMOUS_COMMERCIAL_PLAN.md`.
 
+Update (v1b, 2026-03-07): autonomous commercial rollout references were refreshed across README/onboarding/autonomous-mode docs for easier operator discovery.
+
 ### GUI launcher (MVP)
 Hardened/default mode:
 ```bash
