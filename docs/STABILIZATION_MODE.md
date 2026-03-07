@@ -95,6 +95,8 @@ All must be true:
 
 ## Related docs
 
+- `docs/STATUS_BOARD_CURRENT.md`
+- `docs/STABILIZATION_48H_CHECKLIST.md`
 - `docs/RELEASE_NOTES_SHOWOFF_LOCAL_V2.md`
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`

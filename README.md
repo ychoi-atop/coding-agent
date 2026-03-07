@@ -497,10 +497,15 @@ Known limits (MVP):
 - Process control is best-effort (depends on tracked process lifecycle).
 - JSON artifact schema is not versioned yet; breaking changes may require GUI updates.
 
-Next-week planning bundle (active):
+Stabilization handoff bundle (active):
+- `docs/STATUS_BOARD_CURRENT.md`
+- `docs/STABILIZATION_48H_CHECKLIST.md`
+- `docs/STABILIZATION_MODE.md`
+- `docs/DEMO_PLAYBOOK.md`
+
+Next-wave planning/governance docs:
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
-- `docs/DEMO_PLAYBOOK.md`
 - `docs/AUTONOMOUS_COMMERCIAL_PLAN.md` (commercial autonomous rollout strategy)
 
 Legacy showoff planning docs (reference/archive):
