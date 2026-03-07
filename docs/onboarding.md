@@ -6,14 +6,27 @@
 
 ## 2) One-time local setup
 
-Recommended (idempotent bootstrap):
+Recommended (idempotent demo bootstrap):
 
 ```bash
 # from repo root
+make demo-bootstrap
+```
+
+Equivalent direct command:
+
+```bash
 bash scripts/demo_bootstrap.sh
 ```
 
-> Note: `scripts/demo_bootstrap.sh` enforces Python 3.11+ for demo reliability.
+`demo-bootstrap` performs setup + fixture seed + local-simple launch/health checks and then exits.
+To keep local-simple running for a live demo session:
+
+```bash
+make demo-bootstrap-serve
+```
+
+> Note: `scripts/demo_bootstrap.sh` enforces Python 3.11+ and expects `curl` in PATH.
 
 Manual setup:
 

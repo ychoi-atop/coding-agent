@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks check-docs benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks check-docs benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
@@ -94,6 +94,14 @@ perf-compare-smoke:
 # Generate local demo-day scorecard markdown/json artifacts.
 demo-scorecard:
 	$(PYTHON) scripts/demo_scorecard.py --runs-root ./generated_runs --output-dir ./artifacts/demo-day --latest 5
+
+# One-command demo bootstrap sanity lane (seed fixtures + launch local-simple + health checks).
+demo-bootstrap:
+	bash scripts/demo_bootstrap.sh
+
+# Keep local-simple running after bootstrap sanity checks.
+demo-bootstrap-serve:
+	bash scripts/demo_bootstrap.sh --serve --open
 
 # Validate template CI workflow and docs parity against shared contract.
 check-template:

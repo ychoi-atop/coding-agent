@@ -20,8 +20,12 @@ References:
 
 ### Environment
 - [ ] `python --version` is 3.11+
-- [ ] Dependencies installed (`pip install -r requirements.txt`)
+- [ ] `make` and `curl` are available in PATH
 - [ ] Port `8787` is free (or decide alternate port)
+- [ ] Run one-command bootstrap sanity lane:
+  - `make demo-bootstrap`
+  - (equivalent) `bash scripts/demo_bootstrap.sh`
+- [ ] If you want demo server to stay up after checks: `make demo-bootstrap-serve`
 
 ### Data
 - [ ] At least 3 runs available (`ok`, `failed`, `running/partial`) in runs root

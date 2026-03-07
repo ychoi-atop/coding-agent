@@ -41,10 +41,27 @@ This keeps prompt payload lightweight while preserving required execution contex
 
 Recommended (demo bootstrap, idempotent):
 ```bash
+make demo-bootstrap
+```
+
+Equivalent direct command:
+```bash
 bash scripts/demo_bootstrap.sh
 ```
 
-> Note: the bootstrap script enforces Python 3.11+ for reliable demo checks.
+This one-command lane will:
+1) create/reuse `.venv` and install dependencies,
+2) seed deterministic demo fixtures into `./generated_runs`,
+3) launch `autodev local-simple`,
+4) verify `/healthz`, `/api/runs`, and `/api/gui/context`, then stop server (check-only mode).
+
+To keep the server running after checks:
+```bash
+make demo-bootstrap-serve
+# or: bash scripts/demo_bootstrap.sh --serve --open
+```
+
+> Prerequisites for demo bootstrap: Python 3.11+, `make`, and `curl` available in PATH.
 
 Manual setup:
 ```bash
