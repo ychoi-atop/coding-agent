@@ -26,6 +26,7 @@ logger = logging.getLogger("autodev")
 AUTONOMOUS_STATE_FILE = ".autodev/autonomous_state.json"
 AUTONOMOUS_REPORT_JSON = ".autodev/autonomous_report.json"
 AUTONOMOUS_REPORT_MD = "AUTONOMOUS_REPORT.md"
+AUTONOMOUS_GATE_RESULTS_JSON = ".autodev/autonomous_gate_results.json"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,229 @@ class AutonomousQualityGatePolicy:
     tests: AutonomousTestsGateThresholds | None = None
     security: AutonomousSecurityGateThresholds | None = None
     performance: AutonomousPerformanceGateThresholds | None = None
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_validation_rows(last_validation: Any) -> list[dict[str, Any]]:
+    if not isinstance(last_validation, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in last_validation:
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _estimate_security_high_findings(row: dict[str, Any]) -> int:
+    diagnostics = row.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        direct = _as_int(diagnostics.get("high_findings"))
+        if direct is not None and direct >= 0:
+            return direct
+        sev_counts = diagnostics.get("severity_counts")
+        if isinstance(sev_counts, dict):
+            sev_high = _as_int(sev_counts.get("high"))
+            if sev_high is not None and sev_high >= 0:
+                return sev_high
+
+    text = f"{row.get('stdout', '')}\n{row.get('stderr', '')}".lower()
+    for pattern in [r"high\s*[:=]\s*(\d+)", r"high findings\s*[:=]\s*(\d+)"]:
+        m = re.search(pattern, text)
+        if m:
+            parsed = _as_int(m.group(1))
+            if parsed is not None and parsed >= 0:
+                return parsed
+
+    return 1 if row.get("ok") is False else 0
+
+
+def _extract_performance_regression_pct(ws: Workspace, validation_rows: list[dict[str, Any]]) -> tuple[float | None, str]:
+    if ws.exists(".autodev/perf_baseline.json"):
+        try:
+            raw = ws.read_text(".autodev/perf_baseline.json")
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                last_check = payload.get("last_check_result")
+                if isinstance(last_check, dict):
+                    verdicts = last_check.get("verdicts")
+                    if isinstance(verdicts, list) and verdicts:
+                        ratios: list[float] = []
+                        for verdict in verdicts:
+                            if not isinstance(verdict, dict):
+                                continue
+                            ratio = _as_float(verdict.get("ratio"))
+                            if ratio is None:
+                                continue
+                            if ratio > 0:
+                                ratios.append(ratio * 100.0)
+                        if ratios:
+                            return max(ratios), "perf_baseline.last_check_result.verdicts"
+        except Exception:
+            pass
+
+    fallback: list[float] = []
+    for row in validation_rows:
+        diagnostics = row.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            continue
+        for key in ("regression_pct", "performance_regression_pct", "max_regression_pct"):
+            value = _as_float(diagnostics.get(key))
+            if value is not None and value >= 0:
+                fallback.append(value)
+    if fallback:
+        return max(fallback), "final_validation.diagnostics"
+
+    return None, "unavailable"
+
+
+def _evaluate_quality_gates(
+    *,
+    ws: Workspace,
+    policy: AutonomousQualityGatePolicy,
+    last_validation: Any,
+) -> dict[str, Any]:
+    validation_rows = _coerce_validation_rows(last_validation)
+    gates: dict[str, Any] = {}
+    fail_reasons: list[dict[str, Any]] = []
+
+    tests_cfg = policy.tests
+    if tests_cfg is None or tests_cfg.min_pass_rate is None:
+        gates["tests"] = {"status": "not_configured"}
+    else:
+        pytest_rows = [row for row in validation_rows if str(row.get("name")) == "pytest"]
+        if not pytest_rows:
+            gates["tests"] = {
+                "status": "skipped",
+                "threshold": {"min_pass_rate": tests_cfg.min_pass_rate},
+                "observed": {"pass_rate": None, "sample_size": 0},
+                "signal_source": "final_validation.pytest",
+                "note": "pytest signal unavailable",
+            }
+        else:
+            passed = sum(1 for row in pytest_rows if row.get("ok") is True)
+            total = len(pytest_rows)
+            pass_rate = passed / total
+            gate_ok = pass_rate >= tests_cfg.min_pass_rate
+            gates["tests"] = {
+                "status": "passed" if gate_ok else "failed",
+                "threshold": {"min_pass_rate": tests_cfg.min_pass_rate},
+                "observed": {"pass_rate": pass_rate, "passed": passed, "sample_size": total},
+                "signal_source": "final_validation.pytest",
+            }
+            if not gate_ok:
+                fail_reasons.append(
+                    {
+                        "type": "quality_gate_failed",
+                        "gate": "tests",
+                        "code": "tests.min_pass_rate_not_met",
+                        "message": "Pytest pass rate below configured threshold.",
+                        "threshold": {"min_pass_rate": tests_cfg.min_pass_rate},
+                        "observed": {"pass_rate": pass_rate, "passed": passed, "sample_size": total},
+                    }
+                )
+
+    security_cfg = policy.security
+    if security_cfg is None or security_cfg.max_high_findings is None:
+        gates["security"] = {"status": "not_configured"}
+    else:
+        security_validators = {"bandit", "semgrep", "pip_audit"}
+        security_rows = [row for row in validation_rows if str(row.get("name")) in security_validators]
+        if not security_rows:
+            gates["security"] = {
+                "status": "skipped",
+                "threshold": {"max_high_findings": security_cfg.max_high_findings},
+                "observed": {"high_findings": None, "sample_size": 0},
+                "signal_source": "final_validation.security_validators",
+                "note": "security signal unavailable",
+            }
+        else:
+            high_findings = sum(_estimate_security_high_findings(row) for row in security_rows)
+            gate_ok = high_findings <= security_cfg.max_high_findings
+            gates["security"] = {
+                "status": "passed" if gate_ok else "failed",
+                "threshold": {"max_high_findings": security_cfg.max_high_findings},
+                "observed": {"high_findings": high_findings, "sample_size": len(security_rows)},
+                "signal_source": "final_validation.security_validators",
+            }
+            if not gate_ok:
+                fail_reasons.append(
+                    {
+                        "type": "quality_gate_failed",
+                        "gate": "security",
+                        "code": "security.max_high_findings_exceeded",
+                        "message": "Estimated high severity findings exceeded configured threshold.",
+                        "threshold": {"max_high_findings": security_cfg.max_high_findings},
+                        "observed": {"high_findings": high_findings, "sample_size": len(security_rows)},
+                    }
+                )
+
+    performance_cfg = policy.performance
+    if performance_cfg is None or performance_cfg.max_regression_pct is None:
+        gates["performance"] = {"status": "not_configured"}
+    else:
+        observed_regression_pct, signal_source = _extract_performance_regression_pct(ws, validation_rows)
+        if observed_regression_pct is None:
+            gates["performance"] = {
+                "status": "skipped",
+                "threshold": {"max_regression_pct": performance_cfg.max_regression_pct},
+                "observed": {"regression_pct": None},
+                "signal_source": signal_source,
+                "note": "performance regression signal unavailable",
+            }
+        else:
+            gate_ok = observed_regression_pct <= performance_cfg.max_regression_pct
+            gates["performance"] = {
+                "status": "passed" if gate_ok else "failed",
+                "threshold": {"max_regression_pct": performance_cfg.max_regression_pct},
+                "observed": {"regression_pct": observed_regression_pct},
+                "signal_source": signal_source,
+            }
+            if not gate_ok:
+                fail_reasons.append(
+                    {
+                        "type": "quality_gate_failed",
+                        "gate": "performance",
+                        "code": "performance.max_regression_pct_exceeded",
+                        "message": "Performance regression exceeded configured threshold.",
+                        "threshold": {"max_regression_pct": performance_cfg.max_regression_pct},
+                        "observed": {"regression_pct": observed_regression_pct},
+                    }
+                )
+
+    passed = len(fail_reasons) == 0
+    return {
+        "evaluated_at": _utc_now(),
+        "passed": passed,
+        "gates": gates,
+        "fail_reasons": fail_reasons,
+    }
 
 
 def _utc_now() -> str:
@@ -411,8 +635,40 @@ def _write_state(ws: Workspace, state: dict[str, Any]) -> None:
     ws.write_text(AUTONOMOUS_STATE_FILE, json_dumps(state))
 
 
+def _write_gate_results_artifact(
+    ws: Workspace,
+    *,
+    policy: AutonomousQualityGatePolicy,
+    attempts: list[dict[str, Any]],
+) -> None:
+    gate_attempts = []
+    for item in attempts:
+        if not isinstance(item, dict):
+            continue
+        gate_results = item.get("gate_results")
+        if not isinstance(gate_results, dict):
+            continue
+        gate_attempts.append(
+            {
+                "iteration": item.get("iteration"),
+                "ok": bool(item.get("ok")),
+                "gate_results": gate_results,
+                "reason": item.get("reason"),
+            }
+        )
+
+    payload = {
+        "updated_at": _utc_now(),
+        "policy": asdict(policy),
+        "attempts": gate_attempts,
+    }
+    ws.write_text(AUTONOMOUS_GATE_RESULTS_JSON, json_dumps(payload))
+
+
 def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> tuple[dict[str, Any], str]:
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    gate_attempts = [a for a in attempts if isinstance(a, dict) and isinstance(a.get("gate_results"), dict)]
+    latest_gate_results = gate_attempts[-1].get("gate_results") if gate_attempts else None
     report = {
         "mode": "autonomous_v1",
         "ok": ok,
@@ -423,7 +679,15 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         "iterations_total": len(attempts),
         "iterations_ok": len([a for a in attempts if isinstance(a, dict) and a.get("ok") is True]),
         "iterations_failed": len([a for a in attempts if isinstance(a, dict) and a.get("ok") is False]),
+        "iterations_gate_failed": len([
+            a
+            for a in gate_attempts
+            if isinstance(a, dict)
+            and isinstance(a.get("gate_results"), dict)
+            and a["gate_results"].get("passed") is False
+        ]),
         "policy": state.get("policy"),
+        "gate_results": latest_gate_results,
         "last_validation": last_validation,
         "attempts": attempts,
         "completed_at": _utc_now(),
@@ -443,11 +707,23 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
     for item in attempts:
         if not isinstance(item, dict):
             continue
+        gate_results = item.get("gate_results") if isinstance(item.get("gate_results"), dict) else None
+        gate_text = ""
+        if gate_results is not None:
+            gate_text = f", gate={'PASS' if gate_results.get('passed') else 'FAIL'}"
         md.append(
             f"- Iteration {item.get('iteration')}: "
             f"`{'OK' if item.get('ok') else 'FAILED'}` "
-            f"(resume={item.get('resume')}, reason={item.get('reason', '-')})"
+            f"(resume={item.get('resume')}, reason={item.get('reason', '-')}{gate_text})"
         )
+
+    if isinstance(report.get("gate_results"), dict):
+        md.append("")
+        md.append("## Latest Quality Gate Results")
+        md.append("```json")
+        md.append(json_dumps(report["gate_results"]))
+        md.append("```")
+
     md.append("")
     return report, "\n".join(md)
 
@@ -720,6 +996,20 @@ def _start(argv: list[str]) -> None:
             workflow_error = e
             ok = False
 
+        gate_results: dict[str, Any] | None = None
+        if workflow_error is None and quality_gate_policy is not None:
+            gate_results = _evaluate_quality_gates(
+                ws=ws,
+                policy=quality_gate_policy,
+                last_validation=last_validation,
+            )
+            attempt_record["gate_results"] = gate_results
+            if gate_results.get("passed") is False:
+                ok = False
+                attempt_record["quality_gate_failed"] = True
+                attempt_record["quality_gate_fail_reasons"] = gate_results.get("fail_reasons", [])
+                attempt_record["reason"] = "quality_gate_failed"
+
         attempt_record["ended_at"] = _utc_now()
         attempt_record["ok"] = ok
         if workflow_error is not None:
@@ -729,6 +1019,11 @@ def _start(argv: list[str]) -> None:
             attempts = []
             state["attempts"] = attempts
         attempts.append(attempt_record)
+
+        if gate_results is not None:
+            state["last_gate_results"] = gate_results
+            _write_gate_results_artifact(ws, policy=quality_gate_policy, attempts=attempts)
+
         _write_state(ws, state)
 
         if ok:

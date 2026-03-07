@@ -429,7 +429,8 @@ autodev autonomous status --run-dir ./generated_runs/<run_dir>
 
 Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_state.json`
-- `.autodev/autonomous_report.json`
+- `.autodev/autonomous_report.json` (includes latest `gate_results` when configured)
+- `.autodev/autonomous_gate_results.json` (per-iteration quality gate evaluations)
 - `AUTONOMOUS_REPORT.md`
 - `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 

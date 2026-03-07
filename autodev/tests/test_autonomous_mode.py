@@ -156,6 +156,153 @@ def test_autonomous_start_records_quality_gate_policy_in_metadata_and_state(tmp_
     assert state["policy"]["quality_gate_policy"] == expected_policy
 
 
+def test_autonomous_quality_gate_failure_triggers_retry_and_records_typed_reason(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path, include_quality_gate_policy=True)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    calls = 0
+
+    async def _fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return (
+                True,
+                {"project": {}},
+                {"tasks": []},
+                [
+                    {
+                        "name": "pytest",
+                        "ok": False,
+                        "status": "failed",
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": "tests failed",
+                        "diagnostics": {},
+                    }
+                ],
+            )
+        return (
+            True,
+            {"project": {}},
+            {"tasks": []},
+            [
+                {
+                    "name": "pytest",
+                    "ok": True,
+                    "status": "passed",
+                    "returncode": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "diagnostics": {},
+                }
+            ],
+        )
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--out",
+            str(out_root),
+            "--config",
+            str(cfg),
+            "--profile",
+            "minimal",
+            "--max-iterations",
+            "3",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    run_dir = sorted(out_root.iterdir())[0]
+    state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+
+    assert calls == 2
+    assert state["status"] == "completed"
+    assert state["current_iteration"] == 2
+    assert len(state["attempts"]) == 2
+
+    first = state["attempts"][0]
+    assert first["ok"] is False
+    assert first["reason"] == "quality_gate_failed"
+    assert first["quality_gate_failed"] is True
+    reasons = first["quality_gate_fail_reasons"]
+    assert isinstance(reasons, list) and reasons
+    assert reasons[0]["type"] == "quality_gate_failed"
+    assert reasons[0]["code"] == "tests.min_pass_rate_not_met"
+
+    second = state["attempts"][1]
+    assert second["ok"] is True
+    assert second["gate_results"]["passed"] is True
+
+    assert report["iterations_gate_failed"] == 1
+    assert report["gate_results"]["passed"] is True
+
+
+def test_autonomous_quality_gate_results_artifact_persisted(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path, include_quality_gate_policy=True)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    async def _fake_run(*_args, **_kwargs):
+        return (
+            True,
+            {"project": {}},
+            {"tasks": []},
+            [
+                {
+                    "name": "pytest",
+                    "ok": True,
+                    "status": "passed",
+                    "returncode": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "diagnostics": {},
+                }
+            ],
+        )
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--out",
+            str(out_root),
+            "--config",
+            str(cfg),
+            "--profile",
+            "minimal",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    run_dir = sorted(out_root.iterdir())[0]
+    gate_artifact = json.loads((run_dir / ".autodev" / "autonomous_gate_results.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+
+    assert gate_artifact["policy"]["tests"]["min_pass_rate"] == 0.9
+    assert len(gate_artifact["attempts"]) == 1
+    assert gate_artifact["attempts"][0]["gate_results"]["passed"] is True
+
+    assert report["gate_results"]["passed"] is True
+    assert report["iterations_gate_failed"] == 0
+
+
 def test_autonomous_start_stops_at_max_iterations(tmp_path, monkeypatch):
     cfg = _write_cfg(tmp_path)
     prd = _write_prd(tmp_path)

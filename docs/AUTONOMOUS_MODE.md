@@ -76,7 +76,8 @@ Notes:
 - CLI flags override config values.
 - Default side-effect posture is safe (`false`).
 - `allow_docker_build=false` forces docker-build validation tasks to remain disabled in autonomous mode.
-- `quality_gate_policy` is currently a placeholder schema for unattended quality thresholds (tests/security/performance) and is recorded in autonomous artifacts for future gate enforcement.
+- `quality_gate_policy` actively evaluates tests/security/performance gates at each autonomous iteration end using available signals.
+- When a gate fails, autonomous mode records typed fail reasons in attempt artifacts and enters bounded `auto_fix_retry` (still constrained by `max_iterations` and `time_budget_sec`).
 
 ---
 
@@ -85,7 +86,8 @@ Notes:
 Each autonomous run writes:
 
 - `.autodev/autonomous_state.json` — live state machine snapshot (phase/status/attempts)
-- `.autodev/autonomous_report.json` — machine-readable final report
+- `.autodev/autonomous_report.json` — machine-readable final report (includes latest `gate_results` when configured)
+- `.autodev/autonomous_gate_results.json` — per-iteration quality gate evaluation history
 - `AUTONOMOUS_REPORT.md` — quick human summary
 - existing run artifacts (`report.json`, quality artifacts, checkpoints) are preserved
 
