@@ -4,6 +4,12 @@
 
 It is designed for quick iteration with safe localhost defaults, while keeping hardened paths (`autodev gui` + token/session policy) fully intact.
 
+
+Planning references:
+- `docs/PLAN_NEXT_WEEK.md`
+- `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/DEMO_PLAYBOOK.md`
+
 ## Quickstart
 
 ```bash

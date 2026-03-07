@@ -423,17 +423,22 @@ python scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simpl
 ```
 Smoke artifacts are persisted under `./artifacts/local-simple-e2e-smoke/<timestamp>/` (server stdout/stderr logs + API snapshots) so failures remain debuggable.
 
-See `docs/LOCAL_SIMPLE_MODE.md` for quickstart + when to switch to hardened mode.
+See `docs/LOCAL_SIMPLE_MODE.md` for local-simple operator quickstart, run controls, and hardened-mode handoff.
+For day-1 setup and demo flow, use `docs/onboarding.md` and `docs/DEMO_PLAYBOOK.md`.
 
 Known limits (MVP):
 - Polling-based updates only (no live stream/WebSocket yet).
 - Process control is best-effort (depends on tracked process lifecycle).
 - JSON artifact schema is not versioned yet; breaking changes may require GUI updates.
 
-Showoff planning bundle (execution-oriented):
+Next-week planning bundle (active):
+- `docs/PLAN_NEXT_WEEK.md`
+- `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/DEMO_PLAYBOOK.md`
+
+Legacy showoff planning docs (reference/archive):
 - `docs/ROADMAP_SHOWOFF.md`
 - `docs/BACKLOG_SHOWOFF.md`
-- `docs/DEMO_PLAYBOOK.md`
 
 ## Output Directory Naming
 `--out` is treated as a parent directory.

@@ -1,218 +1,175 @@
-# Showoff Live Demo Playbook
+# Local-Simple Operator Demo Playbook
 
 ## Purpose
 
-Provide a repeatable live demo flow for the current GUI + API baseline, while clearly handling failure paths.
+Provide a repeatable live demo flow for the **current** local-simple operator workflow (post NXT-001~NXT-010).
 
 This playbook assumes:
 - Demo host has this repo checked out.
-- Python environment is available.
-- Demo data is either real runs under `generated_runs/` or fixture runs created by script.
+- Python 3.11+ is available.
+- You will run from repo root.
 
 References:
-- `README.md` (GUI launcher and known limits)
+- `README.md` (launcher + current limits)
+- `docs/LOCAL_SIMPLE_MODE.md` (operator quickstart + hardened handoff)
+- `docs/PLAN_NEXT_WEEK.md` (active plan)
+- `docs/BACKLOG_NEXT_WEEK.md` (active backlog)
+
+Legacy planning references (archive):
 - `docs/ROADMAP_SHOWOFF.md`
 - `docs/BACKLOG_SHOWOFF.md`
 
 ---
 
-## 0) Pre-Demo Checklist (T-30 to T-5 min)
+## 0) Pre-demo checklist (T-30 to T-5)
 
 ### Environment
-- [ ] `python --version` is 3.11+
+- [ ] `python3 --version` is 3.11+
 - [ ] `make` and `curl` are available in PATH
-- [ ] Port `8787` is free (or decide alternate port)
-- [ ] Run one-command bootstrap sanity lane:
-  - `make demo-bootstrap`
-  - (equivalent) `bash scripts/demo_bootstrap.sh`
-- [ ] If you want demo server to stay up after checks: `make demo-bootstrap-serve`
+- [ ] Port `8787` is free (or pick another port)
+
+### One-command sanity lane
+- [ ] `make demo-bootstrap`
+- [ ] (equivalent) `bash scripts/demo_bootstrap.sh`
+- [ ] If you need the GUI to remain up for the demo: `make demo-bootstrap-serve`
 
 ### Data
-- [ ] At least 3 runs available (`ok`, `failed`, `running/partial`) in runs root
-- [ ] If local runs are missing, generate fixtures: `python3 scripts/showoff_seed_fixtures.py --clean`
-- [ ] Generate local scorecard snapshot: `make demo-scorecard`
+- [ ] At least 3 runs exist (`ok`, `failed`, `running/partial`) under `generated_runs/`
+- [ ] If local runs are missing: `python3 scripts/showoff_seed_fixtures.py --clean`
+- [ ] Generate local scorecard: `make demo-scorecard`
 - [ ] Confirm `artifacts/demo-day/demo_scorecard_latest.{md,json}` exists
 
-### Server sanity
-- [ ] `autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787`
-- [ ] `curl http://127.0.0.1:8787/healthz` returns `{ "ok": true }`
-- [ ] `curl http://127.0.0.1:8787/api/runs` returns non-empty list
-
-### Backup assets
-- [ ] Keep one screenshot of dashboard and run detail as fallback
-- [ ] Keep one pre-recorded 60s terminal output snippet as hard fallback
-
-### Demo scorecard command (operator quick use)
-
+### Server/API sanity (copy-paste)
 ```bash
-# one-command local report generation
-make demo-scorecard
-
-# direct script usage (optional)
-python3 scripts/demo_scorecard.py \
-  --runs-root ./generated_runs \
-  --output-dir ./artifacts/demo-day \
-  --latest 5
+curl -fsS http://127.0.0.1:8787/healthz
+curl -fsS http://127.0.0.1:8787/api/runs
+curl -fsS http://127.0.0.1:8787/api/gui/context
 ```
 
-Outputs:
-- `artifacts/demo-day/demo_scorecard_latest.md` (demo script notes)
-- `artifacts/demo-day/demo_scorecard_latest.json` (automation payload)
-
-Report highlights:
-- Latest run status/profile/model + key validator totals
-- Blockers and failed validators snapshot
-- Previous→latest delta summary (status/totals/blockers/validator changes)
-- Trends snapshot (status mix, pass rate, top failing validators/blockers)
+Expected highlights:
+- `/healthz` -> `{ "ok": true }`
+- `/api/runs` -> non-empty `runs`
+- `/api/gui/context` -> mode is `local-simple` or `local_simple`
 
 ---
 
-## 1) Live Script (15-minute format)
+## 1) Live script (15-minute format)
 
-## 00:00–01:30 — Framing (What this is, what it is not)
+### 00:00–01:30 — Framing
 
 Script:
-- “This is a GUI layer over the existing AutoDev CLI pipeline.”
-- “Today’s focus is observability of run artifacts and baseline operator workflows.”
-- “Current MVP is intentionally limited: read-heavy with no full lifecycle control yet.”
+- “This is the local-simple operator lane on top of AutoDev CLI artifacts.”
+- “Today’s focus is deterministic operator workflow: quick run, process tracking, artifact triage.”
 
 Expected visual:
 - Dashboard with run list loaded.
 
-## 01:30–04:30 — Dashboard walkthrough
+### 01:30–04:30 — Dashboard + quick run
 
 Script:
-- Show run list and status chips.
-- Explain project/profile/model metadata fields.
-- Point out last-updated timestamps and practical use during triage.
+- Show run list, status chips, and metadata (profile/model/timestamps).
+- Trigger **Quick Run** from Overview tab.
 
 Action:
-- Click 2–3 runs with different statuses.
+- Kick one quick run and show immediate process creation.
 
-## 04:30–08:00 — Run detail deep dive
+### 04:30–08:00 — Processes panel
 
 Script:
-- Show phase timeline and task list.
-- Show blocker list and explain unresolved blockers.
-- Show validation section and explain pass/fail signals.
+- Explain active/recent process tracking, run linkage, retry-chain summary, transition history.
+- Demonstrate stop/retry controls and idempotent behavior (NXT-009 hardening).
 
 Action:
-- Open a failed run and trace one validator failure to context.
+- Open one process row and inspect history updates.
 
-## 08:00–11:00 — Artifact and API reality check
+### 08:00–11:00 — Artifact Viewer triage path
 
 Script:
-- Explain that data comes directly from `.autodev/*` artifacts.
-- Show `curl /api/runs` and one `/api/runs/<id>` response.
-- Clarify this keeps the system grounded in existing CLI outputs.
+- Show failed-validator deep-link into Artifact Viewer.
+- Explain pretty JSON rendering + raw fallback for malformed/truncated payloads.
 
 Action:
-- Terminal split-screen with browser.
+- Open a failed run artifact and copy/download payload.
 
-## 11:00–13:00 — Planned near-term upgrade path
+### 11:00–13:00 — API grounding
 
 Script:
-- Summarize P0 priorities: status hardening, start/resume API wiring, audit persistence, demo harness.
-- Emphasize no engine rewrite in P0.
+- Show that UI state is sourced from API + `.autodev/*` artifacts (not mocked).
+
+Action (terminal split):
+```bash
+curl -fsS http://127.0.0.1:8787/api/runs | jq '.runs | length'
+curl -fsS http://127.0.0.1:8787/api/processes | jq '.processes | length'
+```
+
+### 13:00–15:00 — Next-week direction
+
+Script:
+- Open active plan/backlog docs.
+- Close with operator reliability priorities and known limits.
 
 Action:
-- Open `docs/ROADMAP_SHOWOFF.md` and `docs/BACKLOG_SHOWOFF.md` briefly.
-
-## 13:00–15:00 — Q&A / realistic constraints
-
-Script:
-- State known limits directly:
-  - no streaming updates
-  - no stop/kill/retry controls
-  - schema versioning not stabilized yet
-- Close with immediate next tickets (Top 5).
+- Open `docs/PLAN_NEXT_WEEK.md` and `docs/BACKLOG_NEXT_WEEK.md`.
 
 ---
 
-## 2) Failure Response Runbook
+## 2) Failure response runbook
 
-## Failure A — GUI page does not load
+### Failure A — GUI page does not load
 
-### Symptoms
-- Browser cannot open `http://127.0.0.1:8787`
-
-### Checks
+Checks:
 1. Confirm process is running.
 2. Confirm port conflict (`lsof -i :8787`).
 3. Relaunch with explicit host/port.
 
-### Recovery action
-- Switch to alternate port (e.g., `8788`) and continue.
-- If still failing, continue demo via API-only terminal flow.
+Recovery:
+- Switch to alternate port and continue:
+```bash
+autodev local-simple --runs-root ./generated_runs --host 127.0.0.1 --port 8788 --open
+```
 
----
+### Failure B — `/api/runs` returns empty
 
-## Failure B — `/api/runs` returns empty
-
-### Symptoms
-- Dashboard shows “No runs found”.
-
-### Checks
+Checks:
 1. Verify runs root path.
 2. Verify run directories include `.autodev/*` artifacts.
-3. Generate fixture dataset.
+3. Regenerate fixtures.
 
-### Recovery action
-- Run fixture setup script.
-- Refresh UI and proceed with fixture runs.
+Recovery:
+```bash
+python3 scripts/showoff_seed_fixtures.py --clean
+```
 
----
+### Failure C — Start/stop/retry action fails
 
-## Failure C — JSON parse or detail API error for one run
+Checks:
+1. Read status hint in UI (local-simple provides likely-fix hints).
+2. Confirm target process state in Processes panel.
+3. Retry action once after refresh.
 
-### Symptoms
-- Selecting specific run fails with parse/missing artifact issue.
+Recovery:
+- Use a different run/process for demo flow and keep triage for follow-up backlog item.
 
-### Checks
-1. Inspect problematic run’s `.autodev` files.
-2. Pick alternate run to continue live flow.
+### Failure D — Artifact render issue on a specific run
 
-### Recovery action
-- Continue with healthy run.
-- Use failure as proof-point for P0 hardening ticket (SHW-002).
+Checks:
+1. Open raw mode fallback in Artifact Viewer.
+2. Validate API payload directly.
 
----
-
-## Failure D — Slow or frozen UI during detail render
-
-### Symptoms
-- Run detail panel hangs on large trace/validation payload.
-
-### Checks
-1. Browser console errors.
-2. API response size and latency in network tab.
-
-### Recovery action
-- Reload page and pick smaller run.
-- Fall back to terminal `curl` + artifact file inspection.
+Recovery:
+- Continue with a healthy run and log the problematic run id for follow-up.
 
 ---
 
-## Failure E — Live start/resume control unavailable (expected in current MVP)
+## 3) Operator notes
 
-### Symptoms
-- Audience asks for full operator controls not yet implemented.
-
-### Response script
-- “That control plane is deliberately in P0 implementation scope next; current build is observability-first.”
-- Show relevant tickets (SHW-003/004/006) and acceptance criteria.
+- Prefer `make demo-bootstrap-serve` for predictable setup.
+- Keep one terminal open for API proof (`curl`).
+- Do not claim streaming updates (polling-based in MVP).
 
 ---
 
-## 3) Demo Operator Notes
-
-- Avoid claiming “real-time” behavior until streaming is implemented.
-- Prefer deterministic fixture-backed demo when network/provider is unstable.
-- Keep one terminal visible to prove API grounding and avoid “mock-only” perception.
-
----
-
-## 4) Post-Demo Capture Template
+## 4) Post-demo capture template
 
 Record immediately after demo:
 - What worked

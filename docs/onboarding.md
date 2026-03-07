@@ -44,6 +44,12 @@ Verify CLI:
 autodev --help
 ```
 
+Optional docs sanity check (before docs-only PRs):
+
+```bash
+make check-docs
+```
+
 ## 3) Configure credentials
 
 ⚡ **요약:** LLM 백엔드는 `config.yaml`의 `llm.base_url / api_key / model`만 바꿔서 전환할 수 있습니다. 전환 직후에는 아래 체크리스트(30초)로 동작 검증.
@@ -233,7 +239,13 @@ autodev --prd examples/PRD.md --out ./generated_runs --profile enterprise
 - On success you'll get a JSON-like message like `{ok: true, out: ...}`
 - On failure, command exits non-zero and writes failure artifacts under the run directory.
 
-### Optional: launch GUI (MVP)
+### Optional: launch operator UI (recommended local-simple)
+
+```bash
+autodev local-simple --runs-root ./generated_runs --open
+```
+
+Alternative hardened mode (shared/non-localhost environments):
 
 ```bash
 autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787
@@ -241,7 +253,7 @@ autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787
 
 Open `http://127.0.0.1:8787`.
 
-Known limits: no live streaming, no active-run kill/retry controls, and artifact schema compatibility is best-effort.
+Current local-simple operator controls include quick-run start/resume/stop/retry, Process panel history, and Artifact Viewer links. Remaining MVP limits are polling-only updates and non-versioned artifact schema.
 
 ## 5) First actions for a generated run
 
@@ -295,7 +307,11 @@ python3 scripts/showoff_seed_fixtures.py
 bash scripts/showoff_demo_smoke.sh ./generated_runs
 ```
 
-Planning and execution docs:
+Planning and execution docs (active):
+- `docs/PLAN_NEXT_WEEK.md`
+- `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/DEMO_PLAYBOOK.md`
+
+Legacy showoff references:
 - `docs/ROADMAP_SHOWOFF.md`
 - `docs/BACKLOG_SHOWOFF.md`
-- `docs/DEMO_PLAYBOOK.md`
