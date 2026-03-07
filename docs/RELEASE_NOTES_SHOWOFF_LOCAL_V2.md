@@ -11,6 +11,7 @@ This cut closes the current operator-reliability wave and prepares the repo for 
 - Scope balance:
   - Product/runtime improvements: `NXT-001` ~ `NXT-012`
   - Docs/release governance updates: `NXT-013` ~ `NXT-014`
+- Stabilization closure snapshot: ✅ Day-1/2/3 clean runs complete, no open P0/P1 hotfixes, normal feature delivery resumed (2026-03-07 21:33 KST).
 
 ## Included pull requests (NXT wave)
 

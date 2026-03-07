@@ -1,6 +1,6 @@
 # STABILIZATION MODE — SHOWOFF LOCAL V2
 
-Status: active immediately after NXT wave closure (`NXT-001` ~ `NXT-014`).
+Status: closed on 2026-03-07 21:33 KST after Day-1/2/3 clean runs (`NXT-001` ~ `NXT-014`).
 
 ## Goal
 
@@ -83,7 +83,15 @@ All must be true:
 - Smoke lane (`make smoke-local-simple-e2e`) passes on latest `main` baseline.
 - Release notes and operator checklist are up to date.
 
-## Post-exit actions
+## Closure note (2026-03-07 21:33 KST)
+
+Stabilization is formally complete.
+
+- Day-1/2/3 reports are all green (`docs/STABILIZATION_DAY1_REPORT.md`, `docs/STABILIZATION_DAY2_REPORT.md`, `docs/STABILIZATION_DAY3_REPORT.md`).
+- No open P0/P1 hotfixes remain from the stabilization window.
+- Change-control policy returns from hotfix-only to normal feature delivery.
+
+## Post-exit actions / handoff to next-wave planning
 
 1. Announce stabilization completion in PR/release thread.
 2. Resume planned next-wave work in priority order:
@@ -92,6 +100,7 @@ All must be true:
    - NXT-017
    - NXT-018
 3. Convert any deferred stabilization observations into explicit backlog tickets.
+4. Use planning sources to launch next wave: `docs/PLAN_NEXT_WEEK.md` and `docs/BACKLOG_NEXT_WEEK.md`.
 
 ## Related docs
 
