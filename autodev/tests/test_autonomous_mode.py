@@ -21,10 +21,20 @@ class _FakeClient:
         return {"total_calls": 0, "total_input_tokens": 0, "total_output_tokens": 0}
 
 
-def _write_cfg(tmp_path: Path) -> Path:
+def _write_cfg(tmp_path: Path, *, include_quality_gate_policy: bool = False) -> Path:
+    gate_policy = """
+    quality_gate_policy:
+      tests:
+        min_pass_rate: 0.9
+      security:
+        max_high_findings: 0
+      performance:
+        max_regression_pct: 5
+""" if include_quality_gate_policy else ""
+
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        """\
+        f"""\
 llm:
   base_url: "http://127.0.0.1:1234/v1"
   api_key: test-key
@@ -39,7 +49,7 @@ profiles:
 run:
   autonomous:
     max_iterations: 3
-    time_budget_sec: 600
+    time_budget_sec: 600{gate_policy}
 """,
         encoding="utf-8",
     )
@@ -92,6 +102,8 @@ def test_autonomous_start_retries_until_success(tmp_path, monkeypatch):
     run_dir = run_dirs[0]
 
     state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+    metadata = json.loads((run_dir / ".autodev" / "run_metadata.json").read_text(encoding="utf-8"))
+    assert "autonomous_quality_gate_policy" not in metadata
     assert state["status"] == "completed"
     assert state["phase"] == "completed"
     assert state["current_iteration"] == 2
@@ -101,6 +113,47 @@ def test_autonomous_start_retries_until_success(tmp_path, monkeypatch):
     report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
     assert report["ok"] is True
     assert report["iterations_total"] == 2
+
+
+def test_autonomous_start_records_quality_gate_policy_in_metadata_and_state(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path, include_quality_gate_policy=True)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    async def _fake_run(*_args, **_kwargs):
+        return True, {"project": {}}, {"tasks": []}, []
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--out",
+            str(out_root),
+            "--config",
+            str(cfg),
+            "--profile",
+            "minimal",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    run_dir = sorted(out_root.iterdir())[0]
+    metadata = json.loads((run_dir / ".autodev" / "run_metadata.json").read_text(encoding="utf-8"))
+    state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+
+    expected_policy = {
+        "tests": {"min_pass_rate": 0.9},
+        "security": {"max_high_findings": 0},
+        "performance": {"max_regression_pct": 5.0},
+    }
+    assert metadata["autonomous_quality_gate_policy"] == expected_policy
+    assert state["policy"]["quality_gate_policy"] == expected_policy
 
 
 def test_autonomous_start_stops_at_max_iterations(tmp_path, monkeypatch):

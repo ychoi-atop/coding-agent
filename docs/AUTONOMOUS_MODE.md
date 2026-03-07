@@ -63,12 +63,20 @@ run:
     external_side_effects:
       allow_docker_build: false
       allow_external_side_effects: false
+    quality_gate_policy:
+      tests:
+        min_pass_rate: 0.9
+      security:
+        max_high_findings: 0
+      performance:
+        max_regression_pct: 5
 ```
 
 Notes:
 - CLI flags override config values.
 - Default side-effect posture is safe (`false`).
 - `allow_docker_build=false` forces docker-build validation tasks to remain disabled in autonomous mode.
+- `quality_gate_policy` is currently a placeholder schema for unattended quality thresholds (tests/security/performance) and is recorded in autonomous artifacts for future gate enforcement.
 
 ---
 

@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -36,6 +36,28 @@ class AutonomousPolicy:
     blocked_paths: list[str]
     allow_docker_build: bool
     allow_external_side_effects: bool
+
+
+@dataclass(frozen=True)
+class AutonomousTestsGateThresholds:
+    min_pass_rate: float | None = None
+
+
+@dataclass(frozen=True)
+class AutonomousSecurityGateThresholds:
+    max_high_findings: int | None = None
+
+
+@dataclass(frozen=True)
+class AutonomousPerformanceGateThresholds:
+    max_regression_pct: float | None = None
+
+
+@dataclass(frozen=True)
+class AutonomousQualityGatePolicy:
+    tests: AutonomousTestsGateThresholds | None = None
+    security: AutonomousSecurityGateThresholds | None = None
+    performance: AutonomousPerformanceGateThresholds | None = None
 
 
 def _utc_now() -> str:
@@ -121,6 +143,76 @@ def _coerce_max_parallel_tasks(value: Any, *, default: int = 2) -> int:
     if parsed < 1:
         raise SystemExit("config.run.max_parallel_tasks must be >= 1.")
     return parsed
+
+
+def _coerce_optional_float(value: Any, key: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise SystemExit(f"config.run.{key} must be a number, got {type(value).__name__}.")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise SystemExit(f"config.run.{key} must be a number, got {value!r}.")
+
+
+def _resolve_autonomous_quality_gate_policy(run_cfg: dict[str, Any]) -> AutonomousQualityGatePolicy | None:
+    auto_cfg = run_cfg.get("autonomous")
+    if auto_cfg is None:
+        return None
+    if not isinstance(auto_cfg, dict):
+        raise SystemExit("config.run.autonomous must be an object when set.")
+
+    raw_policy = auto_cfg.get("quality_gate_policy")
+    if raw_policy is None:
+        return None
+    if not isinstance(raw_policy, dict):
+        raise SystemExit("config.run.autonomous.quality_gate_policy must be an object when set.")
+
+    tests_thresholds = None
+    raw_tests = raw_policy.get("tests")
+    if raw_tests is not None:
+        if not isinstance(raw_tests, dict):
+            raise SystemExit("config.run.autonomous.quality_gate_policy.tests must be an object.")
+        min_pass_rate = _coerce_optional_float(
+            raw_tests.get("min_pass_rate"),
+            "autonomous.quality_gate_policy.tests.min_pass_rate",
+        )
+        if min_pass_rate is not None and (min_pass_rate < 0 or min_pass_rate > 1):
+            raise SystemExit("config.run.autonomous.quality_gate_policy.tests.min_pass_rate must be between 0 and 1.")
+        tests_thresholds = AutonomousTestsGateThresholds(min_pass_rate=min_pass_rate)
+
+    security_thresholds = None
+    raw_security = raw_policy.get("security")
+    if raw_security is not None:
+        if not isinstance(raw_security, dict):
+            raise SystemExit("config.run.autonomous.quality_gate_policy.security must be an object.")
+        max_high_findings = _coerce_optional_int(
+            raw_security.get("max_high_findings"),
+            "autonomous.quality_gate_policy.security.max_high_findings",
+        )
+        if max_high_findings is not None and max_high_findings < 0:
+            raise SystemExit("config.run.autonomous.quality_gate_policy.security.max_high_findings must be >= 0.")
+        security_thresholds = AutonomousSecurityGateThresholds(max_high_findings=max_high_findings)
+
+    performance_thresholds = None
+    raw_performance = raw_policy.get("performance")
+    if raw_performance is not None:
+        if not isinstance(raw_performance, dict):
+            raise SystemExit("config.run.autonomous.quality_gate_policy.performance must be an object.")
+        max_regression_pct = _coerce_optional_float(
+            raw_performance.get("max_regression_pct"),
+            "autonomous.quality_gate_policy.performance.max_regression_pct",
+        )
+        if max_regression_pct is not None and max_regression_pct < 0:
+            raise SystemExit("config.run.autonomous.quality_gate_policy.performance.max_regression_pct must be >= 0.")
+        performance_thresholds = AutonomousPerformanceGateThresholds(max_regression_pct=max_regression_pct)
+
+    return AutonomousQualityGatePolicy(
+        tests=tests_thresholds,
+        security=security_thresholds,
+        performance=performance_thresholds,
+    )
 
 
 def _coerce_role_temperatures(value: Any) -> Dict[str, float]:
@@ -267,9 +359,21 @@ def _new_state(
     run_out: str,
     profile: str,
     policy: AutonomousPolicy,
+    quality_gate_policy: AutonomousQualityGatePolicy | None,
     prd_path: str,
     config_path: str,
 ) -> dict[str, Any]:
+    policy_payload: dict[str, Any] = {
+        "max_iterations": policy.max_iterations,
+        "time_budget_sec": policy.time_budget_sec,
+        "workspace_allowlist": [_normalize_path(x) for x in policy.workspace_allowlist],
+        "blocked_paths": [_normalize_path(x) for x in policy.blocked_paths],
+        "allow_docker_build": policy.allow_docker_build,
+        "allow_external_side_effects": policy.allow_external_side_effects,
+    }
+    if quality_gate_policy is not None:
+        policy_payload["quality_gate_policy"] = asdict(quality_gate_policy)
+
     return {
         "version": 1,
         "mode": "autonomous_v1",
@@ -281,14 +385,7 @@ def _new_state(
         "run_out": os.path.abspath(run_out),
         "prd": os.path.abspath(prd_path),
         "config": os.path.abspath(config_path),
-        "policy": {
-            "max_iterations": policy.max_iterations,
-            "time_budget_sec": policy.time_budget_sec,
-            "workspace_allowlist": [_normalize_path(x) for x in policy.workspace_allowlist],
-            "blocked_paths": [_normalize_path(x) for x in policy.blocked_paths],
-            "allow_docker_build": policy.allow_docker_build,
-            "allow_external_side_effects": policy.allow_external_side_effects,
-        },
+        "policy": policy_payload,
         "current_iteration": 0,
         "attempts": [],
         "started_at": _utc_now(),
@@ -417,6 +514,7 @@ def _start(argv: list[str]) -> None:
         raise SystemExit("Invalid config: run.budget must be an object.")
 
     policy = _resolve_autonomous_policy(args, run_cfg)
+    quality_gate_policy = _resolve_autonomous_quality_gate_policy(run_cfg)
 
     run_out = str(Path(args.run_dir).expanduser().resolve()) if args.run_dir else _resolve_output_dir(args.prd, args.out)
     ws = Workspace(run_out)
@@ -437,6 +535,7 @@ def _start(argv: list[str]) -> None:
             run_out=run_out,
             profile=profile_name,
             policy=policy,
+            quality_gate_policy=quality_gate_policy,
             prd_path=args.prd,
             config_path=args.config,
         )
@@ -542,6 +641,8 @@ def _start(argv: list[str]) -> None:
         },
         "role_temperatures": role_temperatures,
     }
+    if quality_gate_policy is not None:
+        run_metadata["autonomous_quality_gate_policy"] = asdict(quality_gate_policy)
     ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
     _write_state(ws, state)
 
