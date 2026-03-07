@@ -321,12 +321,33 @@ def test_trigger_wrappers_dry_run_shape() -> None:
     assert start["ok"] is True
     assert start["spawned"] is False
     assert start["audit_event"]["action"] == "start"
+    assert start["correlation_id"].startswith("corr-")
+    assert start["audit_event"]["correlation_id"] == start["correlation_id"]
 
     resume = trigger_resume(payload, execute=False)
     assert resume["ok"] is True
     assert resume["spawned"] is False
     assert resume["audit_event"]["action"] == "resume"
+    assert resume["correlation_id"].startswith("corr-")
+    assert resume["audit_event"]["correlation_id"] == resume["correlation_id"]
     assert "--resume" in resume["command"]
+
+
+def test_trigger_wrappers_accept_explicit_correlation_id() -> None:
+    payload = {
+        "prd": "examples/PRD.md",
+        "out": "./generated_runs",
+        "profile": "enterprise",
+        "correlation_id": "corr-ticket-nxt-006",
+    }
+
+    start = trigger_start(payload, execute=False)
+    assert start["correlation_id"] == "corr-ticket-nxt-006"
+    assert start["audit_event"]["correlation_id"] == "corr-ticket-nxt-006"
+
+    resume = trigger_resume(payload, execute=False)
+    assert resume["correlation_id"] == "corr-ticket-nxt-006"
+    assert resume["audit_event"]["correlation_id"] == "corr-ticket-nxt-006"
 
 
 def test_validate_resume_target_success(tmp_path: Path) -> None:
@@ -385,15 +406,20 @@ def test_trigger_start_execute_tracks_process_and_stop_graceful(monkeypatch: pyt
         "prd": "examples/PRD.md",
         "out": "./generated_runs",
         "profile": "enterprise",
+        "correlation_id": "corr-graceful-stop",
     }
     started = trigger_start(payload, execute=True)
     assert started["spawned"] is True
     assert started["process"]["state"] == "running"
+    assert started["correlation_id"] == "corr-graceful-stop"
+    assert started["process"]["correlation_id"] == "corr-graceful-stop"
     process_id = started["process"]["process_id"]
 
     stopped = trigger_stop({"process_id": process_id}, graceful_timeout_sec=0.1)
     assert stopped["ok"] is True
     assert stopped["stopped"] is True
+    assert stopped["correlation_id"] == "corr-graceful-stop"
+    assert stopped["audit_event"]["correlation_id"] == "corr-graceful-stop"
     assert stopped["process"]["state"] == "terminated"
     assert stopped["process"]["stop_reason"] == "graceful"
 
@@ -431,6 +457,7 @@ def test_trigger_retry_preserves_chain_and_linkage(monkeypatch: pytest.MonkeyPat
         "prd": "examples/PRD.md",
         "out": "./generated_runs/run-a",
         "profile": "enterprise",
+        "correlation_id": "corr-retry-chain",
     }
     first = trigger_start(payload, execute=True)
     first_process = first["process"]
@@ -438,6 +465,9 @@ def test_trigger_retry_preserves_chain_and_linkage(monkeypatch: pytest.MonkeyPat
     retried = trigger_retry({"process_id": first_process["process_id"]}, execute=True)
     assert retried["spawned"] is True
     assert retried["retry_of"] == first_process["process_id"]
+    assert retried["correlation_id"] == "corr-retry-chain"
+    assert retried["audit_event"]["correlation_id"] == "corr-retry-chain"
+    assert retried["process"]["correlation_id"] == "corr-retry-chain"
     assert retried["process"]["retry_root"] == first_process["retry_root"]
     assert retried["process"]["retry_attempt"] == 2
     assert retried["run_link"]["out"] == "./generated_runs/run-a"
@@ -488,6 +518,7 @@ def test_list_detail_history_read_api(monkeypatch: pytest.MonkeyPatch) -> None:
             "prd": "examples/PRD.md",
             "out": "./generated_runs/run-read",
             "profile": "enterprise",
+            "correlation_id": "corr-process-history",
         },
         execute=True,
     )
@@ -502,7 +533,9 @@ def test_list_detail_history_read_api(monkeypatch: pytest.MonkeyPatch) -> None:
 
     history = get_process_history(process_id)
     assert history["process_id"] == process_id
-    assert [row["state"] for row in history["history"]][:2] == ["spawned", "running"]
+    assert history["correlation_id"] == "corr-process-history"
+    assert [row["state"] for row in history["history"][:2]] == ["spawned", "running"]
+    assert history["history"][0]["correlation_id"] == "corr-process-history"
 
 
 def test_trigger_retry_by_run_id_preserves_chain(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -522,9 +555,11 @@ def test_trigger_retry_by_run_id_preserves_chain(monkeypatch: pytest.MonkeyPatch
         execute=True,
     )
 
-    retried = trigger_retry({"run_id": "run-by-id"}, execute=True)
+    retried = trigger_retry({"run_id": "run-by-id", "correlation_id": "corr-run-id-retry"}, execute=True)
     assert retried["spawned"] is True
     assert retried["retry_of"] == first["process"]["process_id"]
+    assert retried["correlation_id"] == "corr-run-id-retry"
+    assert retried["process"]["correlation_id"] == "corr-run-id-retry"
     assert retried["process"]["retry_root"] == first["process"]["retry_root"]
     assert retried["process"]["retry_attempt"] == 2
 

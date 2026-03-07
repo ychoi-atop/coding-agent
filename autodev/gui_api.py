@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -308,6 +309,7 @@ def trigger_resume(payload: Mapping[str, Any], *, execute: bool = False) -> dict
 
 def trigger_stop(payload: Mapping[str, Any], *, graceful_timeout_sec: float = 2.0) -> dict[str, Any]:
     process_id = _required_str(payload, "process_id")
+    correlation_id = _resolve_correlation_id(payload)
     if graceful_timeout_sec <= 0:
         raise GuiApiError("'graceful_timeout_sec' must be greater than zero")
     try:
@@ -315,13 +317,18 @@ def trigger_stop(payload: Mapping[str, Any], *, graceful_timeout_sec: float = 2.
     except KeyError as exc:
         raise FileNotFoundError(f"Unknown process_id: {process_id}") from exc
 
+    if not correlation_id:
+        correlation_id = _coerce_str(process.get("correlation_id")) or _generate_correlation_id()
+
     return {
         "ok": True,
+        "correlation_id": correlation_id,
         "stopped": process.get("state") in {"terminated", "killed", "exited"},
         "process": process,
         "audit_event": {
             "action": "stop",
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "correlation_id": correlation_id,
             "process_id": process_id,
             "graceful_timeout_sec": graceful_timeout_sec,
             "result_state": process.get("state"),
@@ -332,20 +339,33 @@ def trigger_stop(payload: Mapping[str, Any], *, graceful_timeout_sec: float = 2.
 def trigger_retry(payload: Mapping[str, Any], *, execute: bool = False) -> dict[str, Any]:
     process_id = _optional_str(payload, "process_id")
     run_id = _optional_str(payload, "run_id")
+    correlation_id = _resolve_correlation_id(payload)
     if not process_id and not run_id:
         raise GuiApiError("'process_id' or 'run_id' is required")
 
     try:
-        result = _PROCESS_MANAGER.retry(process_id=process_id, run_id=run_id, execute=execute)
+        result = _PROCESS_MANAGER.retry(
+            process_id=process_id,
+            run_id=run_id,
+            execute=execute,
+            correlation_id=correlation_id,
+        )
     except KeyError as exc:
         if process_id:
             raise FileNotFoundError(f"Unknown process_id: {process_id}") from exc
         raise FileNotFoundError(f"Unknown run_id: {run_id}") from exc
 
+    resolved_correlation_id = _coerce_str(result.get("correlation_id"))
+    if not resolved_correlation_id and isinstance(result.get("process"), dict):
+        resolved_correlation_id = _coerce_str(result["process"].get("correlation_id"))
+    if not resolved_correlation_id:
+        resolved_correlation_id = correlation_id or _generate_correlation_id()
+
     retry_of = result.get("retry_of")
     event = {
         "action": "retry",
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "correlation_id": resolved_correlation_id,
         "process_id": process_id,
         "run_id": run_id,
         "retry_of": retry_of,
@@ -356,6 +376,7 @@ def trigger_retry(payload: Mapping[str, Any], *, execute: bool = False) -> dict[
         event["retry_root"] = result["process"].get("retry_root")
         event["retry_attempt"] = result["process"].get("retry_attempt")
 
+    result["correlation_id"] = resolved_correlation_id
     result["audit_event"] = event
     return result
 
@@ -385,6 +406,7 @@ def get_process_history(process_id: str) -> dict[str, Any]:
         "state": process.get("state"),
         "retry_root": process.get("retry_root"),
         "retry_attempt": process.get("retry_attempt"),
+        "correlation_id": process.get("correlation_id"),
         "history": transitions,
     }
 
@@ -396,21 +418,31 @@ def _trigger(
     execute: bool,
 ) -> dict[str, Any]:
     cmd = build_resume_command(payload) if resume else build_start_command(payload)
+    correlation_id = _resolve_correlation_id(payload) or _generate_correlation_id()
     event = {
         "action": "resume" if resume else "start",
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "correlation_id": correlation_id,
         "command": cmd,
     }
 
     if not execute:
-        return {"ok": True, "spawned": False, "command": cmd, "audit_event": event}
+        return {
+            "ok": True,
+            "spawned": False,
+            "correlation_id": correlation_id,
+            "command": cmd,
+            "audit_event": event,
+        }
 
     payload_dict = dict(payload)
+    payload_dict["correlation_id"] = correlation_id
     run_link = {"out": payload_dict.get("out", "")}
     process = _PROCESS_MANAGER.spawn(
         action=event["action"],
         payload=payload_dict,
         command=cmd,
+        correlation_id=correlation_id,
         run_link=run_link,
     )
     event["process_id"] = process.get("process_id")
@@ -419,6 +451,7 @@ def _trigger(
     return {
         "ok": True,
         "spawned": True,
+        "correlation_id": correlation_id,
         "pid": process.get("pid"),
         "process": process,
         "command": cmd,
@@ -566,6 +599,18 @@ def _optional_str(payload: Mapping[str, Any], key: str) -> str | None:
     return trimmed or None
 
 
+def _resolve_correlation_id(payload: Mapping[str, Any]) -> str:
+    val = payload.get("correlation_id")
+    if val is None:
+        return ""
+    if not isinstance(val, str):
+        raise GuiApiError("'correlation_id' must be a string")
+    trimmed = val.strip()
+    if not trimmed:
+        return ""
+    return _safe_token(trimmed, "correlation_id")
+
+
 def _safe_path_arg(value: str, label: str) -> str:
     if any(ch in value for ch in ["\x00", "\n", "\r"]):
         raise GuiApiError(f"'{label}' contains unsafe characters")
@@ -582,3 +627,7 @@ def _coerce_str(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _generate_correlation_id() -> str:
+    return f"corr-{uuid.uuid4().hex}"

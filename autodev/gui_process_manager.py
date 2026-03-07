@@ -28,6 +28,7 @@ class ManagedRunProcess:
     retry_of: str | None = None
     retry_root: str | None = None
     retry_attempt: int = 1
+    correlation_id: str = ""
     run_link: dict[str, Any] = field(default_factory=dict)
     returncode: int | None = None
     stop_reason: str | None = None
@@ -48,6 +49,7 @@ class GuiRunProcessManager:
         payload: dict[str, Any],
         command: list[str],
         retry_of: str | None = None,
+        correlation_id: str | None = None,
         run_link: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         proc = subprocess.Popen(  # noqa: S603 - sanitized argv + shell=False
@@ -64,11 +66,17 @@ class GuiRunProcessManager:
             process_id = f"proc-{uuid.uuid4().hex[:12]}"
             retry_root = process_id
             retry_attempt = 1
+            resolved_correlation_id = (correlation_id or "").strip()
             if retry_of:
                 parent = self._items.get(retry_of)
                 if parent:
                     retry_root = parent.retry_root or parent.process_id
                     retry_attempt = int(parent.retry_attempt) + 1
+                    if not resolved_correlation_id:
+                        resolved_correlation_id = parent.correlation_id
+
+            if not resolved_correlation_id:
+                resolved_correlation_id = _generate_correlation_id()
 
             item = ManagedRunProcess(
                 process_id=process_id,
@@ -81,6 +89,7 @@ class GuiRunProcessManager:
                 retry_of=retry_of,
                 retry_root=retry_root,
                 retry_attempt=retry_attempt,
+                correlation_id=resolved_correlation_id,
                 run_link=_normalize_run_link(run_link),
                 _proc=proc,
             )
@@ -133,12 +142,15 @@ class GuiRunProcessManager:
         process_id: str | None = None,
         run_id: str | None = None,
         execute: bool,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
         target = self._resolve_retry_target(process_id=process_id, run_id=run_id)
         command = list(target.command)
         action = target.action
         payload = dict(target.payload)
         run_link = dict(target.run_link)
+
+        resolved_correlation_id = (correlation_id or "").strip() or target.correlation_id
 
         if not execute:
             return {
@@ -148,6 +160,7 @@ class GuiRunProcessManager:
                 "retry_of": target.process_id,
                 "action": action,
                 "run_link": run_link,
+                "correlation_id": resolved_correlation_id,
             }
 
         current = self.spawn(
@@ -155,6 +168,7 @@ class GuiRunProcessManager:
             payload=payload,
             command=command,
             retry_of=target.process_id,
+            correlation_id=resolved_correlation_id,
             run_link=run_link,
         )
         return {
@@ -164,6 +178,7 @@ class GuiRunProcessManager:
             "retry_of": target.process_id,
             "action": action,
             "run_link": run_link,
+            "correlation_id": current.get("correlation_id", resolved_correlation_id),
             "process": current,
         }
 
@@ -239,7 +254,11 @@ class GuiRunProcessManager:
 
     def _append_transition(self, item: ManagedRunProcess, state: str, *, detail: dict[str, Any] | None = None) -> None:
         item.state = state
-        event = {"at": _utc_now(), "state": state}
+        event = {
+            "at": _utc_now(),
+            "state": state,
+            "correlation_id": item.correlation_id,
+        }
         if detail:
             event["detail"] = detail
         item.transitions.append(event)
@@ -253,6 +272,7 @@ class GuiRunProcessManager:
             "retry_of": item.retry_of,
             "retry_root": item.retry_root,
             "retry_attempt": item.retry_attempt,
+            "correlation_id": item.correlation_id,
             "run_link": dict(item.run_link),
             "started_at": item.started_at,
             "returncode": item.returncode,
@@ -308,6 +328,7 @@ class GuiRunProcessManager:
             "retry_of": item.retry_of,
             "retry_root": item.retry_root,
             "retry_attempt": item.retry_attempt,
+            "correlation_id": item.correlation_id,
             "run_link": dict(item.run_link),
             "returncode": item.returncode,
             "stop_reason": item.stop_reason,
@@ -325,6 +346,19 @@ class GuiRunProcessManager:
         command = [str(part) for part in command_raw] if isinstance(command_raw, list) else []
         payload = dict(payload_raw) if isinstance(payload_raw, dict) else {}
         transitions = [dict(entry) for entry in transitions_raw] if isinstance(transitions_raw, list) else []
+        correlation_id = str(row.get("correlation_id") or "").strip()
+        if not correlation_id:
+            for entry in transitions:
+                existing = str(entry.get("correlation_id") or "").strip()
+                if existing:
+                    correlation_id = existing
+                    break
+        if not correlation_id:
+            correlation_id = _generate_correlation_id()
+
+        for entry in transitions:
+            if not str(entry.get("correlation_id") or "").strip():
+                entry["correlation_id"] = correlation_id
 
         return ManagedRunProcess(
             process_id=process_id,
@@ -338,6 +372,7 @@ class GuiRunProcessManager:
             retry_of=str(row.get("retry_of")) if row.get("retry_of") is not None else None,
             retry_root=str(row.get("retry_root")) if row.get("retry_root") is not None else None,
             retry_attempt=int(row.get("retry_attempt") or 1),
+            correlation_id=correlation_id,
             run_link=_normalize_run_link(run_link_raw if isinstance(run_link_raw, dict) else {}),
             returncode=int(row.get("returncode")) if row.get("returncode") is not None else None,
             stop_reason=str(row.get("stop_reason")) if row.get("stop_reason") is not None else None,
@@ -373,3 +408,7 @@ def _run_id_of(item: ManagedRunProcess) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _generate_correlation_id() -> str:
+    return f"corr-{uuid.uuid4().hex}"

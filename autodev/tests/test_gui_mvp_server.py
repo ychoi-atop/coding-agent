@@ -814,17 +814,26 @@ def test_start_endpoint_operator_dry_run_persists_audit(gui_server, tmp_path, mo
 
     status, body = _post_json(
         f"{base_url}/api/runs/start",
-        {"prd": str(prd), "out": str(tmp_path / "out"), "profile": "enterprise", "execute": False},
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out"),
+            "profile": "enterprise",
+            "correlation_id": "corr-server-audit",
+            "execute": False,
+        },
         headers={"X-Autodev-Role": "operator"},
     )
     assert status == 200
     assert body["spawned"] is False
+    assert body["correlation_id"] == "corr-server-audit"
     assert body["meta"]["audit_log_path"].endswith(".jsonl")
 
     logs = sorted(audit_dir.glob("gui-audit-*.jsonl"))
     line = logs[-1].read_text(encoding="utf-8").strip().splitlines()[-1]
     event = json.loads(line)
     assert event["result_status"] == "dry_run"
+    assert event["correlation_id"] == "corr-server-audit"
+    assert event["payload"]["correlation_id"] == "corr-server-audit"
     assert event["payload"]["profile"] == "enterprise"
 
 
@@ -1002,10 +1011,17 @@ def test_stop_and_retry_endpoints_happy_path(gui_server, tmp_path, monkeypatch):
 
     start_status, start_body = _post_json(
         f"{base_url}/api/runs/start",
-        {"prd": str(prd), "out": str(tmp_path / "out"), "profile": "enterprise", "execute": True},
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out"),
+            "profile": "enterprise",
+            "correlation_id": "corr-server-retry-stop",
+            "execute": True,
+        },
         headers={"X-Autodev-Role": "operator"},
     )
     assert start_status == 200
+    assert start_body["correlation_id"] == "corr-server-retry-stop"
     process_id = start_body["process"]["process_id"]
 
     retry_status, retry_body = _post_json(
@@ -1015,6 +1031,7 @@ def test_stop_and_retry_endpoints_happy_path(gui_server, tmp_path, monkeypatch):
     )
     assert retry_status == 200
     assert retry_body["retry_of"] == process_id
+    assert retry_body["correlation_id"] == "corr-server-retry-stop"
     assert retry_body["process"]["retry_attempt"] == 2
 
     stop_status, stop_body = _post_json(
@@ -1023,6 +1040,7 @@ def test_stop_and_retry_endpoints_happy_path(gui_server, tmp_path, monkeypatch):
         headers={"X-Autodev-Role": "operator"},
     )
     assert stop_status == 200
+    assert stop_body["correlation_id"] == "corr-server-retry-stop"
     assert stop_body["process"]["state"] in {"terminated", "exited"}
 
 
@@ -1052,6 +1070,29 @@ def test_retry_endpoint_requires_process_or_run_id(gui_server, tmp_path, monkeyp
     )
     assert status == 422
     assert body["error"]["code"] == "missing_retry_target"
+
+
+def test_run_control_rejects_invalid_correlation_id(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/start",
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out"),
+            "profile": "enterprise",
+            "correlation_id": "bad corr id",
+            "execute": False,
+        },
+        headers={"X-Autodev-Role": "developer"},
+    )
+    assert status == 422
+    assert body["error"]["code"] == "invalid_correlation_id"
 
 
 def test_process_read_endpoints_list_detail_history(gui_server, tmp_path, monkeypatch):
@@ -1092,7 +1133,9 @@ def test_process_read_endpoints_list_detail_history(gui_server, tmp_path, monkey
         history_body = json.loads(resp.read().decode("utf-8"))
     assert resp.status == 200
     assert history_body["process_id"] == process_id
+    assert history_body["correlation_id"].startswith("corr-")
     assert [row["state"] for row in history_body["history"]][:2] == ["spawned", "running"]
+    assert history_body["history"][0]["correlation_id"] == history_body["correlation_id"]
 
 
 def test_process_panel_static_contract(gui_server):

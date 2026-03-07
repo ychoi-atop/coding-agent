@@ -372,6 +372,17 @@ def _is_supported_run_token(value: str) -> bool:
     return bool(SAFE_RUN_TOKEN_RE.fullmatch(value))
 
 
+def _coerce_correlation_id_for_audit(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    if not _is_supported_run_token(normalized):
+        return ""
+    return normalized
+
+
 def _error_payload(code: str, message: str, **extra: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {"code": code, "message": message}
     payload.update(extra)
@@ -387,6 +398,7 @@ def _audit_payload_summary(payload: dict[str, Any], *, execute: bool) -> dict[st
         "interactive": bool(payload.get("interactive", False)),
         "process_id": str(payload.get("process_id", "")),
         "run_id": str(payload.get("run_id", "")),
+        "correlation_id": str(payload.get("correlation_id", "")),
         "graceful_timeout_sec": payload.get("graceful_timeout_sec", None),
         "project": str(payload.get("project", "")),
         "environment": str(payload.get("environment", "")),
@@ -967,6 +979,7 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
         auth = _resolve_request_auth(headers=self.headers, payload=payload, action=action)
         role = auth.role
         execute = bool(payload.get("execute", False))
+        correlation_id = _coerce_correlation_id_for_audit(payload.get("correlation_id"))
         event = {
             "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "action": action,
@@ -980,6 +993,8 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
             },
             "payload": _audit_payload_summary(payload, execute=execute),
         }
+        if correlation_id:
+            event["correlation_id"] = correlation_id
 
         if not _is_mutation_allowed(role):
             event["result_status"] = "forbidden"
@@ -1087,6 +1102,10 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        result_correlation_id = str(result.get("correlation_id") or "").strip()
+        if result_correlation_id:
+            event["correlation_id"] = result_correlation_id
+
         if action == "stop":
             event["result_status"] = "stopped"
         else:
@@ -1174,6 +1193,17 @@ def _validate_run_control_payload(payload: dict[str, Any], *, action: str) -> di
     execute = payload.get("execute", False)
     if not isinstance(execute, bool):
         return _error_payload("invalid_execute", "'execute' must be a boolean")
+
+    correlation_id = payload.get("correlation_id")
+    if correlation_id is not None:
+        if not isinstance(correlation_id, str) or not correlation_id.strip():
+            return _error_payload("invalid_correlation_id", "'correlation_id' must be a non-empty string")
+        if not _is_supported_run_token(correlation_id.strip()):
+            return _error_payload(
+                "invalid_correlation_id",
+                "'correlation_id' contains unsupported characters. Allowed: letters, digits, dot, underscore, slash, colon, at, plus, hyphen.",
+                field="correlation_id",
+            )
 
     if action in {"stop", "retry"}:
         process_id = payload.get("process_id")
