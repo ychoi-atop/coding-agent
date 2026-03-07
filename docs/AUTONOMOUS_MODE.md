@@ -78,6 +78,7 @@ Notes:
 - `allow_docker_build=false` forces docker-build validation tasks to remain disabled in autonomous mode.
 - `quality_gate_policy` actively evaluates tests/security/performance gates at each autonomous iteration end using available signals.
 - When a gate fails, autonomous mode records typed fail reasons in attempt artifacts and enters bounded `auto_fix_retry` (still constrained by `max_iterations` and `time_budget_sec`).
+- Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) so downstream report/triage logic can branch deterministically.
 
 ---
 

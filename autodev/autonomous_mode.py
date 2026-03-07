@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any, Dict
 from uuid import uuid4
 
+from .autonomous_gate_signals import (
+    NormalizedValidationSignal,
+    make_gate_failure_reason,
+    normalize_validation_signals,
+)
 from .cli_progress import make_cli_progress_callback
 from .config import load_config
 from .json_utils import json_dumps
@@ -89,29 +94,19 @@ def _as_int(value: Any) -> int | None:
     return None
 
 
-def _coerce_validation_rows(last_validation: Any) -> list[dict[str, Any]]:
-    if not isinstance(last_validation, list):
-        return []
-    rows: list[dict[str, Any]] = []
-    for row in last_validation:
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+def _estimate_security_high_findings(row: NormalizedValidationSignal) -> int:
+    diagnostics = row.diagnostics
+    direct = _as_int(diagnostics.get("high_findings"))
+    if direct is not None and direct >= 0:
+        return direct
 
+    sev_counts = diagnostics.get("severity_counts")
+    if isinstance(sev_counts, dict):
+        sev_high = _as_int(sev_counts.get("high"))
+        if sev_high is not None and sev_high >= 0:
+            return sev_high
 
-def _estimate_security_high_findings(row: dict[str, Any]) -> int:
-    diagnostics = row.get("diagnostics")
-    if isinstance(diagnostics, dict):
-        direct = _as_int(diagnostics.get("high_findings"))
-        if direct is not None and direct >= 0:
-            return direct
-        sev_counts = diagnostics.get("severity_counts")
-        if isinstance(sev_counts, dict):
-            sev_high = _as_int(sev_counts.get("high"))
-            if sev_high is not None and sev_high >= 0:
-                return sev_high
-
-    text = f"{row.get('stdout', '')}\n{row.get('stderr', '')}".lower()
+    text = f"{row.stdout}\n{row.stderr}".lower()
     for pattern in [r"high\s*[:=]\s*(\d+)", r"high findings\s*[:=]\s*(\d+)"]:
         m = re.search(pattern, text)
         if m:
@@ -119,10 +114,10 @@ def _estimate_security_high_findings(row: dict[str, Any]) -> int:
             if parsed is not None and parsed >= 0:
                 return parsed
 
-    return 1 if row.get("ok") is False else 0
+    return 1 if row.status == "failed" else 0
 
 
-def _extract_performance_regression_pct(ws: Workspace, validation_rows: list[dict[str, Any]]) -> tuple[float | None, str]:
+def _extract_performance_regression_pct(ws: Workspace, validation_rows: list[NormalizedValidationSignal]) -> tuple[float | None, str]:
     if ws.exists(".autodev/perf_baseline.json"):
         try:
             raw = ws.read_text(".autodev/perf_baseline.json")
@@ -148,9 +143,7 @@ def _extract_performance_regression_pct(ws: Workspace, validation_rows: list[dic
 
     fallback: list[float] = []
     for row in validation_rows:
-        diagnostics = row.get("diagnostics")
-        if not isinstance(diagnostics, dict):
-            continue
+        diagnostics = row.diagnostics
         for key in ("regression_pct", "performance_regression_pct", "max_regression_pct"):
             value = _as_float(diagnostics.get(key))
             if value is not None and value >= 0:
@@ -167,7 +160,7 @@ def _evaluate_quality_gates(
     policy: AutonomousQualityGatePolicy,
     last_validation: Any,
 ) -> dict[str, Any]:
-    validation_rows = _coerce_validation_rows(last_validation)
+    validation_rows = normalize_validation_signals(last_validation)
     gates: dict[str, Any] = {}
     fail_reasons: list[dict[str, Any]] = []
 
@@ -175,7 +168,7 @@ def _evaluate_quality_gates(
     if tests_cfg is None or tests_cfg.min_pass_rate is None:
         gates["tests"] = {"status": "not_configured"}
     else:
-        pytest_rows = [row for row in validation_rows if str(row.get("name")) == "pytest"]
+        pytest_rows = [row for row in validation_rows if row.name == "pytest"]
         if not pytest_rows:
             gates["tests"] = {
                 "status": "skipped",
@@ -185,7 +178,7 @@ def _evaluate_quality_gates(
                 "note": "pytest signal unavailable",
             }
         else:
-            passed = sum(1 for row in pytest_rows if row.get("ok") is True)
+            passed = sum(1 for row in pytest_rows if row.status == "passed")
             total = len(pytest_rows)
             pass_rate = passed / total
             gate_ok = pass_rate >= tests_cfg.min_pass_rate
@@ -197,14 +190,14 @@ def _evaluate_quality_gates(
             }
             if not gate_ok:
                 fail_reasons.append(
-                    {
-                        "type": "quality_gate_failed",
-                        "gate": "tests",
-                        "code": "tests.min_pass_rate_not_met",
-                        "message": "Pytest pass rate below configured threshold.",
-                        "threshold": {"min_pass_rate": tests_cfg.min_pass_rate},
-                        "observed": {"pass_rate": pass_rate, "passed": passed, "sample_size": total},
-                    }
+                    make_gate_failure_reason(
+                        gate="tests",
+                        code="tests.min_pass_rate_not_met",
+                        message="Pytest pass rate below configured threshold.",
+                        signal_source="final_validation.pytest",
+                        threshold={"min_pass_rate": tests_cfg.min_pass_rate},
+                        observed={"pass_rate": pass_rate, "passed": passed, "sample_size": total},
+                    )
                 )
 
     security_cfg = policy.security
@@ -212,7 +205,7 @@ def _evaluate_quality_gates(
         gates["security"] = {"status": "not_configured"}
     else:
         security_validators = {"bandit", "semgrep", "pip_audit"}
-        security_rows = [row for row in validation_rows if str(row.get("name")) in security_validators]
+        security_rows = [row for row in validation_rows if row.name in security_validators]
         if not security_rows:
             gates["security"] = {
                 "status": "skipped",
@@ -232,14 +225,14 @@ def _evaluate_quality_gates(
             }
             if not gate_ok:
                 fail_reasons.append(
-                    {
-                        "type": "quality_gate_failed",
-                        "gate": "security",
-                        "code": "security.max_high_findings_exceeded",
-                        "message": "Estimated high severity findings exceeded configured threshold.",
-                        "threshold": {"max_high_findings": security_cfg.max_high_findings},
-                        "observed": {"high_findings": high_findings, "sample_size": len(security_rows)},
-                    }
+                    make_gate_failure_reason(
+                        gate="security",
+                        code="security.max_high_findings_exceeded",
+                        message="Estimated high severity findings exceeded configured threshold.",
+                        signal_source="final_validation.security_validators",
+                        threshold={"max_high_findings": security_cfg.max_high_findings},
+                        observed={"high_findings": high_findings, "sample_size": len(security_rows)},
+                    )
                 )
 
     performance_cfg = policy.performance
@@ -265,14 +258,14 @@ def _evaluate_quality_gates(
             }
             if not gate_ok:
                 fail_reasons.append(
-                    {
-                        "type": "quality_gate_failed",
-                        "gate": "performance",
-                        "code": "performance.max_regression_pct_exceeded",
-                        "message": "Performance regression exceeded configured threshold.",
-                        "threshold": {"max_regression_pct": performance_cfg.max_regression_pct},
-                        "observed": {"regression_pct": observed_regression_pct},
-                    }
+                    make_gate_failure_reason(
+                        gate="performance",
+                        code="performance.max_regression_pct_exceeded",
+                        message="Performance regression exceeded configured threshold.",
+                        signal_source=signal_source,
+                        threshold={"max_regression_pct": performance_cfg.max_regression_pct},
+                        observed={"regression_pct": observed_regression_pct},
+                    )
                 )
 
     passed = len(fail_reasons) == 0
@@ -711,6 +704,11 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         gate_text = ""
         if gate_results is not None:
             gate_text = f", gate={'PASS' if gate_results.get('passed') else 'FAIL'}"
+            fail_reasons = gate_results.get("fail_reasons")
+            if isinstance(fail_reasons, list):
+                codes = [str(r.get("code")) for r in fail_reasons if isinstance(r, dict) and r.get("code")]
+                if codes:
+                    gate_text += f", gate_fail_codes={','.join(codes)}"
         md.append(
             f"- Iteration {item.get('iteration')}: "
             f"`{'OK' if item.get('ok') else 'FAILED'}` "

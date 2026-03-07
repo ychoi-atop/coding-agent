@@ -175,9 +175,9 @@ def test_autonomous_quality_gate_failure_triggers_retry_and_records_typed_reason
                 {"tasks": []},
                 [
                     {
-                        "name": "pytest",
-                        "ok": False,
-                        "status": "failed",
+                        "name": "py test",
+                        "ok": None,
+                        "status": "error",
                         "returncode": 1,
                         "stdout": "",
                         "stderr": "tests failed",
@@ -192,8 +192,8 @@ def test_autonomous_quality_gate_failure_triggers_retry_and_records_typed_reason
             [
                 {
                     "name": "pytest",
-                    "ok": True,
-                    "status": "passed",
+                    "ok": None,
+                    "status": "pass",
                     "returncode": 0,
                     "stdout": "",
                     "stderr": "",
@@ -225,6 +225,7 @@ def test_autonomous_quality_gate_failure_triggers_retry_and_records_typed_reason
     run_dir = sorted(out_root.iterdir())[0]
     state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
     report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+    report_md = (run_dir / "AUTONOMOUS_REPORT.md").read_text(encoding="utf-8")
 
     assert calls == 2
     assert state["status"] == "completed"
@@ -238,7 +239,11 @@ def test_autonomous_quality_gate_failure_triggers_retry_and_records_typed_reason
     reasons = first["quality_gate_fail_reasons"]
     assert isinstance(reasons, list) and reasons
     assert reasons[0]["type"] == "quality_gate_failed"
+    assert reasons[0]["taxonomy_version"] == "av2-003"
     assert reasons[0]["code"] == "tests.min_pass_rate_not_met"
+    assert reasons[0]["category"] == "reliability"
+    assert reasons[0]["severity"] == "blocking"
+    assert reasons[0]["signal_source"] == "final_validation.pytest"
 
     second = state["attempts"][1]
     assert second["ok"] is True
@@ -246,6 +251,7 @@ def test_autonomous_quality_gate_failure_triggers_retry_and_records_typed_reason
 
     assert report["iterations_gate_failed"] == 1
     assert report["gate_results"]["passed"] is True
+    assert "gate_fail_codes=tests.min_pass_rate_not_met" in report_md
 
 
 def test_autonomous_quality_gate_results_artifact_persisted(tmp_path, monkeypatch):
