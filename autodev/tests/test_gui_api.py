@@ -563,6 +563,42 @@ def test_trigger_retry_preserves_chain_and_linkage(monkeypatch: pytest.MonkeyPat
     assert retried["run_link"]["out"] == "./generated_runs/run-a"
 
 
+def test_trigger_retry_duplicate_requests_are_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    popen_calls = 0
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal popen_calls
+        popen_calls += 1
+        return _FakeProcess(poll_result=None)
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    first = trigger_start(
+        {
+            "prd": "examples/PRD.md",
+            "out": "./generated_runs/dup-retry",
+            "profile": "enterprise",
+            "correlation_id": "corr-dup-retry",
+        },
+        execute=True,
+    )
+    parent_process_id = first["process"]["process_id"]
+
+    retry_payload = {
+        "process_id": parent_process_id,
+        "correlation_id": "corr-dup-retry",
+    }
+    retried_a = trigger_retry(retry_payload, execute=True)
+    retried_b = trigger_retry(retry_payload, execute=True)
+
+    assert retried_a["process"]["process_id"] == retried_b["process"]["process_id"]
+    assert retried_a["process"]["retry_attempt"] == retried_b["process"]["retry_attempt"] == 2
+    assert retried_a["idempotent_replay"] is False
+    assert retried_b["idempotent_replay"] is True
+    assert retried_b["audit_event"]["idempotent_replay"] is True
+    assert popen_calls == 2  # 1 start + 1 retry spawn (duplicate request must not respawn)
+
+
 def test_trigger_retry_unknown_process_raises_not_found() -> None:
     with pytest.raises(FileNotFoundError, match="Unknown process_id"):
         trigger_retry({"process_id": "proc-missing"}, execute=False)

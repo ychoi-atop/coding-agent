@@ -73,6 +73,8 @@ class _FakeProcess:
         self.wait_returncode = wait_returncode
         self.terminated = False
         self.killed = False
+        self.terminate_calls = 0
+        self.kill_calls = 0
 
     def poll(self):
         if self.killed:
@@ -82,9 +84,11 @@ class _FakeProcess:
         return None
 
     def terminate(self):
+        self.terminate_calls += 1
         self.terminated = True
 
     def kill(self):
+        self.kill_calls += 1
         self.killed = True
 
     def wait(self, timeout=None):
@@ -1186,6 +1190,138 @@ def test_stop_and_retry_endpoints_happy_path(gui_server, tmp_path, monkeypatch):
     assert stop_status == 200
     assert stop_body["correlation_id"] == "corr-server-retry-stop"
     assert stop_body["process"]["state"] in {"terminated", "exited"}
+
+
+def test_stop_endpoint_duplicate_requests_are_idempotent(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    fake = _FakeProcess(terminate_timeout=False)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    start_status, start_body = _post_json(
+        f"{base_url}/api/runs/start",
+        {"prd": str(prd), "out": str(tmp_path / "out-stop-dup"), "profile": "enterprise", "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert start_status == 200
+    process_id = start_body["process"]["process_id"]
+
+    first_status, first_body = _post_json(
+        f"{base_url}/api/runs/stop",
+        {"process_id": process_id, "graceful_timeout_sec": 0.1},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    second_status, second_body = _post_json(
+        f"{base_url}/api/runs/stop",
+        {"process_id": process_id, "graceful_timeout_sec": 0.1},
+        headers={"X-Autodev-Role": "operator"},
+    )
+
+    assert first_status == 200
+    assert second_status == 200
+    assert first_body["process"]["process_id"] == second_body["process"]["process_id"]
+    assert first_body["process"]["state"] == second_body["process"]["state"] == "terminated"
+    assert fake.terminate_calls == 1
+
+
+def test_retry_endpoint_duplicate_requests_are_idempotent(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    popen_calls = 0
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal popen_calls
+        popen_calls += 1
+        return _FakeProcess(terminate_timeout=False)
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    start_status, start_body = _post_json(
+        f"{base_url}/api/runs/start",
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out-retry-dup"),
+            "profile": "enterprise",
+            "correlation_id": "corr-server-dup-retry",
+            "execute": True,
+        },
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert start_status == 200
+    process_id = start_body["process"]["process_id"]
+
+    retry_payload = {
+        "process_id": process_id,
+        "correlation_id": "corr-server-dup-retry",
+        "execute": True,
+    }
+    first_status, first_body = _post_json(
+        f"{base_url}/api/runs/retry",
+        retry_payload,
+        headers={"X-Autodev-Role": "operator"},
+    )
+    second_status, second_body = _post_json(
+        f"{base_url}/api/runs/retry",
+        retry_payload,
+        headers={"X-Autodev-Role": "operator"},
+    )
+
+    assert first_status == 200
+    assert second_status == 200
+    assert first_body["process"]["process_id"] == second_body["process"]["process_id"]
+    assert first_body["idempotent_replay"] is False
+    assert second_body["idempotent_replay"] is True
+    assert second_body["audit_event"]["idempotent_replay"] is True
+    assert popen_calls == 2  # 1 start + 1 retry spawn
+
+
+def test_stop_endpoint_forced_kill_fallback_still_audited(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    fake = _FakeProcess(terminate_timeout=True)
+
+    def _fake_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return fake
+
+    monkeypatch.setattr("autodev.gui_process_manager.subprocess.Popen", _fake_popen)
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    start_status, start_body = _post_json(
+        f"{base_url}/api/runs/start",
+        {"prd": str(prd), "out": str(tmp_path / "out-forced"), "profile": "enterprise", "execute": True},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert start_status == 200
+
+    stop_status, stop_body = _post_json(
+        f"{base_url}/api/runs/stop",
+        {"process_id": start_body["process"]["process_id"], "graceful_timeout_sec": 0.1},
+        headers={"X-Autodev-Role": "operator"},
+    )
+    assert stop_status == 200
+    assert stop_body["process"]["state"] == "killed"
+    assert stop_body["process"]["stop_reason"] == "forced"
+    assert stop_body["audit_event"]["result_state"] == "killed"
+    assert fake.terminate_calls == 1
+    assert fake.kill_calls == 1
 
 
 def test_stop_endpoint_unknown_process_returns_404(gui_server, tmp_path, monkeypatch):
