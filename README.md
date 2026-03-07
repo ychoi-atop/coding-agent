@@ -1,7 +1,24 @@
 # AutoDev Agent (Enterprise+)
 
-AutoDev Agent is a PRD-to-code orchestration tool.
-It takes a Markdown PRD, plans implementation tasks, generates code, runs local validation, and auto-fixes failures in bounded loops.
+AutoDev Agent turns a Markdown PRD into a working Python project with tests and validation artifacts.
+It is designed for teams that want a repeatable **plan -> implement -> validate -> fix** loop they can run locally, inspect, and iterate on.
+
+## Why this project
+Shipping from a PRD is usually fragmented: planning in one place, code generation in another, and validation spread across scripts/CI.
+AutoDev brings those steps into one orchestrated flow with explicit artifacts and bounded retries, so runs are easier to understand and debug.
+
+## Who it's for
+- Developers and tech leads who want a local-first PRD-to-code workflow
+- Demo/review owners who need quick, reproducible run evidence
+- Teams that prefer validation by local tools over model-only claims
+
+## What you get
+- **PRD-to-code execution:** PRD parsing, task planning, code generation, validator runs, and bounded auto-fix loops
+- **Local-simple operator lane:** one-command local GUI start with **Quick Run** support
+- **Operational visibility:** Process panel for active/recent run tracking and retry/stop actions
+- **Debuggable artifacts:** read-only Artifact Viewer for `.autodev/*` outputs and validator triage
+- **Run quality snapshot:** latest scorecard surfaced in the Overview (plus local demo scorecard generator)
+- **Confidence checks:** deterministic local-simple E2E smoke lane and docs/runbooks for onboarding and handoff
 
 ## What This Agent Produces
 - A runnable Python project scaffolded from templates (`python_fastapi` or `python_cli`).
@@ -409,6 +426,7 @@ Local simple mode quick notes:
 - default GUI role becomes `developer` for low-friction run controls
 - default GUI profile hint becomes `local_simple`
 - Overview tab has **Quick Run** (one-click `/api/runs/start` execute mode) using local-simple defaults + selected/default PRD path
+- Overview also includes the latest run **Scorecard** widget (`/api/scorecard/latest`) for fast quality/status checks
 - Overview/Validation/Processes tabs now expose explicit loading/empty/error state boxes with recovery actions (refresh/retry + logs hint shortcuts)
 - CLI startup now emits one concise summary block: URL (including `--open` result), kickoff status, and a single next action
 - Validation tab includes read-only **Artifact Viewer** (`/api/runs/<run_id>/artifacts/read`) with failed-validator triage deep-link buttons, pretty JSON rendering (raw fallback on malformed/truncated payloads), plus copy/download utilities with auto-clearing success/error toasts and focus preservation
