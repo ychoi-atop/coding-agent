@@ -24,6 +24,34 @@ def test_normalize_run_trace_supports_phase_timeline_alias() -> None:
     assert dto["phase_timeline"][0]["phase"] == "implementation"
     assert dto["started_at"] == "2026-03-05T01:00:00Z"
 
+    run_start = dto["timeline_events"][0]
+    assert run_start["event_type"] == "run.start"
+    assert run_start["event_category"] == "run"
+
+    synthesized_phase = [row for row in dto["timeline_events"] if row["event_type"] == "phase.end"][0]
+    assert synthesized_phase["phase"] == "implementation"
+    assert synthesized_phase["source"] == "phase_timeline"
+
+
+def test_normalize_run_trace_normalizes_event_taxonomy_aliases() -> None:
+    dto = normalize_run_trace(
+        {
+            "trace_events": [
+                {"type": "run_start", "timestamp": "2026-03-06T01:00:00Z"},
+                {"type": "phase.completed", "phase": "planning", "elapsed_ms": 500, "status": "ok"},
+                {"type": "run.end", "timestamp": "2026-03-06T01:00:02Z"},
+            ]
+        }
+    )
+
+    assert dto["started_at"] == "2026-03-06T01:00:00Z"
+    assert dto["completed_at"] == "2026-03-06T01:00:02Z"
+
+    types = [row["event_type"] for row in dto["timeline_events"]]
+    assert "run.start" in types
+    assert "phase.end" in types
+    assert "run.completed" in types
+
 
 def test_normalize_tasks_aggregates_attempt_rows() -> None:
     rows = normalize_tasks(
