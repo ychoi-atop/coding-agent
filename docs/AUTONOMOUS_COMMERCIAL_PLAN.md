@@ -1,5 +1,7 @@
 # Autonomous Commercial App Generation Plan (Execution-Ready v1)
 
+> v1b refresh (2026-03-07): clarified cross-doc linkage and operator entry points from README, onboarding, and autonomous mode guide.
+
 ## Executive summary
 
 This document defines how AutoDev moves from an unattended **engineering loop** to a reliable **commercial app delivery system** that can run with minimal human intervention while preserving safety, quality, and auditability.
