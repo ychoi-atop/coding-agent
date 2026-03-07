@@ -2,8 +2,8 @@
 
 ## Scope
 
-This plan reflects `main` after merges through **NXT-013**, and includes **NXT-014 backlog grooming + priority re-rank**.
-Primary objective: keep local-simple operator workflow reliable, demoable, and RC handoff-ready on a single laptop.
+This plan reflects `main` after merges through **NXT-014** and marks the current NXT wave (**NXT-001 ~ NXT-014**) as closed.
+Primary objective now shifts to stabilization readiness: keep local-simple operator workflow reliable, demoable, and RC handoff-ready on a single laptop.
 
 ## Current baseline (already merged)
 
@@ -20,6 +20,16 @@ Primary objective: keep local-simple operator workflow reliable, demoable, and R
 - NXT-011: Local-simple operator runbook refresh
 - NXT-012: Overview/Validation/Processes empty/error/loading UX pass
 - NXT-013: Next-cut RC checklist + changelog draft
+- NXT-014: Backlog grooming + priority re-rank
+
+## NXT wave closure status (NXT-001 ~ NXT-014)
+
+All tickets in the current NXT wave are complete on `main`.
+
+- Wave start: NXT-001
+- Wave end: NXT-014
+- Completion state: ✅ **14/14 done**
+- Tracking source of truth: PR merges #7 through #21
 
 ## NXT-014 outcome (this ticket)
 
@@ -66,6 +76,8 @@ Detailed ticket specs live in `docs/BACKLOG_NEXT_WEEK.md`.
 ## Related docs
 
 - `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/RELEASE_NOTES_SHOWOFF_LOCAL_V2.md`
+- `docs/STABILIZATION_MODE.md`
 - `docs/LOCAL_SIMPLE_MODE.md`
 - `docs/DEMO_PLAYBOOK.md`
 - `docs/RC_NEXT_CUT_CHECKLIST.md`

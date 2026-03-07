@@ -2,6 +2,13 @@
 
 This backlog is the execution companion for `docs/PLAN_NEXT_WEEK.md`.
 
+## NXT wave closure snapshot (NXT-001 ~ NXT-014)
+
+- Closure state: ✅ **complete**
+- Ticket count: **14 / 14 done**
+- Mainline merge span: PR **#7 → #21**
+- Post-closure operating mode: stabilization window + hotfix-only unless blocker emerges
+
 ## Newly completed
 
 ### NXT-013 — Next-cut RC checklist + changelog draft ✅ done
@@ -105,6 +112,8 @@ This backlog is the execution companion for `docs/PLAN_NEXT_WEEK.md`.
 ## Related docs
 
 - `docs/PLAN_NEXT_WEEK.md`
+- `docs/RELEASE_NOTES_SHOWOFF_LOCAL_V2.md`
+- `docs/STABILIZATION_MODE.md`
 - `docs/LOCAL_SIMPLE_MODE.md`
 - `docs/DEMO_PLAYBOOK.md`
 - `docs/RC_NEXT_CUT_CHECKLIST.md`
