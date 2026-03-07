@@ -1101,6 +1101,8 @@ def test_process_panel_static_contract(gui_server):
     assert 'id="processStopBtn"' in index_html
     assert 'id="processClearFiltersBtn"' in index_html
     assert 'id="processPageNextBtn"' in index_html
+    assert 'id="processPollingHint"' in index_html
+    assert 'id="processStaleIndicator"' in index_html
 
     with request.urlopen(f"{base_url}/app.js", timeout=5) as resp:
         app_js = resp.read().decode("utf-8")
@@ -1113,9 +1115,15 @@ def test_process_panel_static_contract(gui_server):
     assert "function syncProcessActionButtons(process)" in app_js
     assert "state.processActionInFlight" in app_js
     assert "state.processLoadRequestSeq" in app_js
+    assert "function noteProcessPollingSnapshot(rows, { source = 'manual' } = {})" in app_js
+    assert "processPollBackoffExp" in app_js
+    assert "processNextPollAtMs" in app_js
+    assert "STALE • last transition" in app_js
+    assert "Auto refresh " in app_js
     assert "No processes match current filters. Adjust filters and refresh." in app_js
     assert "No tracked processes yet. Start or retry a run to populate this panel." in app_js
     assert "if (requestSeq !== state.processLoadRequestSeq)" in app_js
+    assert "source: 'poll'" in app_js
     assert "Another process action (" in app_js
 
 

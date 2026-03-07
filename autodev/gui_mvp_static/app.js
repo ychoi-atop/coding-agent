@@ -42,6 +42,12 @@ const state = {
   processLoadInFlight: false,
   processActionInFlight: false,
   processActionType: '',
+  processTransitionSignature: '',
+  processStablePollCount: 0,
+  processPollBackoffExp: 0,
+  processPollMaxBackoffExp: 3,
+  processNextPollAtMs: 0,
+  processStaleThresholdMs: 45_000,
 };
 
 const ARTIFACT_ACTION_TOAST_MS = 3200;
@@ -520,6 +526,121 @@ function setProcessStatus(message, { error = false } = {}) {
   if (!node) return;
   node.textContent = String(message || '');
   node.classList.toggle('error-text', Boolean(error));
+}
+
+function parseIsoMs(raw) {
+  if (!raw) return 0;
+  const ms = Date.parse(String(raw));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function formatElapsedMs(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return `${hours}h ${remMinutes}m`;
+}
+
+function latestProcessTransitionMs(process, historyOverride = null) {
+  if (!process || typeof process !== 'object') return 0;
+
+  const history = Array.isArray(historyOverride)
+    ? historyOverride
+    : (Array.isArray(process.transitions) ? process.transitions : []);
+
+  let latest = 0;
+  history.forEach((entry) => {
+    latest = Math.max(latest, parseIsoMs(entry?.at));
+  });
+
+  return Math.max(latest, parseIsoMs(process.started_at));
+}
+
+function buildProcessTransitionSignature(rows) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  return [...rows]
+    .sort((a, b) => String(a?.process_id || '').localeCompare(String(b?.process_id || '')))
+    .map((row) => {
+      const history = Array.isArray(row?.transitions) ? row.transitions : [];
+      const latest = latestProcessTransitionMs(row, history);
+      return [
+        String(row?.process_id || ''),
+        String(row?.state || ''),
+        String(history.length),
+        String(latest),
+      ].join(':');
+    })
+    .join('|');
+}
+
+function setProcessStaleIndicator(process, history = null) {
+  const node = el('processStaleIndicator');
+  if (!node) return;
+
+  if (!process) {
+    node.classList.add('hidden');
+    node.textContent = '';
+    return;
+  }
+
+  const ageMs = Math.max(0, Date.now() - latestProcessTransitionMs(process, history));
+  const isStale = ageMs >= Number(state.processStaleThresholdMs || 45_000);
+  node.classList.toggle('hidden', !isStale);
+  node.textContent = isStale ? `STALE • last transition ${formatElapsedMs(ageMs)} ago` : '';
+}
+
+function renderProcessPollingHint() {
+  const node = el('processPollingHint');
+  if (!node || !state.liveUpdateEnabled || state.useMock) {
+    if (node) node.textContent = '';
+    return;
+  }
+
+  const baseSec = Math.max(1, Math.round(Number(state.pollIntervalMs || 8000) / 1000));
+  const intervalSec = baseSec * (2 ** Number(state.processPollBackoffExp || 0));
+  const stable = Number(state.processStablePollCount || 0);
+  node.textContent = stable > 0
+    ? `Auto refresh ${intervalSec}s (adaptive x${2 ** Number(state.processPollBackoffExp || 0)} after ${stable} stable poll${stable > 1 ? 's' : ''})`
+    : `Auto refresh ${intervalSec}s`;
+}
+
+function resetProcessPollingBackoff() {
+  state.processTransitionSignature = '';
+  state.processStablePollCount = 0;
+  state.processPollBackoffExp = 0;
+  state.processNextPollAtMs = 0;
+  renderProcessPollingHint();
+}
+
+function noteProcessPollingSnapshot(rows, { source = 'manual' } = {}) {
+  const signature = buildProcessTransitionSignature(rows);
+  const hadPrevious = Boolean(state.processTransitionSignature);
+  const changed = !hadPrevious || signature !== state.processTransitionSignature;
+
+  state.processTransitionSignature = signature;
+
+  if (changed) {
+    state.processStablePollCount = 0;
+    state.processPollBackoffExp = 0;
+  } else if (source === 'poll') {
+    state.processStablePollCount += 1;
+    if (state.processStablePollCount >= 2) {
+      state.processPollBackoffExp = Math.min(
+        Number(state.processPollMaxBackoffExp || 3),
+        Number(state.processPollBackoffExp || 0) + 1,
+      );
+      state.processStablePollCount = 0;
+    }
+  }
+
+  const baseMs = Math.max(1000, Number(state.pollIntervalMs || 8000));
+  const nextMs = baseMs * (2 ** Number(state.processPollBackoffExp || 0));
+  state.processNextPollAtMs = Date.now() + nextMs;
+  renderProcessPollingHint();
 }
 
 function setRunControlHints(hints) {
@@ -1922,6 +2043,7 @@ function renderProcessDetail(process, history) {
     card.classList.add('hidden');
     empty.classList.remove('hidden');
     syncProcessActionButtons(null);
+    setProcessStaleIndicator(null);
     return;
   }
 
@@ -1984,6 +2106,8 @@ function renderProcessDetail(process, history) {
       historyNode.appendChild(row);
     });
   }
+
+  setProcessStaleIndicator(process, rowsHistory);
 }
 
 async function selectProcess(processId) {
@@ -2035,7 +2159,11 @@ async function selectProcess(processId) {
   }
 }
 
-async function loadProcesses({ silent = false } = {}) {
+async function loadProcesses({ silent = false, source = 'manual' } = {}) {
+  if (source === 'poll' && state.processLoadInFlight) {
+    return;
+  }
+
   const requestSeq = Number(state.processLoadRequestSeq || 0) + 1;
   state.processLoadRequestSeq = requestSeq;
   state.processLoadInFlight = true;
@@ -2059,6 +2187,7 @@ async function loadProcesses({ silent = false } = {}) {
 
     state.processListError = '';
     state.processes = Array.isArray(payload?.processes) ? payload.processes : [];
+    noteProcessPollingSnapshot(state.processes, { source });
     await refreshProcessPanel();
   } catch (err) {
     if (requestSeq !== state.processLoadRequestSeq) {
@@ -2072,6 +2201,8 @@ async function loadProcesses({ silent = false } = {}) {
     renderProcessPagination(pageMeta);
     renderProcessDetail(null, []);
     syncProcessActionButtons(null);
+    state.processNextPollAtMs = Date.now() + Math.max(1000, Number(state.pollIntervalMs || 8000));
+    renderProcessPollingHint();
     if (!silent) {
       setProcessStatus(state.processListError, { error: true });
     }
@@ -2123,7 +2254,8 @@ async function runProcessAction(action) {
       }
     }
 
-    await Promise.all([loadRuns(), loadProcesses({ silent: true })]);
+    resetProcessPollingBackoff();
+    await Promise.all([loadRuns(), loadProcesses({ silent: true, source: 'action' })]);
     setRunControlStatus(`${normalizedAction.toUpperCase()} OK • process=${detail.process_id}`);
     setProcessStatus(`${normalizedAction.toUpperCase()} completed for ${detail.process_id}.`);
   } catch (err) {
@@ -2210,7 +2342,8 @@ function initProcessControls() {
   });
 
   refreshBtn.addEventListener('click', async () => {
-    await loadProcesses();
+    resetProcessPollingBackoff();
+    await loadProcesses({ source: 'manual' });
   });
 
   stopBtn.addEventListener('click', async () => {
@@ -2246,16 +2379,32 @@ function clearPolling() {
 
 function setupPolling() {
   clearPolling();
-  if (!state.liveUpdateEnabled || state.useMock) return;
+  if (!state.liveUpdateEnabled || state.useMock) {
+    renderProcessPollingHint();
+    return;
+  }
 
   state.pollTimer = setInterval(async () => {
     await refreshCurrentRun({ silent: true });
+    if (state.selectedProcessDetail) {
+      setProcessStaleIndicator(state.selectedProcessDetail, state.selectedProcessHistory);
+    }
+
     const activeTab = document.querySelector('.tab[data-tab="processes"].is-active');
     const selectedState = state.selectedProcessDetail?.state || '';
-    if (activeTab || isProcessActive(selectedState)) {
-      await loadProcesses({ silent: true });
+    if (!(activeTab || isProcessActive(selectedState))) {
+      return;
     }
+
+    const now = Date.now();
+    if (now < Number(state.processNextPollAtMs || 0)) {
+      return;
+    }
+
+    await loadProcesses({ silent: true, source: 'poll' });
   }, state.pollIntervalMs);
+
+  renderProcessPollingHint();
 }
 
 async function refreshCurrentRun({ silent = false } = {}) {
@@ -2562,7 +2711,8 @@ async function runControlAction(action, payloadOverride = null) {
     setRunControlStatus(`${action.toUpperCase()} OK${summary.length ? ` • ${summary.join(' • ')}` : ''}`);
     setRunControlHints([]);
 
-    await Promise.all([loadRuns(), loadProcesses({ silent: true })]);
+    resetProcessPollingBackoff();
+    await Promise.all([loadRuns(), loadProcesses({ silent: true, source: 'action' })]);
     if (state.selectedRunId) {
       await refreshCurrentRun({ silent: true });
     }
@@ -2766,6 +2916,9 @@ function initLiveUpdateControls() {
 
   toggle.addEventListener('change', () => {
     state.liveUpdateEnabled = toggle.checked;
+    if (!state.liveUpdateEnabled) {
+      resetProcessPollingBackoff();
+    }
     setupPolling();
     el('statusLine').textContent = state.liveUpdateEnabled
       ? `Live update enabled (${state.pollIntervalMs / 1000}s)`
@@ -2775,6 +2928,7 @@ function initLiveUpdateControls() {
   interval.addEventListener('change', () => {
     const ms = Number(interval.value) || 8000;
     state.pollIntervalMs = ms;
+    resetProcessPollingBackoff();
     setupPolling();
     if (state.liveUpdateEnabled) {
       el('statusLine').textContent = `Live update interval: ${ms / 1000}s`;
