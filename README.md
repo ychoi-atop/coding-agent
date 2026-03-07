@@ -431,6 +431,7 @@ Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_state.json`
 - `.autodev/autonomous_report.json`
 - `AUTONOMOUS_REPORT.md`
+- `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 
 See `docs/AUTONOMOUS_MODE.md` for detailed policy and operational behavior.
 For commercial-grade autonomous delivery strategy and rollout governance, see `docs/AUTONOMOUS_COMMERCIAL_PLAN.md`.

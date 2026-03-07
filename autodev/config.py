@@ -11,6 +11,7 @@ from .schemas import VALIDATORS
 
 _POLICY_SECTIONS = {"per_task", "final"}
 _POLICY_KEYS = {"soft_fail"}
+_AUTONOMOUS_GATE_SECTIONS = {"tests", "security", "performance"}
 _QUALITY_PROFILE_KEYS = {
     "name",
     "validator_policy",
@@ -567,6 +568,111 @@ def _validate_profile_map(profiles: Any, errors: List[str]) -> None:
         )
 
 
+def _coerce_float(value: Any, path: str, errors: List[str], default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        errors.append(f"{path} must be a number, not a boolean.")
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        if value.strip() == "":
+            errors.append(f"{path} must be a number, got empty string.")
+            return default
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    errors.append(f"{path} must be a number, got {type(value).__name__}.")
+    return default
+
+
+def _validate_run_autonomous_quality_gate_policy(policy: Any, errors: List[str]) -> None:
+    base = "run.autonomous.quality_gate_policy"
+    if policy is None:
+        return
+    if not isinstance(policy, dict):
+        errors.append(f"{base} must be an object.")
+        return
+
+    unknown_sections = sorted(set(policy.keys()) - _AUTONOMOUS_GATE_SECTIONS)
+    if unknown_sections:
+        errors.append(
+            f"{base} has unknown section(s): {unknown_sections}. "
+            f"Allowed sections: {sorted(_AUTONOMOUS_GATE_SECTIONS)}."
+        )
+
+    tests = policy.get("tests")
+    if tests is not None:
+        if not isinstance(tests, dict):
+            errors.append(f"{base}.tests must be an object.")
+        else:
+            unknown = sorted(set(tests.keys()) - {"min_pass_rate"})
+            if unknown:
+                errors.append(
+                    f"{base}.tests has unknown key(s): {unknown}. Allowed keys: ['min_pass_rate']."
+                )
+            min_pass_rate = _coerce_float(tests.get("min_pass_rate"), f"{base}.tests.min_pass_rate", errors)
+            if min_pass_rate is not None:
+                if min_pass_rate < 0 or min_pass_rate > 1:
+                    errors.append(f"{base}.tests.min_pass_rate must be between 0 and 1.")
+                else:
+                    tests["min_pass_rate"] = min_pass_rate
+
+    security = policy.get("security")
+    if security is not None:
+        if not isinstance(security, dict):
+            errors.append(f"{base}.security must be an object.")
+        else:
+            unknown = sorted(set(security.keys()) - {"max_high_findings"})
+            if unknown:
+                errors.append(
+                    f"{base}.security has unknown key(s): {unknown}. Allowed keys: ['max_high_findings']."
+                )
+            max_high_findings = _coerce_int(
+                security.get("max_high_findings"),
+                f"{base}.security.max_high_findings",
+                errors,
+            )
+            if max_high_findings is not None:
+                if max_high_findings < 0:
+                    errors.append(f"{base}.security.max_high_findings must be >= 0.")
+                else:
+                    security["max_high_findings"] = max_high_findings
+
+    performance = policy.get("performance")
+    if performance is not None:
+        if not isinstance(performance, dict):
+            errors.append(f"{base}.performance must be an object.")
+        else:
+            unknown = sorted(set(performance.keys()) - {"max_regression_pct"})
+            if unknown:
+                errors.append(
+                    f"{base}.performance has unknown key(s): {unknown}. Allowed keys: ['max_regression_pct']."
+                )
+            max_regression_pct = _coerce_float(
+                performance.get("max_regression_pct"),
+                f"{base}.performance.max_regression_pct",
+                errors,
+            )
+            if max_regression_pct is not None:
+                if max_regression_pct < 0:
+                    errors.append(f"{base}.performance.max_regression_pct must be >= 0.")
+                else:
+                    performance["max_regression_pct"] = max_regression_pct
+
+
+def _validate_run_autonomous_section(autonomous: Any, errors: List[str]) -> None:
+    if autonomous is None:
+        return
+    if not isinstance(autonomous, dict):
+        errors.append("run.autonomous must be an object.")
+        return
+
+    _validate_run_autonomous_quality_gate_policy(autonomous.get("quality_gate_policy"), errors)
+
+
 def _validate_run_section(run: Any, errors: List[str]) -> None:
     if run is None:
         return
@@ -581,19 +687,18 @@ def _validate_run_section(run: Any, errors: List[str]) -> None:
         run["max_parallel_tasks"] = max_parallel_tasks
 
     budget = run.get("budget")
-    if budget is None:
-        return
-    if not isinstance(budget, dict):
-        errors.append("run.budget must be an object.")
-        return
+    if budget is not None:
+        if not isinstance(budget, dict):
+            errors.append("run.budget must be an object.")
+        else:
+            max_tokens = _coerce_int(budget.get("max_tokens"), "run.budget.max_tokens", errors, default=None)
+            if max_tokens is not None:
+                if max_tokens <= 0:
+                    errors.append("run.budget.max_tokens must be a positive integer.")
+                else:
+                    budget["max_tokens"] = max_tokens
 
-    max_tokens = _coerce_int(budget.get("max_tokens"), "run.budget.max_tokens", errors, default=None)
-    if max_tokens is None:
-        return
-    if max_tokens <= 0:
-        errors.append("run.budget.max_tokens must be a positive integer.")
-        return
-    budget["max_tokens"] = max_tokens
+    _validate_run_autonomous_section(run.get("autonomous"), errors)
 
 
 def _validate_plugins_section(plugins: Any, errors: List[str]) -> None:

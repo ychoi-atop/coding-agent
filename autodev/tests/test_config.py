@@ -224,6 +224,67 @@ profiles:
     assert "run.budget.max_tokens must be a positive integer" in str(exc.value)
 
 
+def test_load_config_accepts_autonomous_quality_gate_policy_thresholds(tmp_path):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: fake-model
+run:
+  autonomous:
+    quality_gate_policy:
+      tests:
+        min_pass_rate: 0.95
+      security:
+        max_high_findings: 0
+      performance:
+        max_regression_pct: 5
+profiles:
+  enterprise:
+    validators:
+      - ruff
+      - pytest
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    config = load_config(str(cfg_path))
+    gate_cfg = config["run"]["autonomous"]["quality_gate_policy"]
+    assert gate_cfg["tests"]["min_pass_rate"] == 0.95
+    assert gate_cfg["security"]["max_high_findings"] == 0
+    assert gate_cfg["performance"]["max_regression_pct"] == 5.0
+
+
+def test_load_config_rejects_invalid_autonomous_quality_gate_policy_thresholds(tmp_path):
+    cfg = """\
+llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  api_key: test-key
+  model: fake-model
+run:
+  autonomous:
+    quality_gate_policy:
+      tests:
+        min_pass_rate: 1.1
+profiles:
+  enterprise:
+    validators:
+      - ruff
+      - pytest
+    template_candidates:
+      - python_fastapi
+"""
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(cfg, encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc:
+        load_config(str(cfg_path))
+
+    assert "run.autonomous.quality_gate_policy.tests.min_pass_rate must be between 0 and 1" in str(exc.value)
+
+
 def test_load_config_accepts_llm_role_temperatures(tmp_path):
     cfg = """\
 llm:
