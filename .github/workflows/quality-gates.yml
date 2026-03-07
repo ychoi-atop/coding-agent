@@ -18,5 +18,7 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
       - name: Fast code quality lane
         run: make ci-fast
+      - name: Local-simple E2E smoke lane (NXT-007)
+        run: make smoke-local-simple-e2e
       - name: Docs-as-code sanity (markdown local links)
         run: make check-docs

@@ -71,6 +71,27 @@ AUTODEV_GUI_ROLE=evaluator \
 autodev gui --runs-root ./generated_runs --host 127.0.0.1 --port 8787
 ```
 
+## NXT-007 smoke suite (quick run -> process update -> artifact read)
+
+Use this deterministic lane to validate the local-simple run-control chain end-to-end:
+
+```bash
+# local wrapper
+make smoke-local-simple-e2e
+
+# direct invocation (same path used by CI)
+python scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simple-e2e-smoke
+```
+
+What it verifies:
+- Quick-run kickoff via `POST /api/runs/start` (`execute=true`)
+- Process panel data path updates via `/api/processes/<id>` + `/history` (running -> terminal)
+- Artifact viewer read path via `/api/runs/<run_id>/artifacts/read`
+
+Failure artifacts:
+- Stored under `artifacts/local-simple-e2e-smoke/<timestamp>/`
+- Includes GUI server stdout/stderr logs, process-state snapshot, and captured API payload snapshots for triage
+
 ## Safety note
 
 Local simple mode is intentionally optimized for laptop-local usage. It should not be treated as a production security profile.

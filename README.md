@@ -396,6 +396,16 @@ Local simple mode quick notes:
 - Validation tab includes read-only **Artifact Viewer** (`/api/runs/<run_id>/artifacts/read`) with failed-validator triage deep-link buttons, pretty JSON rendering (raw fallback on malformed/truncated payloads), plus copy/download utilities with auto-clearing success/error toasts and focus preservation
 - Processes tab surfaces active/recent tracked processes (`/api/processes`) with run linkage, retry-chain summary, transition history, and stop/retry actions
 
+Local-simple smoke lane (NXT-007):
+```bash
+# local
+make smoke-local-simple-e2e
+
+# CI-equivalent one-shot
+python scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simple-e2e-smoke
+```
+Smoke artifacts are persisted under `./artifacts/local-simple-e2e-smoke/<timestamp>/` (server stdout/stderr logs + API snapshots) so failures remain debuggable.
+
 See `docs/LOCAL_SIMPLE_MODE.md` for quickstart + when to switch to hardened mode.
 
 Known limits (MVP):

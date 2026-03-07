@@ -54,6 +54,10 @@ test-backend:
 		$(PYTHON) -m pytest -q autodev/tests; \
 	fi
 
+# Local-simple GUI/API smoke lane (NXT-007).
+smoke-local-simple-e2e:
+	$(PYTHON) scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simple-e2e-smoke
+
 # Fast local CI-equivalent pass for quick iteration.
 ci-fast: compile check-fast tests-fast
 
