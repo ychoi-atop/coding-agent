@@ -29,6 +29,7 @@ const state = {
   artifactViewerLoading: false,
   artifactViewerRequestedBy: '',
   artifactViewerActionStatus: null,
+  artifactViewerExpanded: false,
   processes: [],
   selectedProcessId: null,
   selectedProcessDetail: null,
@@ -51,6 +52,8 @@ const state = {
 };
 
 const ARTIFACT_ACTION_TOAST_MS = 3200;
+const ARTIFACT_RENDER_PREVIEW_CHARS = 48_000;
+const ARTIFACT_JSON_EXPAND_THRESHOLD_CHARS = 120_000;
 let artifactViewerActionToastTimer = null;
 
 const PHASE_COLORS = {
@@ -1046,6 +1049,7 @@ function clearArtifactViewerState({ preservePath = false } = {}) {
   state.artifactViewerLoading = false;
   state.artifactViewerRequestedBy = '';
   state.artifactViewerActionStatus = null;
+  state.artifactViewerExpanded = false;
   if (artifactViewerActionToastTimer) {
     clearTimeout(artifactViewerActionToastTimer);
     artifactViewerActionToastTimer = null;
@@ -1064,45 +1068,174 @@ function formatArtifactJsonError(error) {
   return detail.join(' • ');
 }
 
-function getArtifactViewerTextPayload(payload) {
-  if (!payload) {
-    return { text: '', mode: 'empty', canExport: false };
+function jsonShapePreview(value, depth = 0) {
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    if (depth >= 1) return `[Array(${value.length})]`;
+    return value.slice(0, 8).map((row) => jsonShapePreview(row, depth + 1));
+  }
+  if (typeof value === 'object') {
+    if (depth >= 1) return '[Object]';
+    const entries = Object.entries(value).slice(0, 20);
+    return Object.fromEntries(entries.map(([key, row]) => [key, jsonShapePreview(row, depth + 1)]));
+  }
+  return value;
+}
+
+function formatJsonErrorFallback(payload) {
+  const raw = String(payload?.raw_content || '');
+  const err = payload?.error;
+  if (!raw) return '';
+  if (!err || err.kind !== 'artifact_json_error') return raw;
+
+  const lines = raw.split('\n');
+  const lineNo = Number(err.line || 1);
+  const colNo = Number(err.column || 1);
+  const start = Math.max(0, lineNo - 2);
+  const end = Math.min(lines.length, lineNo + 2);
+  const width = String(end).length;
+
+  const excerpt = [];
+  for (let idx = start; idx < end; idx += 1) {
+    const displayNo = idx + 1;
+    excerpt.push(`${String(displayNo).padStart(width, ' ')} | ${lines[idx]}`);
+    if (displayNo === lineNo) {
+      const caretPad = ' '.repeat(Math.max(0, colNo - 1));
+      excerpt.push(`${' '.repeat(width)} | ${caretPad}^`);
+    }
   }
 
+  return [
+    '# JSON parse fallback',
+    `${err.code || 'artifact_json_error'}: ${err.message || 'Unable to parse JSON'}`,
+    '',
+    ...excerpt,
+    '',
+    '--- raw payload preview ---',
+    raw.slice(0, ARTIFACT_RENDER_PREVIEW_CHARS),
+    raw.length > ARTIFACT_RENDER_PREVIEW_CHARS ? '\n… (preview truncated)' : '',
+  ].filter(Boolean).join('\n');
+}
+
+function getArtifactViewerExportText(payload) {
+  if (!payload) {
+    return { text: '', canExport: false };
+  }
+
+  if (typeof payload.raw_content === 'string') {
+    return { text: payload.raw_content, canExport: payload.raw_content.length > 0 };
+  }
+
+  if (typeof payload.content === 'string') {
+    return { text: payload.content, canExport: payload.content.length > 0 };
+  }
+
+  if (payload.content !== null && payload.content !== undefined) {
+    return { text: JSON.stringify(payload.content, null, 2), canExport: true };
+  }
+
+  return { text: '', canExport: false };
+}
+
+function getArtifactViewerTextPayload(payload, { expanded = false } = {}) {
+  if (!payload) {
+    return { text: '', mode: 'empty', canExport: false, previewOnly: false, canExpand: false };
+  }
+
+  const exportPayload = getArtifactViewerExportText(payload);
   const isJson = payload.content_type === 'application/json';
+  const rawLen = typeof payload.raw_content === 'string' ? payload.raw_content.length : 0;
+  const canExpand = rawLen > ARTIFACT_RENDER_PREVIEW_CHARS;
+
   if (isJson && payload.content !== null && payload.content !== undefined) {
+    const shouldRenderSummary = !expanded && rawLen >= ARTIFACT_JSON_EXPAND_THRESHOLD_CHARS;
+    if (shouldRenderSummary) {
+      const summary = {
+        notice: `Large JSON payload (${rawLen.toLocaleString()} chars). Previewing schema to keep UI responsive.`,
+        top_level_type: Array.isArray(payload.content) ? 'array' : typeof payload.content,
+        top_level_summary: jsonShapePreview(payload.content),
+      };
+      return {
+        text: `${JSON.stringify(summary, null, 2)}\n\nUse “Expand full” to render full JSON payload.`,
+        mode: 'json_summary',
+        canExport: exportPayload.canExport,
+        previewOnly: true,
+        canExpand,
+      };
+    }
+
+    const pretty = JSON.stringify(payload.content, null, 2);
+    if (!expanded && pretty.length > ARTIFACT_RENDER_PREVIEW_CHARS) {
+      return {
+        text: `${pretty.slice(0, ARTIFACT_RENDER_PREVIEW_CHARS)}\n\n… (preview truncated; expand for full view)` ,
+        mode: 'json_pretty_preview',
+        canExport: exportPayload.canExport,
+        previewOnly: true,
+        canExpand,
+      };
+    }
+
     return {
-      text: JSON.stringify(payload.content, null, 2),
+      text: pretty,
       mode: 'json_pretty',
-      canExport: true,
+      canExport: exportPayload.canExport,
+      previewOnly: false,
+      canExpand,
     };
   }
 
   if (isJson && typeof payload.raw_content === 'string') {
+    const fallback = formatJsonErrorFallback(payload);
+    if (!expanded && fallback.length > ARTIFACT_RENDER_PREVIEW_CHARS) {
+      return {
+        text: `${fallback.slice(0, ARTIFACT_RENDER_PREVIEW_CHARS)}\n\n… (preview truncated; expand for full view)`,
+        mode: 'json_raw_preview',
+        canExport: exportPayload.canExport,
+        previewOnly: true,
+        canExpand,
+      };
+    }
     return {
-      text: payload.raw_content,
+      text: fallback,
       mode: 'json_raw',
-      canExport: payload.raw_content.length > 0,
+      canExport: exportPayload.canExport,
+      previewOnly: false,
+      canExpand,
     };
   }
 
   if (typeof payload.content === 'string') {
+    const val = payload.content;
+    if (!expanded && val.length > ARTIFACT_RENDER_PREVIEW_CHARS) {
+      return {
+        text: `${val.slice(0, ARTIFACT_RENDER_PREVIEW_CHARS)}\n\n… (preview truncated; expand for full view)`,
+        mode: payload.content_type === 'text/markdown' ? 'markdown_preview' : 'text_preview',
+        canExport: exportPayload.canExport,
+        previewOnly: true,
+        canExpand,
+      };
+    }
     return {
-      text: payload.content,
+      text: val,
       mode: payload.content_type === 'text/markdown' ? 'markdown' : 'text',
-      canExport: payload.content.length > 0,
+      canExport: exportPayload.canExport,
+      previewOnly: false,
+      canExpand,
     };
   }
 
   if (payload.content !== null && payload.content !== undefined) {
+    const pretty = JSON.stringify(payload.content, null, 2);
     return {
-      text: JSON.stringify(payload.content, null, 2),
+      text: pretty,
       mode: 'object_pretty',
-      canExport: true,
+      canExport: exportPayload.canExport,
+      previewOnly: false,
+      canExpand: pretty.length > ARTIFACT_RENDER_PREVIEW_CHARS,
     };
   }
 
-  return { text: '', mode: 'empty', canExport: false };
+  return { text: '', mode: 'empty', canExport: false, previewOnly: false, canExpand: false };
 }
 
 function artifactViewerDownloadName(path, payload) {
@@ -1195,6 +1328,7 @@ function renderArtifactViewer() {
   const pathInput = el('artifactPathInput');
   const copyBtn = el('artifactCopyBtn');
   const downloadBtn = el('artifactDownloadBtn');
+  const expandBtn = el('artifactExpandBtn');
 
   if (!panel || !empty || !errorNode || !contentNode || !pathNode || !metaNode) {
     return;
@@ -1215,6 +1349,10 @@ function renderArtifactViewer() {
     contentNode.textContent = '';
     if (copyBtn) copyBtn.disabled = true;
     if (downloadBtn) downloadBtn.disabled = true;
+    if (expandBtn) {
+      expandBtn.disabled = true;
+      expandBtn.classList.add('hidden');
+    }
     return;
   }
 
@@ -1229,6 +1367,10 @@ function renderArtifactViewer() {
     contentNode.textContent = '';
     if (copyBtn) copyBtn.disabled = true;
     if (downloadBtn) downloadBtn.disabled = true;
+    if (expandBtn) {
+      expandBtn.disabled = true;
+      expandBtn.classList.add('hidden');
+    }
     return;
   }
 
@@ -1242,11 +1384,20 @@ function renderArtifactViewer() {
     contentNode.textContent = '';
     if (copyBtn) copyBtn.disabled = true;
     if (downloadBtn) downloadBtn.disabled = true;
+    if (expandBtn) {
+      expandBtn.disabled = true;
+      expandBtn.classList.add('hidden');
+    }
     return;
   }
 
   panel.classList.remove('hidden');
   empty.classList.add('hidden');
+
+  const textPayload = getArtifactViewerTextPayload(payload, {
+    expanded: Boolean(state.artifactViewerExpanded),
+  });
+  const exportPayload = getArtifactViewerExportText(payload);
 
   const metaParts = [payload.content_type || 'text/plain'];
   if (payload.truncated) {
@@ -1255,13 +1406,17 @@ function renderArtifactViewer() {
   if (payload.error?.code) {
     metaParts.push(`error=${payload.error.code}`);
   }
+  if (textPayload.previewOnly) {
+    metaParts.push('preview');
+  }
+  if (textPayload.mode === 'json_raw' || textPayload.mode === 'json_raw_preview') {
+    metaParts.push('raw-fallback');
+  }
+  if (typeof payload.full_size_bytes === 'number') {
+    metaParts.push(`bytes=${Number(payload.full_size_bytes).toLocaleString()}`);
+  }
   if (state.artifactViewerRequestedBy) {
     metaParts.push(`requested by ${state.artifactViewerRequestedBy}`);
-  }
-
-  const textPayload = getArtifactViewerTextPayload(payload);
-  if (textPayload.mode === 'json_raw') {
-    metaParts.push('raw-fallback');
   }
   metaNode.textContent = metaParts.join(' • ');
 
@@ -1275,9 +1430,16 @@ function renderArtifactViewer() {
   }
 
   contentNode.textContent = textPayload.text;
-  const canExport = textPayload.canExport;
+  const canExport = exportPayload.canExport;
   if (copyBtn) copyBtn.disabled = !canExport;
   if (downloadBtn) downloadBtn.disabled = !canExport;
+
+  if (expandBtn) {
+    const showExpand = textPayload.canExpand;
+    expandBtn.classList.toggle('hidden', !showExpand);
+    expandBtn.textContent = state.artifactViewerExpanded ? 'Collapse preview' : 'Expand full';
+    expandBtn.disabled = !showExpand;
+  }
 }
 
 async function fetchJsonWithPayload(url) {
@@ -1313,6 +1475,7 @@ async function openArtifactInViewer(path, { source = '', autoFocus = true } = {}
   state.artifactViewerLoading = true;
   state.artifactViewerRequestedBy = source;
   state.artifactViewerActionStatus = null;
+  state.artifactViewerExpanded = false;
   renderArtifactViewer();
 
   const query = new URLSearchParams({ path: normalizedPath, max_bytes: '512000' }).toString();
@@ -2575,8 +2738,9 @@ function initArtifactViewerControls() {
   const clearBtn = el('artifactClearBtn');
   const copyBtn = el('artifactCopyBtn');
   const downloadBtn = el('artifactDownloadBtn');
+  const expandBtn = el('artifactExpandBtn');
 
-  if (!pathInput || !openBtn || !reloadBtn || !clearBtn || !copyBtn || !downloadBtn) return;
+  if (!pathInput || !openBtn || !reloadBtn || !clearBtn || !copyBtn || !downloadBtn || !expandBtn) return;
 
   pathInput.addEventListener('input', () => {
     state.artifactViewerPath = pathInput.value;
@@ -2607,12 +2771,12 @@ function initArtifactViewerControls() {
 
   copyBtn.addEventListener('click', async () => {
     const payload = state.artifactViewerPayload;
-    const textPayload = getArtifactViewerTextPayload(payload);
-    if (!textPayload.canExport) return;
+    const exportPayload = getArtifactViewerExportText(payload);
+    if (!exportPayload.canExport) return;
     await withPreservedFocus(async () => {
       try {
-        await copyTextToClipboard(textPayload.text);
-        announceArtifactViewerAction('Copied artifact content to clipboard.', 'ok');
+        await copyTextToClipboard(exportPayload.text);
+        announceArtifactViewerAction('Copied raw artifact payload to clipboard.', 'ok');
       } catch {
         announceArtifactViewerAction('Copy failed. Browser clipboard access was denied.', 'error');
       }
@@ -2621,12 +2785,12 @@ function initArtifactViewerControls() {
 
   downloadBtn.addEventListener('click', async () => {
     const payload = state.artifactViewerPayload;
-    const textPayload = getArtifactViewerTextPayload(payload);
-    if (!textPayload.canExport) return;
+    const exportPayload = getArtifactViewerExportText(payload);
+    if (!exportPayload.canExport) return;
 
     await withPreservedFocus(async () => {
       const blobType = payload?.content_type === 'application/json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
-      const blob = new Blob([textPayload.text], { type: blobType });
+      const blob = new Blob([exportPayload.text], { type: blobType });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
       link.download = artifactViewerDownloadName(state.artifactViewerPath, payload);
@@ -2634,8 +2798,13 @@ function initArtifactViewerControls() {
       link.click();
       link.remove();
       URL.revokeObjectURL(link.href);
-      announceArtifactViewerAction(`Downloaded ${link.download}.`, 'ok');
+      announceArtifactViewerAction(`Downloaded raw payload as ${link.download}.`, 'ok');
     });
+  });
+
+  expandBtn.addEventListener('click', () => {
+    state.artifactViewerExpanded = !state.artifactViewerExpanded;
+    renderArtifactViewer();
   });
 
   renderArtifactViewer();

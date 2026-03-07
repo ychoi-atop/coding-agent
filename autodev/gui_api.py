@@ -176,6 +176,8 @@ def read_artifact(
         "path": str(safe_rel),
         "content_type": content_type,
         "truncated": truncated,
+        "full_size_bytes": len(raw),
+        "returned_bytes": len(payload),
         "content": content,
         "raw_content": raw_content,
     }

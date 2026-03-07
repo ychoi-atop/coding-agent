@@ -344,6 +344,7 @@ def test_artifact_read_endpoint_returns_json_payload(gui_server):
     assert body["content_type"] == "application/json"
     assert body["content"]["validation"][0]["name"] == "ruff"
     assert body["raw_content"].startswith('{"validation"')
+    assert body["full_size_bytes"] >= body["returned_bytes"]
     assert body["path"] == ".autodev/task_final_last_validation.json"
 
 
@@ -377,6 +378,8 @@ def test_artifact_read_endpoint_truncates_and_reports_typed_error(gui_server):
 
     assert status == 200
     assert body["truncated"] is True
+    assert body["full_size_bytes"] > body["returned_bytes"]
+    assert body["returned_bytes"] == 32
     assert body["content"] is None
     assert isinstance(body["raw_content"], str)
     assert body["raw_content"]
@@ -388,13 +391,15 @@ def test_artifact_viewer_static_contract_includes_export_controls(gui_server):
 
     with request.urlopen(f"{base_url}/index.html", timeout=5) as resp:
         index_html = resp.read().decode("utf-8")
+    assert 'id="artifactExpandBtn"' in index_html
     assert 'id="artifactCopyBtn"' in index_html
     assert 'id="artifactDownloadBtn"' in index_html
     assert 'id="artifactViewerActionStatus"' in index_html
 
     with request.urlopen(f"{base_url}/app.js", timeout=5) as resp:
         app_js = resp.read().decode("utf-8")
-    assert "function getArtifactViewerTextPayload(payload)" in app_js
+    assert "function getArtifactViewerTextPayload(payload, { expanded = false } = {})" in app_js
+    assert "function getArtifactViewerExportText(payload)" in app_js
     assert "function copyTextToClipboard(text)" in app_js
     assert "function announceArtifactViewerAction(message, kind = 'ok')" in app_js
     assert "function withPreservedFocus(action)" in app_js

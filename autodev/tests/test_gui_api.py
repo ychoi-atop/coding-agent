@@ -132,6 +132,7 @@ def test_read_artifact_json_and_markdown(tmp_path: Path) -> None:
     assert plan["content_type"] == "application/json"
     assert plan["content"]["tasks"][0]["id"] == "api"
     assert plan["raw_content"].startswith('{"tasks"')
+    assert plan["full_size_bytes"] >= plan["returned_bytes"]
     assert "error" not in plan
 
     report = read_artifact(str(out_root), "run-1", ".autodev/REPORT.md")
@@ -166,6 +167,8 @@ def test_read_artifact_marks_truncated_json_error_code(tmp_path: Path) -> None:
 
     res = read_artifact(str(out_root), "rid-trunc", "plan.json", max_bytes=20)
     assert res["truncated"] is True
+    assert res["full_size_bytes"] > res["returned_bytes"]
+    assert res["returned_bytes"] == 20
     assert res["content"] is None
     assert isinstance(res["raw_content"], str)
     assert res["raw_content"]
