@@ -45,6 +45,17 @@ autodev autonomous status --run-dir ./generated_runs/<run_id>
 
 Prints `.autodev/autonomous_state.json`.
 
+### Summary helper
+
+```bash
+autodev autonomous summary --run-dir ./generated_runs/<run_id>
+# optional human-readable format
+autodev autonomous summary --run-dir ./generated_runs/<run_id> --format text
+```
+
+Default output is machine-readable JSON with latest run status, gate pass/fail counts,
+dominant gate fail codes, and latest auto-fix strategy (with graceful warnings for missing artifacts).
+
 ---
 
 ## Policy profile (config)

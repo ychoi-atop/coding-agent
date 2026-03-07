@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1237,6 +1238,10 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="print autonomous state for a run")
     status.add_argument("--run-dir", required=True)
 
+    summary = sub.add_parser("summary", help="print autonomous run summary from artifacts")
+    summary.add_argument("--run-dir", required=True)
+    summary.add_argument("--format", choices=["json", "text"], default="json")
+
     return ap
 
 
@@ -1577,6 +1582,172 @@ def _start(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
+def _safe_load_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists():
+        return None, "missing"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, f"invalid_json: {e}"
+    if not isinstance(payload, dict):
+        return None, "invalid_format: expected object"
+    return payload, None
+
+
+def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
+    run_path = Path(run_dir).expanduser().resolve()
+    artifacts_dir = run_path / ".autodev"
+
+    report_path = artifacts_dir / "autonomous_report.json"
+    gate_path = artifacts_dir / "autonomous_gate_results.json"
+    strategy_path = artifacts_dir / "autonomous_strategy_trace.json"
+
+    report_payload, report_error = _safe_load_json(report_path)
+    gate_payload, gate_error = _safe_load_json(gate_path)
+    strategy_payload, strategy_error = _safe_load_json(strategy_path)
+
+    warnings: list[str] = []
+    artifact_status = {
+        "report": {"path": str(report_path), "status": "ok" if report_error is None else report_error},
+        "gate_results": {"path": str(gate_path), "status": "ok" if gate_error is None else gate_error},
+        "strategy_trace": {"path": str(strategy_path), "status": "ok" if strategy_error is None else strategy_error},
+    }
+
+    for name, err in (("report", report_error), ("gate_results", gate_error), ("strategy_trace", strategy_error)):
+        if err is not None:
+            warnings.append(f"{name}: {err}")
+
+    status = "unknown"
+    if isinstance(report_payload, dict):
+        if isinstance(report_payload.get("ok"), bool):
+            status = "completed" if report_payload["ok"] else "failed"
+        status = str(report_payload.get("status") or status)
+
+    gate_attempts = gate_payload.get("attempts") if isinstance(gate_payload, dict) else None
+    if not isinstance(gate_attempts, list):
+        attempts_from_report = report_payload.get("attempts") if isinstance(report_payload, dict) else None
+        if isinstance(attempts_from_report, list):
+            gate_attempts = [
+                item
+                for item in attempts_from_report
+                if isinstance(item, dict) and isinstance(item.get("gate_results"), dict)
+            ]
+        else:
+            gate_attempts = []
+
+    pass_count = 0
+    fail_count = 0
+    fail_code_counter: Counter[str] = Counter()
+
+    for attempt in gate_attempts:
+        if not isinstance(attempt, dict):
+            continue
+        gate_results = attempt.get("gate_results") if isinstance(attempt.get("gate_results"), dict) else None
+        if gate_results is None:
+            continue
+        passed = gate_results.get("passed") is True
+        if passed:
+            pass_count += 1
+        else:
+            fail_count += 1
+        fail_reasons = gate_results.get("fail_reasons")
+        if isinstance(fail_reasons, list):
+            for reason in fail_reasons:
+                if not isinstance(reason, dict):
+                    continue
+                code = reason.get("code")
+                if code:
+                    fail_code_counter[str(code)] += 1
+
+    latest_strategy = None
+    strategy_source = "none"
+    if isinstance(strategy_payload, dict) and isinstance(strategy_payload.get("latest"), dict):
+        latest_strategy = strategy_payload["latest"]
+        strategy_source = "strategy_trace"
+    elif isinstance(report_payload, dict) and isinstance(report_payload.get("latest_strategy"), dict):
+        latest_strategy = report_payload["latest_strategy"]
+        strategy_source = "report"
+
+    dominant_fail_codes = [
+        {"code": code, "count": count}
+        for code, count in fail_code_counter.most_common()
+    ]
+
+    return {
+        "mode": "autonomous_v1_summary",
+        "run_dir": str(run_path),
+        "status": status,
+        "artifacts": artifact_status,
+        "latest_run": {
+            "run_id": report_payload.get("run_id") if isinstance(report_payload, dict) else None,
+            "request_id": report_payload.get("request_id") if isinstance(report_payload, dict) else None,
+            "profile": report_payload.get("profile") if isinstance(report_payload, dict) else None,
+            "completed_at": report_payload.get("completed_at") if isinstance(report_payload, dict) else None,
+        },
+        "gate_counts": {
+            "pass": pass_count,
+            "fail": fail_count,
+            "total": pass_count + fail_count,
+        },
+        "dominant_fail_codes": dominant_fail_codes,
+        "latest_strategy": latest_strategy,
+        "latest_strategy_source": strategy_source,
+        "warnings": warnings,
+    }
+
+
+def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
+    gate_counts = summary.get("gate_counts") if isinstance(summary.get("gate_counts"), dict) else {}
+    dominant_codes = summary.get("dominant_fail_codes") if isinstance(summary.get("dominant_fail_codes"), list) else []
+    latest_strategy = summary.get("latest_strategy") if isinstance(summary.get("latest_strategy"), dict) else None
+    artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), dict) else {}
+
+    lines = [
+        "# Autonomous Run Summary",
+        f"- run_dir: {summary.get('run_dir')}",
+        f"- status: {summary.get('status')}",
+        f"- gate_counts: pass={gate_counts.get('pass', 0)}, fail={gate_counts.get('fail', 0)}, total={gate_counts.get('total', 0)}",
+    ]
+
+    if dominant_codes:
+        codes_text = ", ".join(
+            [f"{item.get('code')}({item.get('count')})" for item in dominant_codes if isinstance(item, dict)]
+        )
+        lines.append(f"- dominant_fail_codes: {codes_text}")
+    else:
+        lines.append("- dominant_fail_codes: -")
+
+    if latest_strategy is not None:
+        lines.append(f"- latest_strategy: {latest_strategy.get('name', '-')}")
+    else:
+        lines.append("- latest_strategy: -")
+
+    lines.append("")
+    lines.append("Artifacts:")
+    for name in ("report", "gate_results", "strategy_trace"):
+        item = artifacts.get(name) if isinstance(artifacts.get(name), dict) else {}
+        lines.append(f"- {name}: {item.get('status', 'missing')} ({item.get('path', '-')})")
+
+    warnings = summary.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        for warning in warnings:
+            lines.append(f"- {warning}")
+
+    return "\n".join(lines)
+
+
+def _summary(argv: list[str]) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(["summary", *argv])
+    summary = extract_autonomous_summary(args.run_dir)
+    if args.format == "text":
+        print(_render_autonomous_summary_text(summary))
+        return
+    print(json_dumps(summary))
+
+
 def _status(argv: list[str]) -> None:
     parser = _build_cli_parser()
     args = parser.parse_args(["status", *argv])
@@ -1590,12 +1761,15 @@ def _status(argv: list[str]) -> None:
 
 def cli(argv: list[str]) -> None:
     if not argv:
-        raise SystemExit("Usage: autodev autonomous <start|status> ...")
+        raise SystemExit("Usage: autodev autonomous <start|status|summary> ...")
     action = argv[0]
     if action == "start":
         _start(argv[1:])
         return
     if action == "status":
         _status(argv[1:])
+        return
+    if action == "summary":
+        _summary(argv[1:])
         return
     raise SystemExit(f"Unknown autonomous subcommand: {action}")
