@@ -424,3 +424,146 @@ def test_autonomous_start_stops_at_max_iterations(tmp_path, monkeypatch):
     assert state["failure_reason"] == "max_iterations_exceeded"
     assert state["current_iteration"] == 2
     assert len(state["attempts"]) == 2
+
+
+def test_route_strategy_from_fail_reasons_maps_single_and_mixed_domains() -> None:
+    tests_only = autonomous_mode._route_strategy_from_fail_reasons(
+        [
+            {
+                "code": "tests.min_pass_rate_not_met",
+                "category": "reliability",
+                "gate": "tests",
+            }
+        ]
+    )
+    assert tests_only["recommended"] == "tests-focused"
+    assert tests_only["gate_fail_codes"] == ["tests.min_pass_rate_not_met"]
+
+    mixed = autonomous_mode._route_strategy_from_fail_reasons(
+        [
+            {"code": "tests.min_pass_rate_not_met", "category": "reliability", "gate": "tests"},
+            {"code": "security.max_high_findings_exceeded", "category": "security", "gate": "security"},
+        ]
+    )
+    assert mixed["recommended"] == "mixed"
+    assert "tests.min_pass_rate_not_met" in mixed["gate_fail_codes"]
+    assert "security.max_high_findings_exceeded" in mixed["gate_fail_codes"]
+
+
+def test_resolve_retry_strategy_rotates_after_no_improvement_on_same_strategy() -> None:
+    fail_reasons = [
+        {
+            "code": "tests.min_pass_rate_not_met",
+            "category": "reliability",
+            "gate": "tests",
+        }
+    ]
+    gate_results = {
+        "passed": False,
+        "gates": {"tests": {"status": "failed"}},
+        "fail_reasons": fail_reasons,
+    }
+    attempts = [
+        {
+            "iteration": 1,
+            "strategy": {"name": "tests-focused"},
+            "gate_results": gate_results,
+        },
+        {
+            "iteration": 2,
+            "strategy": {"name": "tests-focused"},
+            "gate_results": gate_results,
+        },
+    ]
+
+    routed = autonomous_mode._resolve_retry_strategy(attempts, iteration=3)
+    assert routed["recommended"] == "tests-focused"
+    assert routed["name"] != "tests-focused"
+    assert routed["rotation_applied"] is True
+    assert routed["rotation_reason"] == "prior_same_strategy_no_measurable_gate_improvement"
+
+
+def test_autonomous_strategy_trace_artifact_persisted_and_report_state_include_latest_strategy(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path, include_quality_gate_policy=True)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    calls = 0
+
+    async def _fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 3:
+            return (
+                True,
+                {"project": {}},
+                {"tasks": []},
+                [
+                    {
+                        "name": "pytest",
+                        "ok": False,
+                        "status": "failed",
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": "tests failed",
+                        "diagnostics": {},
+                    }
+                ],
+            )
+        return (
+            True,
+            {"project": {}},
+            {"tasks": []},
+            [
+                {
+                    "name": "pytest",
+                    "ok": True,
+                    "status": "passed",
+                    "returncode": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "diagnostics": {},
+                }
+            ],
+        )
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--out",
+            str(out_root),
+            "--config",
+            str(cfg),
+            "--profile",
+            "minimal",
+            "--max-iterations",
+            "4",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    run_dir = sorted(out_root.iterdir())[0]
+    state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+    strategy_trace = json.loads((run_dir / ".autodev" / "autonomous_strategy_trace.json").read_text(encoding="utf-8"))
+
+    assert calls == 4
+    assert state["status"] == "completed"
+    assert len(state["attempts"]) == 4
+    assert state["attempts"][0]["strategy"]["name"] == "mixed"
+    assert state["attempts"][1]["strategy"]["name"] == "tests-focused"
+    assert state["attempts"][2]["strategy"]["name"] == "tests-focused"
+    assert state["attempts"][3]["strategy"]["rotation_applied"] is True
+    assert state["attempts"][3]["strategy"]["name"] == "security-focused"
+
+    assert strategy_trace["latest"]["name"] == "security-focused"
+    assert len(strategy_trace["attempts"]) == 4
+    assert report["latest_strategy"]["name"] == "security-focused"
+    assert state["last_strategy"]["name"] == "security-focused"

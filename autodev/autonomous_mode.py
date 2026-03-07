@@ -33,7 +33,34 @@ AUTONOMOUS_REPORT_JSON = ".autodev/autonomous_report.json"
 AUTONOMOUS_REPORT_MD = "AUTONOMOUS_REPORT.md"
 AUTONOMOUS_GATE_RESULTS_JSON = ".autodev/autonomous_gate_results.json"
 AUTONOMOUS_GATE_BASELINE_JSON = ".autodev/autonomous_gate_baseline.json"
+AUTONOMOUS_STRATEGY_TRACE_JSON = ".autodev/autonomous_strategy_trace.json"
 _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
+
+_AUTONOMOUS_FIX_STRATEGY_ORDER = [
+    "tests-focused",
+    "security-focused",
+    "perf-focused",
+    "mixed",
+]
+
+_AUTONOMOUS_FIX_STRATEGY_HINTS = {
+    "tests-focused": [
+        "Prioritize failing test paths and assertions before broad refactors.",
+        "Minimize scope to deterministic test fixes and dependency-safe changes.",
+    ],
+    "security-focused": [
+        "Prioritize remediation of high-severity findings and unsafe patterns.",
+        "Prefer explicit validation/sanitization with least-privilege defaults.",
+    ],
+    "perf-focused": [
+        "Target hotspots tied to regression signals before unrelated cleanups.",
+        "Prefer measurement-backed optimizations and avoid broad behavioral churn.",
+    ],
+    "mixed": [
+        "Apply a balanced fix pass across tests, security, and performance signals.",
+        "Start with highest-confidence blockers while preserving bounded scope.",
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -470,6 +497,246 @@ def _evaluate_quality_gates(
     }
 
 
+def _route_strategy_from_fail_reasons(fail_reasons: Any) -> dict[str, Any]:
+    reasons = [r for r in fail_reasons if isinstance(r, dict)] if isinstance(fail_reasons, list) else []
+
+    mapped: list[str] = []
+    codes: list[str] = []
+    categories: list[str] = []
+    gates: list[str] = []
+    for reason in reasons:
+        code = str(reason.get("code") or "").strip().lower()
+        category = str(reason.get("category") or "").strip().lower()
+        gate = str(reason.get("gate") or "").strip().lower()
+        if code:
+            codes.append(code)
+        if category:
+            categories.append(category)
+        if gate:
+            gates.append(gate)
+
+        if code.startswith("tests."):
+            mapped.append("tests-focused")
+        elif code.startswith("security."):
+            mapped.append("security-focused")
+        elif code.startswith("performance."):
+            mapped.append("perf-focused")
+        elif category == "reliability" or gate == "tests":
+            mapped.append("tests-focused")
+        elif category == "security" or gate == "security":
+            mapped.append("security-focused")
+        elif category == "performance" or gate == "performance":
+            mapped.append("perf-focused")
+        else:
+            mapped.append("mixed")
+
+    distinct = sorted(set(mapped))
+    if not distinct:
+        recommended = "mixed"
+        rationale = "No typed gate fail reasons; default to mixed strategy."
+    elif len(distinct) == 1:
+        recommended = distinct[0]
+        rationale = "Single gate failure domain mapped to focused strategy."
+    else:
+        recommended = "mixed"
+        rationale = "Multiple gate failure domains detected; selecting mixed strategy."
+
+    candidates = [recommended]
+    if recommended != "mixed":
+        candidates.append("mixed")
+    for name in _AUTONOMOUS_FIX_STRATEGY_ORDER:
+        if name not in candidates:
+            candidates.append(name)
+
+    return {
+        "recommended": recommended,
+        "rationale": rationale,
+        "candidates": candidates,
+        "gate_fail_codes": sorted(set(codes)),
+        "gate_categories": sorted(set(categories)),
+        "gate_names": sorted(set(gates)),
+    }
+
+
+def _gate_failure_summary(gate_results: Any) -> dict[str, Any]:
+    if not isinstance(gate_results, dict):
+        return {
+            "available": False,
+            "passed": False,
+            "failed_gate_count": 0,
+            "fail_reason_count": 0,
+            "fail_codes": [],
+        }
+
+    gates = gate_results.get("gates") if isinstance(gate_results.get("gates"), dict) else {}
+    failed_gate_count = len([
+        name
+        for name, row in gates.items()
+        if isinstance(name, str)
+        and isinstance(row, dict)
+        and row.get("status") == "failed"
+    ])
+
+    fail_reasons = gate_results.get("fail_reasons") if isinstance(gate_results.get("fail_reasons"), list) else []
+    fail_codes = sorted(
+        set(
+            str(reason.get("code"))
+            for reason in fail_reasons
+            if isinstance(reason, dict) and reason.get("code")
+        )
+    )
+
+    return {
+        "available": True,
+        "passed": bool(gate_results.get("passed")),
+        "failed_gate_count": failed_gate_count,
+        "fail_reason_count": len(fail_reasons),
+        "fail_codes": fail_codes,
+    }
+
+
+def _has_measurable_gate_improvement(previous: Any, current: Any) -> bool:
+    prev = _gate_failure_summary(previous)
+    cur = _gate_failure_summary(current)
+    if not prev["available"] or not cur["available"]:
+        return False
+    if cur["passed"] and not prev["passed"]:
+        return True
+    if cur["failed_gate_count"] < prev["failed_gate_count"]:
+        return True
+    if cur["fail_reason_count"] < prev["fail_reason_count"]:
+        return True
+    if len(cur["fail_codes"]) < len(prev["fail_codes"]):
+        return True
+    return False
+
+
+def _rotate_strategy_name(recommended: str, attempts: list[dict[str, Any]]) -> str:
+    order = _AUTONOMOUS_FIX_STRATEGY_ORDER
+    if recommended not in order:
+        return "mixed"
+
+    recent = [
+        str((a.get("strategy") or {}).get("name"))
+        for a in attempts[-2:]
+        if isinstance(a, dict) and isinstance(a.get("strategy"), dict)
+    ]
+    start = order.index(recommended)
+    for i in range(1, len(order) + 1):
+        candidate = order[(start + i) % len(order)]
+        if candidate not in recent:
+            return candidate
+    return order[(start + 1) % len(order)]
+
+
+def _resolve_retry_strategy(attempts: list[dict[str, Any]], iteration: int) -> dict[str, Any]:
+    if iteration <= 1 or not attempts:
+        name = "mixed"
+        return {
+            "name": name,
+            "hints": list(_AUTONOMOUS_FIX_STRATEGY_HINTS[name]),
+            "recommended": name,
+            "recommended_hints": list(_AUTONOMOUS_FIX_STRATEGY_HINTS[name]),
+            "rationale": "Initial autonomous iteration uses balanced mixed strategy.",
+            "selected_by": "initial_default",
+            "rotation_applied": False,
+            "rotation_reason": None,
+            "gate_fail_codes": [],
+            "gate_categories": [],
+            "gate_names": [],
+            "attempted_before": False,
+        }
+
+    latest = attempts[-1] if isinstance(attempts[-1], dict) else {}
+    fail_reasons = latest.get("quality_gate_fail_reasons")
+    if not isinstance(fail_reasons, list):
+        gate_results = latest.get("gate_results")
+        fail_reasons = gate_results.get("fail_reasons") if isinstance(gate_results, dict) else []
+
+    route = _route_strategy_from_fail_reasons(fail_reasons)
+    recommended = str(route.get("recommended") or "mixed")
+    selected = recommended
+    rotation_applied = False
+    rotation_reason = None
+
+    same_strategy_attempts = [
+        a
+        for a in attempts
+        if isinstance(a, dict)
+        and isinstance(a.get("strategy"), dict)
+        and str(a["strategy"].get("name")) == recommended
+        and isinstance(a.get("gate_results"), dict)
+    ]
+    if len(same_strategy_attempts) >= 2:
+        previous_same = same_strategy_attempts[-2]
+        latest_same = same_strategy_attempts[-1]
+        if not _has_measurable_gate_improvement(previous_same.get("gate_results"), latest_same.get("gate_results")):
+            selected = _rotate_strategy_name(recommended, attempts)
+            rotation_applied = selected != recommended
+            if rotation_applied:
+                rotation_reason = "prior_same_strategy_no_measurable_gate_improvement"
+
+    hints = list(_AUTONOMOUS_FIX_STRATEGY_HINTS.get(selected, _AUTONOMOUS_FIX_STRATEGY_HINTS["mixed"]))
+    recommended_hints = list(_AUTONOMOUS_FIX_STRATEGY_HINTS.get(recommended, _AUTONOMOUS_FIX_STRATEGY_HINTS["mixed"]))
+
+    if rotation_applied:
+        rationale = (
+            f"{route['rationale']} Rotated from {recommended} to {selected} "
+            "after repeated no-improvement outcome under the same strategy."
+        )
+    else:
+        rationale = str(route.get("rationale") or "")
+
+    return {
+        "name": selected,
+        "hints": hints,
+        "recommended": recommended,
+        "recommended_hints": recommended_hints,
+        "rationale": rationale,
+        "selected_by": "gate_fail_routing",
+        "rotation_applied": rotation_applied,
+        "rotation_reason": rotation_reason,
+        "gate_fail_codes": list(route.get("gate_fail_codes") or []),
+        "gate_categories": list(route.get("gate_categories") or []),
+        "gate_names": list(route.get("gate_names") or []),
+        "attempted_before": len(same_strategy_attempts) > 0,
+    }
+
+
+def _write_strategy_trace_artifact(ws: Workspace, attempts: list[dict[str, Any]]) -> None:
+    strategy_attempts: list[dict[str, Any]] = []
+    for item in attempts:
+        if not isinstance(item, dict):
+            continue
+        strategy = item.get("strategy") if isinstance(item.get("strategy"), dict) else None
+        if strategy is None:
+            continue
+        strategy_attempts.append(
+            {
+                "iteration": item.get("iteration"),
+                "ok": bool(item.get("ok")),
+                "reason": item.get("reason"),
+                "strategy": strategy,
+                "gate_results_summary": _gate_failure_summary(item.get("gate_results")),
+            }
+        )
+
+    latest = strategy_attempts[-1]["strategy"] if strategy_attempts else None
+    payload = {
+        "updated_at": _utc_now(),
+        "attempts": strategy_attempts,
+        "latest": latest,
+    }
+    ws.write_text(AUTONOMOUS_STRATEGY_TRACE_JSON, json_dumps(payload))
+
+
+def _latest_strategy_from_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in reversed(attempts):
+        if isinstance(item, dict) and isinstance(item.get("strategy"), dict):
+            return item["strategy"]
+    return None
+
+
 def _utc_now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
@@ -798,6 +1065,7 @@ def _new_state(
         "policy": policy_payload,
         "current_iteration": 0,
         "attempts": [],
+        "last_strategy": None,
         "started_at": _utc_now(),
         "updated_at": _utc_now(),
     }
@@ -855,6 +1123,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     gate_attempts = [a for a in attempts if isinstance(a, dict) and isinstance(a.get("gate_results"), dict)]
     latest_gate_results = gate_attempts[-1].get("gate_results") if gate_attempts else None
+    latest_strategy = _latest_strategy_from_attempts(attempts)
     report = {
         "mode": "autonomous_v1",
         "ok": ok,
@@ -874,6 +1143,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         ]),
         "policy": state.get("policy"),
         "gate_results": latest_gate_results,
+        "latest_strategy": latest_strategy,
         "last_validation": last_validation,
         "attempts": attempts,
         "completed_at": _utc_now(),
@@ -894,6 +1164,12 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         if not isinstance(item, dict):
             continue
         gate_results = item.get("gate_results") if isinstance(item.get("gate_results"), dict) else None
+        strategy = item.get("strategy") if isinstance(item.get("strategy"), dict) else None
+        strategy_text = ""
+        if strategy is not None:
+            strategy_text = f", strategy={strategy.get('name')}"
+            if strategy.get("rotation_applied"):
+                strategy_text += ", strategy_rotation=applied"
         gate_text = ""
         if gate_results is not None:
             gate_text = f", gate={'PASS' if gate_results.get('passed') else 'FAIL'}"
@@ -905,8 +1181,15 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         md.append(
             f"- Iteration {item.get('iteration')}: "
             f"`{'OK' if item.get('ok') else 'FAILED'}` "
-            f"(resume={item.get('resume')}, reason={item.get('reason', '-')}{gate_text})"
+            f"(resume={item.get('resume')}, reason={item.get('reason', '-')}{strategy_text}{gate_text})"
         )
+
+    if isinstance(report.get("latest_strategy"), dict):
+        md.append("")
+        md.append("## Latest Auto-fix Strategy")
+        md.append("```json")
+        md.append(json_dumps(report["latest_strategy"]))
+        md.append("```")
 
     if isinstance(report.get("gate_results"), dict):
         md.append("")
@@ -1136,6 +1419,14 @@ def _start(argv: list[str]) -> None:
         _write_state(ws, state)
 
         resume_flag = explicit_resume_first if attempt_index == 1 else True
+        attempts = state.get("attempts")
+        if not isinstance(attempts, list):
+            attempts = []
+            state["attempts"] = attempts
+
+        strategy = _resolve_retry_strategy(attempts, attempt_index)
+        state["last_strategy"] = strategy
+
         _log_event(
             "autonomous.iteration_start",
             run_id=run_id,
@@ -1144,18 +1435,36 @@ def _start(argv: list[str]) -> None:
             run_out=run_out,
             iteration=attempt_index,
             resume=resume_flag,
+            strategy=strategy.get("name"),
+            strategy_recommended=strategy.get("recommended"),
+            strategy_rotation_applied=bool(strategy.get("rotation_applied")),
         )
 
         attempt_record: dict[str, Any] = {
             "iteration": attempt_index,
             "started_at": _utc_now(),
             "resume": resume_flag,
+            "strategy": strategy,
         }
 
         workflow_error: ValueError | None = None
         try:
             state["phase"] = "execute"
             _write_state(ws, state)
+            attempt_quality_profile = dict(quality_profile)
+            attempt_quality_profile["autonomous_fix_strategy"] = {
+                "name": strategy.get("name"),
+                "hints": strategy.get("hints", []),
+                "recommended": strategy.get("recommended"),
+                "recommended_hints": strategy.get("recommended_hints", []),
+                "rationale": strategy.get("rationale"),
+                "selected_by": strategy.get("selected_by"),
+                "rotation_applied": strategy.get("rotation_applied"),
+                "rotation_reason": strategy.get("rotation_reason"),
+                "gate_fail_codes": strategy.get("gate_fail_codes", []),
+                "gate_categories": strategy.get("gate_categories", []),
+                "gate_names": strategy.get("gate_names", []),
+            }
             ok, prd_struct, plan, last_validation = asyncio.run(
                 run_autodev_enterprise(
                     client=client,
@@ -1170,7 +1479,7 @@ def _start(argv: list[str]) -> None:
                     max_json_repair=_coerce_int(run_cfg.get("max_json_repair"), "max_json_repair", 2),
                     task_soft_validators=per_task_soft,
                     final_soft_validators=final_soft,
-                    quality_profile=quality_profile,
+                    quality_profile=attempt_quality_profile,
                     disable_docker_build=disable_docker_build,
                     verbose=bool(run_cfg.get("verbose", True)),
                     run_id=run_id,
@@ -1205,11 +1514,9 @@ def _start(argv: list[str]) -> None:
         attempt_record["ok"] = ok
         if workflow_error is not None:
             attempt_record["reason"] = str(workflow_error)
-        attempts = state.get("attempts")
-        if not isinstance(attempts, list):
-            attempts = []
-            state["attempts"] = attempts
         attempts.append(attempt_record)
+        state["last_strategy"] = strategy
+        _write_strategy_trace_artifact(ws, attempts)
 
         if gate_results is not None:
             state["last_gate_results"] = gate_results
@@ -1237,6 +1544,8 @@ def _start(argv: list[str]) -> None:
     run_metadata["llm_usage"] = llm_usage
     run_metadata["result_ok"] = bool(ok)
     run_metadata["run_completed_at"] = _utc_now()
+    run_metadata["autonomous_latest_strategy"] = state.get("last_strategy")
+    run_metadata["autonomous_strategy_trace_path"] = AUTONOMOUS_STRATEGY_TRACE_JSON
     ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
 
     report_json, report_md = _render_report(state, ok=ok, last_validation=last_validation)
