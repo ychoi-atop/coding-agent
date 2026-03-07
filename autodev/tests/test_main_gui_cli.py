@@ -154,7 +154,9 @@ def test_cli_local_simple_open_flag_opens_browser(monkeypatch, tmp_path: Path) -
     main.os.environ.pop("AUTODEV_GUI_AUTH_CONFIG", None)
 
 
-def test_cli_local_simple_open_failure_is_non_fatal(monkeypatch, tmp_path: Path) -> None:
+def test_cli_local_simple_open_failure_is_non_fatal(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     captured: dict[str, object] = {}
 
     def _fake_serve(host: str, port: int, runs_root: Path) -> None:
@@ -169,8 +171,11 @@ def test_cli_local_simple_open_failure_is_non_fatal(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(sys, "argv", ["autodev", "local-simple", "--open"])
 
     main.cli()
+    output = capsys.readouterr().out
 
     assert captured["served"] == ("127.0.0.1", 8787, tmp_path / "generated_runs")
+    assert "[gui-mvp] startup summary" in output
+    assert "[gui-mvp]   URL: http://127.0.0.1:8787 (open failed: boom)" in output
 
     main.os.environ.pop("AUTODEV_GUI_ROLE", None)
     main.os.environ.pop("AUTODEV_GUI_LOCAL_SIMPLE", None)
@@ -228,10 +233,10 @@ def test_cli_local_simple_run_flag_triggers_quick_run_kickoff(monkeypatch, tmp_p
     assert captured["payload"]["interactive"] is False
     assert captured["payload"]["config"] == str((tmp_path / "config.yaml").resolve())
     assert main.os.environ["AUTODEV_GUI_DEFAULT_PRD"] == str(prd.resolve())
-    assert "[gui-mvp] GUI URL: http://127.0.0.1:8787" in output
-    assert "[gui-mvp] browser open: requested (--open), launched default browser" in output
-    assert f"[gui-mvp] run kickoff: started for prd={prd.resolve()} process_id=proc-quick-001" in output
-    assert "[gui-mvp] next steps:" in output
+    assert "[gui-mvp] startup summary" in output
+    assert "[gui-mvp]   URL: http://127.0.0.1:8787 (opened in browser)" in output
+    assert "[gui-mvp]   Kickoff: started (process_id=proc-quick-001)" in output
+    assert "[gui-mvp]   Next: Track progress in Overview/Processes." in output
 
     main.os.environ.pop("AUTODEV_GUI_ROLE", None)
     main.os.environ.pop("AUTODEV_GUI_LOCAL_SIMPLE", None)
@@ -264,11 +269,10 @@ def test_cli_local_simple_run_kickoff_failure_is_non_fatal(
     output = capsys.readouterr().out
 
     assert captured["served"] == ("127.0.0.1", 8787, tmp_path / "generated_runs")
-    assert "[gui-mvp] warning: quick-run kickoff failed (spawn failed)" in output
-    assert "[gui-mvp] hint: GUI stays up; start manually from Overview → Quick Run." in output
-    assert "[gui-mvp] hint: verify PRD path/config and retry with --run <PRD>." in output
-    assert f"[gui-mvp] run kickoff: failed for prd={prd.resolve()} (non-fatal)" in output
-    assert "[gui-mvp]   2) Trigger Quick Run from Overview after fixing the kickoff issue." in output
+    assert "[gui-mvp] startup summary" in output
+    assert "[gui-mvp]   URL: http://127.0.0.1:8787" in output
+    assert "[gui-mvp]   Kickoff: failed (spawn failed; non-fatal)" in output
+    assert "[gui-mvp]   Next: Run Quick Run from Overview after fixing the PRD/config issue." in output
 
     main.os.environ.pop("AUTODEV_GUI_ROLE", None)
     main.os.environ.pop("AUTODEV_GUI_LOCAL_SIMPLE", None)

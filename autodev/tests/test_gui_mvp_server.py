@@ -396,6 +396,8 @@ def test_artifact_viewer_static_contract_includes_export_controls(gui_server):
         app_js = resp.read().decode("utf-8")
     assert "function getArtifactViewerTextPayload(payload)" in app_js
     assert "function copyTextToClipboard(text)" in app_js
+    assert "function announceArtifactViewerAction(message, kind = 'ok')" in app_js
+    assert "function withPreservedFocus(action)" in app_js
     assert "artifactViewerDownloadName" in app_js
 
 
@@ -1039,6 +1041,13 @@ def test_process_panel_static_contract(gui_server):
     assert "function filterProcesses(rows)" in app_js
     assert "rowRunId.includes(runIdFilter)" in app_js
     assert "function renderProcessPagination(meta)" in app_js
+    assert "function syncProcessActionButtons(process)" in app_js
+    assert "state.processActionInFlight" in app_js
+    assert "state.processLoadRequestSeq" in app_js
+    assert "No processes match current filters. Adjust filters and refresh." in app_js
+    assert "No tracked processes yet. Start or retry a run to populate this panel." in app_js
+    assert "if (requestSeq !== state.processLoadRequestSeq)" in app_js
+    assert "Another process action (" in app_js
 
 
 def test_retry_endpoint_supports_run_id_target(gui_server, tmp_path, monkeypatch):

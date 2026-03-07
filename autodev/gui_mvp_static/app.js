@@ -38,7 +38,14 @@ const state = {
   processPage: 1,
   processPageSize: 20,
   processListError: '',
+  processLoadRequestSeq: 0,
+  processLoadInFlight: false,
+  processActionInFlight: false,
+  processActionType: '',
 };
+
+const ARTIFACT_ACTION_TOAST_MS = 3200;
+let artifactViewerActionToastTimer = null;
 
 const PHASE_COLORS = {
   prd_analysis: '#7c3aed',
@@ -508,6 +515,13 @@ function setRunControlStatus(message, { error = false } = {}) {
   node.classList.toggle('error-text', Boolean(error));
 }
 
+function setProcessStatus(message, { error = false } = {}) {
+  const node = el('processStatusLine');
+  if (!node) return;
+  node.textContent = String(message || '');
+  node.classList.toggle('error-text', Boolean(error));
+}
+
 function setRunControlHints(hints) {
   const node = el('runControlHints');
   if (!node) return;
@@ -905,6 +919,10 @@ function clearArtifactViewerState({ preservePath = false } = {}) {
   state.artifactViewerLoading = false;
   state.artifactViewerRequestedBy = '';
   state.artifactViewerActionStatus = null;
+  if (artifactViewerActionToastTimer) {
+    clearTimeout(artifactViewerActionToastTimer);
+    artifactViewerActionToastTimer = null;
+  }
 }
 
 function formatArtifactJsonError(error) {
@@ -988,6 +1006,38 @@ function setArtifactViewerActionStatus(message, kind = 'ok') {
   node.classList.remove('hidden');
   node.classList.remove('ok', 'error');
   node.classList.add(kind === 'error' ? 'error' : 'ok');
+}
+
+function announceArtifactViewerAction(message, kind = 'ok') {
+  if (artifactViewerActionToastTimer) {
+    clearTimeout(artifactViewerActionToastTimer);
+    artifactViewerActionToastTimer = null;
+  }
+  state.artifactViewerActionStatus = { message, kind };
+  renderArtifactViewer();
+  artifactViewerActionToastTimer = window.setTimeout(() => {
+    const current = state.artifactViewerActionStatus;
+    if (current?.message === message && current?.kind === kind) {
+      state.artifactViewerActionStatus = null;
+      renderArtifactViewer();
+    }
+    artifactViewerActionToastTimer = null;
+  }, ARTIFACT_ACTION_TOAST_MS);
+}
+
+async function withPreservedFocus(action) {
+  const active = document.activeElement;
+  try {
+    return await action();
+  } finally {
+    if (active instanceof HTMLElement && document.contains(active) && !active.hasAttribute('disabled')) {
+      try {
+        active.focus({ preventScroll: true });
+      } catch {
+        active.focus();
+      }
+    }
+  }
 }
 
 async function copyTextToClipboard(text) {
@@ -1726,6 +1776,24 @@ function processRetrySummary(process) {
   return `chain=${root || '-'} • attempt=${attempt}/${maxAttempt} • processes in chain=${chain.length || 1}`;
 }
 
+function syncProcessActionButtons(process) {
+  const stopBtn = el('processStopBtn');
+  const retryBtn = el('processRetryBtn');
+  const actionType = String(state.processActionType || '').toLowerCase();
+  const busy = Boolean(state.processActionInFlight);
+  const hasProcess = Boolean(process?.process_id);
+
+  if (stopBtn) {
+    stopBtn.textContent = busy && actionType === 'stop' ? 'Stopping…' : 'Stop process';
+    stopBtn.disabled = busy || !hasProcess || !isProcessActive(process?.state);
+  }
+
+  if (retryBtn) {
+    retryBtn.textContent = busy && actionType === 'retry' ? 'Retrying…' : 'Retry process';
+    retryBtn.disabled = busy || !hasProcess;
+  }
+}
+
 function renderProcessList(processes) {
   const list = el('processList');
   const empty = el('processListEmpty');
@@ -1776,20 +1844,39 @@ async function refreshProcessPanel({ syncSelection = true, statusMessage = '' } 
   renderProcessPagination(pageMeta);
 
   if (!syncSelection) {
+    setProcessStatus(statusMessage || `${pageMeta.total} match(es) • page ${pageMeta.currentPage}/${pageMeta.totalPages}`);
     return pageMeta;
   }
+
+  const allRows = Array.isArray(state.processes) ? state.processes : [];
+  let nextStatus = String(statusMessage || '').trim();
 
   if (!filtered.length) {
     state.selectedProcessId = null;
     state.selectedProcessDetail = null;
     state.selectedProcessHistory = [];
     renderProcessDetail(null, []);
+    syncProcessActionButtons(null);
+    if (!nextStatus) {
+      nextStatus = allRows.length
+        ? 'No processes match current filters. Adjust filters and refresh.'
+        : 'No tracked processes yet. Start or retry a run to populate this panel.';
+    }
+    setProcessStatus(nextStatus);
     return pageMeta;
   }
 
-  const hasSelectedInFiltered = filtered.some((row) => row.process_id === state.selectedProcessId);
-  if (!hasSelectedInFiltered) {
+  const selectedId = state.selectedProcessId;
+  const hasSelectedInAll = allRows.some((row) => row.process_id === selectedId);
+  const hasSelectedInFiltered = filtered.some((row) => row.process_id === selectedId);
+
+  if (!hasSelectedInAll || !selectedId) {
     state.selectedProcessId = pageMeta.pageRows[0]?.process_id || filtered[0]?.process_id || null;
+    if (!nextStatus && selectedId) {
+      nextStatus = `Selected process ${selectedId} is no longer available. Showing ${state.selectedProcessId || 'latest'} instead.`;
+    }
+  } else if (!hasSelectedInFiltered && !nextStatus) {
+    nextStatus = `Selected process ${selectedId} is hidden by current filters.`;
   }
 
   if (state.selectedProcessId) {
@@ -1804,10 +1891,7 @@ async function refreshProcessPanel({ syncSelection = true, statusMessage = '' } 
     }
   }
 
-  const status = el('processStatusLine');
-  if (status) {
-    status.textContent = statusMessage || `${pageMeta.total} match(es) • page ${pageMeta.currentPage}/${pageMeta.totalPages}`;
-  }
+  setProcessStatus(nextStatus || `${pageMeta.total} match(es) • page ${pageMeta.currentPage}/${pageMeta.totalPages}`);
 
   return pageMeta;
 }
@@ -1821,8 +1905,6 @@ function renderProcessDetail(process, history) {
   const summary = el('processRetrySummary');
   const historyNode = el('processHistory');
   const historyEmpty = el('processHistoryEmpty');
-  const stopBtn = el('processStopBtn');
-  const retryBtn = el('processRetryBtn');
   const selectRunBtn = el('processSelectRunBtn');
 
   if (!card || !empty || !error || !title || !meta || !summary || !historyNode || !historyEmpty) return;
@@ -1833,6 +1915,7 @@ function renderProcessDetail(process, history) {
   if (!process) {
     card.classList.add('hidden');
     empty.classList.remove('hidden');
+    syncProcessActionButtons(null);
     return;
   }
 
@@ -1868,12 +1951,7 @@ function renderProcessDetail(process, history) {
 
   summary.textContent = processRetrySummary(process);
 
-  if (stopBtn) {
-    stopBtn.disabled = !isProcessActive(process.state);
-  }
-  if (retryBtn) {
-    retryBtn.disabled = !process.process_id;
-  }
+  syncProcessActionButtons(process);
   if (selectRunBtn) {
     selectRunBtn.disabled = !runLink.run_id;
   }
@@ -1908,6 +1986,7 @@ async function selectProcess(processId) {
     state.selectedProcessDetail = null;
     state.selectedProcessHistory = [];
     renderProcessDetail(null, []);
+    syncProcessActionButtons(null);
     return;
   }
 
@@ -1931,16 +2010,33 @@ async function selectProcess(processId) {
     state.selectedProcessDetail = null;
     state.selectedProcessHistory = [];
     renderProcessDetail(null, []);
+    syncProcessActionButtons(null);
+
+    const msg = String(err?.message || 'unknown error');
+    if (msg.includes('-> 404')) {
+      const staleId = state.selectedProcessId;
+      state.selectedProcessId = null;
+      setProcessStatus(`Selected process ${staleId} is no longer available. Refreshing list...`);
+      await refreshProcessPanel({ syncSelection: true });
+      return;
+    }
+
     const node = el('processDetailError');
     if (node) {
-      node.textContent = `Failed to load process detail: ${err.message}`;
+      node.textContent = `Failed to load process detail: ${msg}`;
       node.classList.remove('hidden');
     }
   }
 }
 
 async function loadProcesses({ silent = false } = {}) {
-  const status = el('processStatusLine');
+  const requestSeq = Number(state.processLoadRequestSeq || 0) + 1;
+  state.processLoadRequestSeq = requestSeq;
+  state.processLoadInFlight = true;
+
+  if (!silent) {
+    setProcessStatus('Refreshing process list...');
+  }
 
   try {
     let payload;
@@ -1951,28 +2047,59 @@ async function loadProcesses({ silent = false } = {}) {
       payload = await fetchJson(`/api/processes?${params.toString()}`);
     }
 
+    if (requestSeq !== state.processLoadRequestSeq) {
+      return;
+    }
+
     state.processListError = '';
     state.processes = Array.isArray(payload?.processes) ? payload.processes : [];
     await refreshProcessPanel();
   } catch (err) {
+    if (requestSeq !== state.processLoadRequestSeq) {
+      return;
+    }
+
     state.processes = [];
     state.processListError = `Failed to load processes: ${err.message}`;
     const pageMeta = buildProcessPage([]);
     renderProcessList([]);
     renderProcessPagination(pageMeta);
     renderProcessDetail(null, []);
-    if (!silent && status) {
-      status.textContent = state.processListError;
+    syncProcessActionButtons(null);
+    if (!silent) {
+      setProcessStatus(state.processListError, { error: true });
+    }
+  } finally {
+    if (requestSeq === state.processLoadRequestSeq) {
+      state.processLoadInFlight = false;
     }
   }
 }
 
 async function runProcessAction(action) {
+  const normalizedAction = String(action || '').toLowerCase();
+  if (!['stop', 'retry'].includes(normalizedAction)) {
+    return;
+  }
+
+  if (state.processActionInFlight) {
+    setProcessStatus(`Another process action (${state.processActionType || 'request'}) is already in flight.`);
+    return;
+  }
+
   const detail = state.selectedProcessDetail;
-  if (!detail?.process_id) return;
+  if (!detail?.process_id) {
+    setProcessStatus('Select a process before running stop/retry.');
+    return;
+  }
+
+  state.processActionInFlight = true;
+  state.processActionType = normalizedAction;
+  syncProcessActionButtons(detail);
+  setProcessStatus(`${normalizedAction.toUpperCase()} request in progress for ${detail.process_id}...`);
 
   try {
-    if (action === 'stop') {
+    if (normalizedAction === 'stop') {
       const timeoutRaw = Number(el('controlGracefulTimeout')?.value || 2.0);
       const gracefulTimeoutSec = Number.isFinite(timeoutRaw) ? timeoutRaw : 2.0;
       await postJson('/api/runs/stop', {
@@ -1990,13 +2117,17 @@ async function runProcessAction(action) {
       }
     }
 
-    await Promise.all([loadRuns(), loadProcesses()]);
-    setRunControlStatus(`${action.toUpperCase()} OK • process=${detail.process_id}`);
+    await Promise.all([loadRuns(), loadProcesses({ silent: true })]);
+    setRunControlStatus(`${normalizedAction.toUpperCase()} OK • process=${detail.process_id}`);
+    setProcessStatus(`${normalizedAction.toUpperCase()} completed for ${detail.process_id}.`);
   } catch (err) {
-    const msg = `${action.toUpperCase()} failed: ${err.message}`;
+    const msg = `${normalizedAction.toUpperCase()} failed: ${err.message}`;
     setRunControlStatus(msg, { error: true });
-    const status = el('processStatusLine');
-    if (status) status.textContent = msg;
+    setProcessStatus(msg, { error: true });
+  } finally {
+    state.processActionInFlight = false;
+    state.processActionType = '';
+    syncProcessActionButtons(state.selectedProcessDetail);
   }
 }
 
@@ -2090,6 +2221,8 @@ function initProcessControls() {
     await selectRun(runId);
     activateTab('overview');
   });
+
+  syncProcessActionButtons(state.selectedProcessDetail);
 }
 
 async function fetchJson(url) {
@@ -2321,32 +2454,33 @@ function initArtifactViewerControls() {
     const payload = state.artifactViewerPayload;
     const textPayload = getArtifactViewerTextPayload(payload);
     if (!textPayload.canExport) return;
-    try {
-      await copyTextToClipboard(textPayload.text);
-      state.artifactViewerActionStatus = { message: 'Copied artifact content to clipboard.', kind: 'ok' };
-    } catch {
-      state.artifactViewerActionStatus = { message: 'Copy failed. Browser clipboard access was denied.', kind: 'error' };
-    }
-    renderArtifactViewer();
+    await withPreservedFocus(async () => {
+      try {
+        await copyTextToClipboard(textPayload.text);
+        announceArtifactViewerAction('Copied artifact content to clipboard.', 'ok');
+      } catch {
+        announceArtifactViewerAction('Copy failed. Browser clipboard access was denied.', 'error');
+      }
+    });
   });
 
-  downloadBtn.addEventListener('click', () => {
+  downloadBtn.addEventListener('click', async () => {
     const payload = state.artifactViewerPayload;
     const textPayload = getArtifactViewerTextPayload(payload);
     if (!textPayload.canExport) return;
 
-    const blobType = payload?.content_type === 'application/json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
-    const blob = new Blob([textPayload.text], { type: blobType });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = artifactViewerDownloadName(state.artifactViewerPath, payload);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(link.href);
-
-    state.artifactViewerActionStatus = { message: `Downloaded ${link.download}.`, kind: 'ok' };
-    renderArtifactViewer();
+    await withPreservedFocus(async () => {
+      const blobType = payload?.content_type === 'application/json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+      const blob = new Blob([textPayload.text], { type: blobType });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = artifactViewerDownloadName(state.artifactViewerPath, payload);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+      announceArtifactViewerAction(`Downloaded ${link.download}.`, 'ok');
+    });
   });
 
   renderArtifactViewer();
