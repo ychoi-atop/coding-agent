@@ -32,6 +32,8 @@ AUTONOMOUS_STATE_FILE = ".autodev/autonomous_state.json"
 AUTONOMOUS_REPORT_JSON = ".autodev/autonomous_report.json"
 AUTONOMOUS_REPORT_MD = "AUTONOMOUS_REPORT.md"
 AUTONOMOUS_GATE_RESULTS_JSON = ".autodev/autonomous_gate_results.json"
+AUTONOMOUS_GATE_BASELINE_JSON = ".autodev/autonomous_gate_baseline.json"
+_AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -154,6 +156,145 @@ def _extract_performance_regression_pct(ws: Workspace, validation_rows: list[Nor
     return None, "unavailable"
 
 
+def _new_gate_baseline_payload() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "history_limit": _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT,
+        "updated_at": _utc_now(),
+        "gates": {},
+    }
+
+
+def _load_gate_baseline_payload(ws: Workspace) -> dict[str, Any]:
+    if not ws.exists(AUTONOMOUS_GATE_BASELINE_JSON):
+        return _new_gate_baseline_payload()
+    try:
+        raw = ws.read_text(AUTONOMOUS_GATE_BASELINE_JSON)
+        payload = json.loads(raw)
+    except Exception:
+        return _new_gate_baseline_payload()
+    if not isinstance(payload, dict):
+        return _new_gate_baseline_payload()
+    gates = payload.get("gates")
+    if not isinstance(gates, dict):
+        payload["gates"] = {}
+    payload["version"] = 1
+    payload["history_limit"] = int(payload.get("history_limit") or _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT)
+    return payload
+
+
+def _write_gate_baseline_payload(ws: Workspace, payload: dict[str, Any]) -> None:
+    payload["updated_at"] = _utc_now()
+    ws.write_text(AUTONOMOUS_GATE_BASELINE_JSON, json_dumps(payload))
+
+
+def _baseline_recent_values(payload: dict[str, Any], gate: str) -> list[float]:
+    gates = payload.get("gates")
+    if not isinstance(gates, dict):
+        return []
+    gate_payload = gates.get(gate)
+    if not isinstance(gate_payload, dict):
+        return []
+    observations = gate_payload.get("observations")
+    if not isinstance(observations, list):
+        return []
+
+    values: list[float] = []
+    for item in observations:
+        if not isinstance(item, dict):
+            continue
+        parsed = _as_float(item.get("value"))
+        if parsed is None:
+            continue
+        values.append(parsed)
+    return values
+
+
+def _append_gate_baseline_observation(
+    payload: dict[str, Any],
+    *,
+    gate: str,
+    metric: str,
+    direction: str,
+    value: float,
+    signal_source: str,
+) -> None:
+    if value < 0:
+        return
+
+    gates = payload.setdefault("gates", {})
+    if not isinstance(gates, dict):
+        return
+
+    gate_payload = gates.get(gate)
+    if not isinstance(gate_payload, dict):
+        gate_payload = {}
+        gates[gate] = gate_payload
+
+    gate_payload["metric"] = metric
+    gate_payload["direction"] = direction
+
+    observations = gate_payload.get("observations")
+    if not isinstance(observations, list):
+        observations = []
+        gate_payload["observations"] = observations
+
+    observations.append(
+        {
+            "value": value,
+            "observed_at": _utc_now(),
+            "signal_source": signal_source,
+        }
+    )
+
+    history_limit = _as_int(payload.get("history_limit"))
+    if history_limit is None or history_limit <= 0:
+        history_limit = _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT
+        payload["history_limit"] = history_limit
+    if len(observations) > history_limit:
+        del observations[:-history_limit]
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _detect_baseline_performance_regression(
+    observed_regression_pct: float,
+    baseline_values: list[float],
+) -> tuple[bool, dict[str, Any]]:
+    reference = _median(baseline_values)
+    if reference is None:
+        return False, {"sample_size": 0}
+
+    sample_size = len(baseline_values)
+    if sample_size < 2:
+        return False, {
+            "sample_size": sample_size,
+            "baseline_reference_regression_pct": reference,
+            "baseline_regression_limit_pct": None,
+            "note": "insufficient_baseline_history",
+        }
+
+    tolerance = max(1.0, reference * 0.25)
+    regression_limit = reference + tolerance
+    delta = observed_regression_pct - reference
+    regressed = observed_regression_pct > regression_limit
+    return regressed, {
+        "sample_size": sample_size,
+        "baseline_reference_regression_pct": reference,
+        "baseline_regression_limit_pct": regression_limit,
+        "regression_delta_pct": delta,
+    }
+
+
 def _evaluate_quality_gates(
     *,
     ws: Workspace,
@@ -163,6 +304,7 @@ def _evaluate_quality_gates(
     validation_rows = normalize_validation_signals(last_validation)
     gates: dict[str, Any] = {}
     fail_reasons: list[dict[str, Any]] = []
+    baseline_payload = _load_gate_baseline_payload(ws)
 
     tests_cfg = policy.tests
     if tests_cfg is None or tests_cfg.min_pass_rate is None:
@@ -188,6 +330,14 @@ def _evaluate_quality_gates(
                 "observed": {"pass_rate": pass_rate, "passed": passed, "sample_size": total},
                 "signal_source": "final_validation.pytest",
             }
+            _append_gate_baseline_observation(
+                baseline_payload,
+                gate="tests",
+                metric="pass_rate",
+                direction="higher_is_better",
+                value=pass_rate,
+                signal_source="final_validation.pytest",
+            )
             if not gate_ok:
                 fail_reasons.append(
                     make_gate_failure_reason(
@@ -223,6 +373,14 @@ def _evaluate_quality_gates(
                 "observed": {"high_findings": high_findings, "sample_size": len(security_rows)},
                 "signal_source": "final_validation.security_validators",
             }
+            _append_gate_baseline_observation(
+                baseline_payload,
+                gate="security",
+                metric="high_findings",
+                direction="lower_is_better",
+                value=float(high_findings),
+                signal_source="final_validation.security_validators",
+            )
             if not gate_ok:
                 fail_reasons.append(
                     make_gate_failure_reason(
@@ -249,14 +407,29 @@ def _evaluate_quality_gates(
                 "note": "performance regression signal unavailable",
             }
         else:
-            gate_ok = observed_regression_pct <= performance_cfg.max_regression_pct
+            baseline_values = _baseline_recent_values(baseline_payload, "performance")
+            baseline_regressed, baseline_details = _detect_baseline_performance_regression(
+                observed_regression_pct,
+                baseline_values,
+            )
+            threshold_gate_ok = observed_regression_pct <= performance_cfg.max_regression_pct
+            gate_ok = threshold_gate_ok and not baseline_regressed
             gates["performance"] = {
                 "status": "passed" if gate_ok else "failed",
                 "threshold": {"max_regression_pct": performance_cfg.max_regression_pct},
                 "observed": {"regression_pct": observed_regression_pct},
                 "signal_source": signal_source,
+                "baseline": baseline_details,
             }
-            if not gate_ok:
+            _append_gate_baseline_observation(
+                baseline_payload,
+                gate="performance",
+                metric="regression_pct",
+                direction="lower_is_better",
+                value=observed_regression_pct,
+                signal_source=signal_source,
+            )
+            if not threshold_gate_ok:
                 fail_reasons.append(
                     make_gate_failure_reason(
                         gate="performance",
@@ -267,6 +440,26 @@ def _evaluate_quality_gates(
                         observed={"regression_pct": observed_regression_pct},
                     )
                 )
+            if baseline_regressed:
+                fail_reasons.append(
+                    make_gate_failure_reason(
+                        gate="performance",
+                        code="performance.baseline_regression_detected",
+                        message="Performance regression significantly exceeded recent baseline trend.",
+                        signal_source=signal_source,
+                        threshold={
+                            "baseline_reference_regression_pct": baseline_details.get("baseline_reference_regression_pct"),
+                            "baseline_regression_limit_pct": baseline_details.get("baseline_regression_limit_pct"),
+                        },
+                        observed={
+                            "regression_pct": observed_regression_pct,
+                            "baseline_sample_size": baseline_details.get("sample_size", 0),
+                            "regression_delta_pct": baseline_details.get("regression_delta_pct"),
+                        },
+                    )
+                )
+
+    _write_gate_baseline_payload(ws, baseline_payload)
 
     passed = len(fail_reasons) == 0
     return {
