@@ -309,6 +309,74 @@ def test_autonomous_quality_gate_results_artifact_persisted(tmp_path, monkeypatc
     assert report["iterations_gate_failed"] == 0
 
 
+def test_evaluate_quality_gates_baseline_absent_preserves_threshold_behavior_and_persists_artifact(tmp_path):
+    ws = autonomous_mode.Workspace(tmp_path)
+    policy = autonomous_mode.AutonomousQualityGatePolicy(
+        tests=autonomous_mode.AutonomousTestsGateThresholds(min_pass_rate=0.9),
+        security=autonomous_mode.AutonomousSecurityGateThresholds(max_high_findings=0),
+        performance=autonomous_mode.AutonomousPerformanceGateThresholds(max_regression_pct=5.0),
+    )
+
+    result = autonomous_mode._evaluate_quality_gates(
+        ws=ws,
+        policy=policy,
+        last_validation=[
+            {"name": "pytest", "status": "passed", "returncode": 0, "diagnostics": {}},
+            {"name": "bandit", "status": "passed", "returncode": 0, "diagnostics": {"high_findings": 0}},
+            {"name": "perf", "status": "passed", "diagnostics": {"regression_pct": 4.0}},
+        ],
+    )
+
+    assert result["passed"] is True
+    perf_reasons = [r for r in result["fail_reasons"] if r.get("gate") == "performance"]
+    assert perf_reasons == []
+
+    baseline = json.loads((tmp_path / ".autodev" / "autonomous_gate_baseline.json").read_text(encoding="utf-8"))
+    assert baseline["version"] == 1
+    assert baseline["gates"]["performance"]["metric"] == "regression_pct"
+    assert len(baseline["gates"]["performance"]["observations"]) == 1
+
+
+def test_evaluate_quality_gates_detects_baseline_regression_with_typed_reason_code(tmp_path):
+    ws = autonomous_mode.Workspace(tmp_path)
+    policy = autonomous_mode.AutonomousQualityGatePolicy(
+        tests=None,
+        security=None,
+        performance=autonomous_mode.AutonomousPerformanceGateThresholds(max_regression_pct=10.0),
+    )
+
+    for observed in (1.0, 1.2):
+        warmup = autonomous_mode._evaluate_quality_gates(
+            ws=ws,
+            policy=policy,
+            last_validation=[
+                {"name": "perf", "status": "passed", "diagnostics": {"regression_pct": observed}},
+            ],
+        )
+        assert warmup["passed"] is True
+
+    regressed = autonomous_mode._evaluate_quality_gates(
+        ws=ws,
+        policy=policy,
+        last_validation=[
+            {"name": "perf", "status": "passed", "diagnostics": {"regression_pct": 3.5}},
+        ],
+    )
+
+    assert regressed["passed"] is False
+    codes = [r.get("code") for r in regressed["fail_reasons"] if isinstance(r, dict)]
+    assert "performance.baseline_regression_detected" in codes
+    assert "performance.max_regression_pct_exceeded" not in codes
+
+    perf_gate = regressed["gates"]["performance"]
+    assert perf_gate["status"] == "failed"
+    assert perf_gate["baseline"]["sample_size"] == 2
+    assert perf_gate["baseline"]["baseline_regression_limit_pct"] is not None
+
+    baseline = json.loads((tmp_path / ".autodev" / "autonomous_gate_baseline.json").read_text(encoding="utf-8"))
+    assert len(baseline["gates"]["performance"]["observations"]) == 3
+
+
 def test_autonomous_start_stops_at_max_iterations(tmp_path, monkeypatch):
     cfg = _write_cfg(tmp_path)
     prd = _write_prd(tmp_path)

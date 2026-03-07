@@ -77,8 +77,9 @@ Notes:
 - Default side-effect posture is safe (`false`).
 - `allow_docker_build=false` forces docker-build validation tasks to remain disabled in autonomous mode.
 - `quality_gate_policy` actively evaluates tests/security/performance gates at each autonomous iteration end using available signals.
+- Autonomous mode persists gate trends in `.autodev/autonomous_gate_baseline.json` (recent observed values per gate) and uses the baseline to strengthen regression judgment (especially performance placeholder signals).
 - When a gate fails, autonomous mode records typed fail reasons in attempt artifacts and enters bounded `auto_fix_retry` (still constrained by `max_iterations` and `time_budget_sec`).
-- Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) so downstream report/triage logic can branch deterministically.
+- Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
 
 ---
 
@@ -89,6 +90,7 @@ Each autonomous run writes:
 - `.autodev/autonomous_state.json` — live state machine snapshot (phase/status/attempts)
 - `.autodev/autonomous_report.json` — machine-readable final report (includes latest `gate_results` when configured)
 - `.autodev/autonomous_gate_results.json` — per-iteration quality gate evaluation history
+- `.autodev/autonomous_gate_baseline.json` — persistent recent gate observations used for trend-aware regression checks
 - `AUTONOMOUS_REPORT.md` — quick human summary
 - existing run artifacts (`report.json`, quality artifacts, checkpoints) are preserved
 
