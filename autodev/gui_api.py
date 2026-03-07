@@ -51,8 +51,16 @@ def list_runs(out_root: str, limit: int = 50) -> list[dict[str, Any]]:
         if not run_dir.is_dir():
             continue
 
-        metadata, metadata_error = _read_json_with_error(run_dir / RUN_METADATA_FILE)
-        checkpoint, checkpoint_error = _read_json_with_error(run_dir / CHECKPOINT_FILE)
+        metadata, metadata_error = _read_json_with_error(
+            run_dir / RUN_METADATA_FILE,
+            expected_type=dict,
+            artifact_name="run_metadata",
+        )
+        checkpoint, checkpoint_error = _read_json_with_error(
+            run_dir / CHECKPOINT_FILE,
+            expected_type=dict,
+            artifact_name="checkpoint",
+        )
         status = _derive_status(metadata, checkpoint)
 
         run_id = _coerce_str(metadata.get("run_id")) if isinstance(metadata, dict) else ""
@@ -103,9 +111,21 @@ def list_runs(out_root: str, limit: int = 50) -> list[dict[str, Any]]:
 
 def get_run_detail(out_root: str, run_key: str) -> dict[str, Any]:
     run_dir = _resolve_run_dir(out_root, run_key)
-    metadata, metadata_error = _read_json_with_error(run_dir / RUN_METADATA_FILE)
-    checkpoint, checkpoint_error = _read_json_with_error(run_dir / CHECKPOINT_FILE)
-    run_trace, run_trace_error = _read_json_with_error(run_dir / f"{AUTODEV_DIR}/run_trace.json")
+    metadata, metadata_error = _read_json_with_error(
+        run_dir / RUN_METADATA_FILE,
+        expected_type=dict,
+        artifact_name="run_metadata",
+    )
+    checkpoint, checkpoint_error = _read_json_with_error(
+        run_dir / CHECKPOINT_FILE,
+        expected_type=dict,
+        artifact_name="checkpoint",
+    )
+    run_trace, run_trace_error = _read_json_with_error(
+        run_dir / f"{AUTODEV_DIR}/run_trace.json",
+        expected_type=dict,
+        artifact_name="run_trace",
+    )
 
     if metadata is None and checkpoint is None and run_trace is None:
         raise FileNotFoundError(f"No .autodev artifacts found for run: {run_key}")
@@ -247,9 +267,21 @@ def validate_resume_target(out_dir: str) -> dict[str, Any]:
     if not run_metadata_path.is_file():
         raise GuiApiError("resume target is missing '.autodev/run_metadata.json'")
 
-    checkpoint, checkpoint_error = _read_json_with_error(checkpoint_path)
-    metadata, metadata_error = _read_json_with_error(run_metadata_path)
-    _, run_trace_error = _read_json_with_error(run_trace_path)
+    checkpoint, checkpoint_error = _read_json_with_error(
+        checkpoint_path,
+        expected_type=dict,
+        artifact_name="checkpoint",
+    )
+    metadata, metadata_error = _read_json_with_error(
+        run_metadata_path,
+        expected_type=dict,
+        artifact_name="run_metadata",
+    )
+    _, run_trace_error = _read_json_with_error(
+        run_trace_path,
+        expected_type=dict,
+        artifact_name="run_trace",
+    )
 
     if checkpoint_error:
         raise GuiApiError(
@@ -470,16 +502,21 @@ def _reset_process_manager_for_tests() -> None:
 
 
 def _read_json_optional(path: Path) -> dict[str, Any] | None:
-    data, _ = _read_json_with_error(path)
+    data, _ = _read_json_with_error(path, expected_type=dict)
     return data
 
 
-def _read_json_with_error(path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _read_json_with_error(
+    path: Path,
+    *,
+    expected_type: type[Any] | tuple[type[Any], ...] | None = None,
+    artifact_name: str = "",
+) -> tuple[Any | None, dict[str, Any] | None]:
     if not path.is_file():
         return None, None
 
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         return None, {
             "kind": "artifact_json_error",
@@ -489,6 +526,21 @@ def _read_json_with_error(path: Path) -> tuple[dict[str, Any] | None, dict[str, 
         }
     except json.JSONDecodeError as exc:
         return None, _build_json_parse_error_payload(path=path, err=exc)
+
+    if expected_type is not None and not isinstance(parsed, expected_type):
+        expected_label = _expected_type_label(expected_type)
+        artifact_label = artifact_name or path.name
+        return None, {
+            "kind": "artifact_json_error",
+            "code": "artifact_json_type_mismatch",
+            "path": str(path),
+            "artifact": artifact_label,
+            "expected": expected_label,
+            "actual": type(parsed).__name__,
+            "message": f"expected JSON {expected_label} for {artifact_label}",
+        }
+
+    return parsed, None
 
 
 def _build_json_parse_error_payload(path: Path, err: json.JSONDecodeError, *, truncated: bool = False) -> dict[str, Any]:
@@ -501,6 +553,13 @@ def _build_json_parse_error_payload(path: Path, err: json.JSONDecodeError, *, tr
         "column": err.colno,
         "position": err.pos,
     }
+
+
+def _expected_type_label(expected_type: type[Any] | tuple[type[Any], ...]) -> str:
+    if isinstance(expected_type, tuple):
+        labels = [tp.__name__ for tp in expected_type]
+        return " or ".join(labels)
+    return expected_type.__name__
 
 
 def _derive_status(metadata: dict[str, Any] | None, checkpoint: dict[str, Any] | None) -> str:

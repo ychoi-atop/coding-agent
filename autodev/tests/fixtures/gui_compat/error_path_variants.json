@@ -1,0 +1,138 @@
+{
+  "gui_api": [
+    {
+      "name": "malformed-metadata-with-checkpoint-fallback",
+      "run_name": "run-malformed-meta",
+      "files": [
+        {
+          "path": ".autodev/run_metadata.json",
+          "kind": "raw",
+          "content": "{\"run_id\": \"rid-malformed\""
+        },
+        {
+          "path": ".autodev/checkpoint.json",
+          "kind": "json",
+          "content": {
+            "status": "running"
+          }
+        }
+      ],
+      "expected": {
+        "status": "running",
+        "error_codes": [
+          "artifact_json_malformed"
+        ]
+      }
+    },
+    {
+      "name": "checkpoint-type-mismatch-array",
+      "run_name": "run-checkpoint-array",
+      "files": [
+        {
+          "path": ".autodev/run_metadata.json",
+          "kind": "json",
+          "content": {
+            "run_id": "rid-checkpoint-array"
+          }
+        },
+        {
+          "path": ".autodev/checkpoint.json",
+          "kind": "json",
+          "content": [
+            {
+              "status": "running"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "status": "running",
+        "error_codes": [
+          "artifact_json_type_mismatch"
+        ]
+      }
+    },
+    {
+      "name": "partial-missing-checkpoint-trace-metadata-only",
+      "run_name": "run-meta-only",
+      "files": [
+        {
+          "path": ".autodev/run_metadata.json",
+          "kind": "json",
+          "content": {
+            "run_id": "rid-meta-only",
+            "result_ok": true
+          }
+        }
+      ],
+      "expected": {
+        "status": "ok",
+        "error_codes": []
+      }
+    }
+  ],
+  "gui_server": [
+    {
+      "name": "quality-type-mismatch-with-partial-trace",
+      "run_name": "run-quality-bad-shape",
+      "files": [
+        {
+          "path": ".autodev/task_quality_index.json",
+          "kind": "json",
+          "content": [
+            {
+              "final": {
+                "status": "ok"
+              }
+            }
+          ]
+        },
+        {
+          "path": ".autodev/run_trace.json",
+          "kind": "json",
+          "content": {
+            "trace_events": [
+              {
+                "type": "run_start",
+                "timestamp": "2026-03-05T00:00:00Z"
+              }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "status": "unknown",
+        "error_codes": [
+          "artifact_json_type_mismatch"
+        ],
+        "event_count": 1
+      }
+    },
+    {
+      "name": "validation-type-mismatch-counts-as-invalid-trends",
+      "run_name": "run-validation-bad-shape",
+      "files": [
+        {
+          "path": ".autodev/task_quality_index.json",
+          "kind": "json",
+          "content": {
+            "final": {
+              "status": "ok"
+            }
+          }
+        },
+        {
+          "path": ".autodev/task_final_last_validation.json",
+          "kind": "json",
+          "content": "unexpected-string"
+        }
+      ],
+      "expected": {
+        "trend_counters": {
+          "runs_skipped_invalid_validation": 1,
+          "runs_skipped_missing_or_invalid_artifacts": 1
+        }
+      }
+    }
+  ]
+}

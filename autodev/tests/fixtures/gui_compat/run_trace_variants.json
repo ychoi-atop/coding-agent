@@ -3,18 +3,46 @@
     {
       "name": "legacy-event-stream-v0",
       "input": {
-        "llm": { "model": "claude-legacy" },
-        "run": { "profile": "minimal" },
+        "llm": {
+          "model": "claude-legacy"
+        },
+        "run": {
+          "profile": "minimal"
+        },
         "run_id": "run-legacy",
         "request_id": "req-legacy",
         "total_elapsed_ms": 4200,
         "events": [
-          { "event_type": "run.start", "timestamp": "2026-03-01T10:00:00Z" },
-          { "event_type": "phase.start", "phase": "planning", "elapsed_ms": 200 },
-          { "event_type": "phase.end", "phase": "planning", "elapsed_ms": 800, "status": "ok" },
-          { "event_type": "phase.start", "phase": "implementation", "elapsed_ms": 900 },
-          { "event_type": "phase.end", "phase": "implementation", "elapsed_ms": 3000, "status": "failed" },
-          { "event_type": "run.completed", "timestamp": "2026-03-01T10:00:04Z" }
+          {
+            "event_type": "run.start",
+            "timestamp": "2026-03-01T10:00:00Z"
+          },
+          {
+            "event_type": "phase.start",
+            "phase": "planning",
+            "elapsed_ms": 200
+          },
+          {
+            "event_type": "phase.end",
+            "phase": "planning",
+            "elapsed_ms": 800,
+            "status": "ok"
+          },
+          {
+            "event_type": "phase.start",
+            "phase": "implementation",
+            "elapsed_ms": 900
+          },
+          {
+            "event_type": "phase.end",
+            "phase": "implementation",
+            "elapsed_ms": 3000,
+            "status": "failed"
+          },
+          {
+            "event_type": "run.completed",
+            "timestamp": "2026-03-01T10:00:04Z"
+          }
         ]
       },
       "expected": {
@@ -27,8 +55,16 @@
         "started_at": "2026-03-01T10:00:00Z",
         "completed_at": "2026-03-01T10:00:04Z",
         "phase_timeline": [
-          { "phase": "planning", "duration_ms": 600, "status": "ok" },
-          { "phase": "implementation", "duration_ms": 2100, "status": "failed" }
+          {
+            "phase": "planning",
+            "duration_ms": 600,
+            "status": "ok"
+          },
+          {
+            "phase": "implementation",
+            "duration_ms": 2100,
+            "status": "failed"
+          }
         ],
         "timeline_events": [
           {
@@ -99,12 +135,27 @@
         "total_elapsed_ms": 7600,
         "event_count": 9,
         "phases": [
-          { "name": "planning", "start_ms": 100, "end_ms": 900, "status": "ok" },
-          { "phase": "implementation", "duration_ms": 5100, "status": "ok" }
+          {
+            "name": "planning",
+            "start_ms": 100,
+            "end_ms": 900,
+            "status": "ok"
+          },
+          {
+            "phase": "implementation",
+            "duration_ms": 5100,
+            "status": "ok"
+          }
         ],
         "events": [
-          { "event_type": "run.start", "timestamp": "2026-03-01T11:00:00Z" },
-          { "event_type": "run.completed", "timestamp": "2026-03-01T11:00:08Z" }
+          {
+            "event_type": "run.start",
+            "timestamp": "2026-03-01T11:00:00Z"
+          },
+          {
+            "event_type": "run.completed",
+            "timestamp": "2026-03-01T11:00:08Z"
+          }
         ]
       },
       "expected": {
@@ -117,8 +168,16 @@
         "started_at": "2026-03-01T11:00:00Z",
         "completed_at": "2026-03-01T11:00:08Z",
         "phase_timeline": [
-          { "phase": "planning", "duration_ms": 800, "status": "ok" },
-          { "phase": "implementation", "duration_ms": 5100, "status": "ok" }
+          {
+            "phase": "planning",
+            "duration_ms": 800,
+            "status": "ok"
+          },
+          {
+            "phase": "implementation",
+            "duration_ms": 5100,
+            "status": "ok"
+          }
         ],
         "timeline_events": [
           {
@@ -164,18 +223,44 @@
       "name": "modern-trace-events-v2",
       "input": {
         "llm_model": "gpt-modern",
-        "run": { "profile": "balanced" },
+        "run": {
+          "profile": "balanced"
+        },
         "run_id": "run-modern-v2",
         "request_id": "req-modern-v2",
         "phase_timeline": [
-          { "phase": "planning", "duration_ms": 300, "status": "ok" },
-          { "name": "validation", "duration_ms": 1200, "status": "failed" }
+          {
+            "phase": "planning",
+            "duration_ms": 300,
+            "status": "ok"
+          },
+          {
+            "name": "validation",
+            "duration_ms": 1200,
+            "status": "failed"
+          }
         ],
         "trace_events": [
-          { "type": "run_start", "timestamp": "2026-03-02T09:00:00Z" },
-          { "type": "task.completed", "phase": "implementation", "elapsed_ms": 700, "status": "ok" },
-          { "type": "validation.complete", "phase": "validation", "elapsed_ms": 1500, "status": "failed" },
-          { "type": "run.end", "timestamp": "2026-03-02T09:00:03Z" }
+          {
+            "type": "run_start",
+            "timestamp": "2026-03-02T09:00:00Z"
+          },
+          {
+            "type": "task.completed",
+            "phase": "implementation",
+            "elapsed_ms": 700,
+            "status": "ok"
+          },
+          {
+            "type": "validation.complete",
+            "phase": "validation",
+            "elapsed_ms": 1500,
+            "status": "failed"
+          },
+          {
+            "type": "run.end",
+            "timestamp": "2026-03-02T09:00:03Z"
+          }
         ]
       },
       "expected": {
@@ -188,8 +273,16 @@
         "started_at": "2026-03-02T09:00:00Z",
         "completed_at": "2026-03-02T09:00:03Z",
         "phase_timeline": [
-          { "phase": "planning", "duration_ms": 300, "status": "ok" },
-          { "phase": "validation", "duration_ms": 1200, "status": "failed" }
+          {
+            "phase": "planning",
+            "duration_ms": 300,
+            "status": "ok"
+          },
+          {
+            "phase": "validation",
+            "duration_ms": 1200,
+            "status": "failed"
+          }
         ],
         "timeline_events": [
           {
@@ -244,6 +337,131 @@
             "status": "failed",
             "timestamp": "",
             "elapsed_ms": 1200,
+            "source": "phase_timeline"
+          }
+        ]
+      }
+    },
+    {
+      "name": "partial-trace-only-run-start-no-complete",
+      "input": {
+        "schema_version": "v2",
+        "llm_model": "gpt-partial",
+        "run": {
+          "profile": "debug"
+        },
+        "run_id": "run-partial",
+        "request_id": "req-partial",
+        "trace_events": [
+          {
+            "type": "run_start",
+            "timestamp": "2026-03-03T10:00:00Z"
+          },
+          {
+            "type": "phase.completed",
+            "phase": "planning",
+            "elapsed_ms": 350,
+            "status": "ok"
+          },
+          "bad-row",
+          null
+        ]
+      },
+      "expected": {
+        "model": "gpt-partial",
+        "profile": "debug",
+        "run_id": "run-partial",
+        "request_id": "req-partial",
+        "total_elapsed_ms": 0,
+        "event_count": 2,
+        "started_at": "2026-03-03T10:00:00Z",
+        "completed_at": "",
+        "phase_timeline": [],
+        "timeline_events": [
+          {
+            "event_type": "run.start",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-03T10:00:00Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "planning",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 350,
+            "source": "event_stream"
+          }
+        ]
+      }
+    },
+    {
+      "name": "phase-summary-only-no-event-stream",
+      "input": {
+        "model": "claude-phase-only",
+        "profile": "minimal",
+        "run_id": "run-phase-only",
+        "request_id": "req-phase-only",
+        "phases": [
+          {
+            "name": "planning",
+            "start_ms": 0,
+            "end_ms": 500,
+            "status": "ok"
+          },
+          {
+            "phase": "implementation",
+            "duration_ms": 1800,
+            "status": "failed"
+          },
+          {
+            "name": "",
+            "duration_ms": 99
+          }
+        ]
+      },
+      "expected": {
+        "model": "claude-phase-only",
+        "profile": "minimal",
+        "run_id": "run-phase-only",
+        "request_id": "req-phase-only",
+        "total_elapsed_ms": 0,
+        "event_count": 0,
+        "started_at": "",
+        "completed_at": "",
+        "phase_timeline": [
+          {
+            "phase": "planning",
+            "duration_ms": 500,
+            "status": "ok"
+          },
+          {
+            "phase": "implementation",
+            "duration_ms": 1800,
+            "status": "failed"
+          }
+        ],
+        "timeline_events": [
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "planning",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 500,
+            "source": "phase_timeline"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "implementation",
+            "status": "failed",
+            "timestamp": "",
+            "elapsed_ms": 1800,
             "source": "phase_timeline"
           }
         ]

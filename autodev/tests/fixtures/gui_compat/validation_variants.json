@@ -5,8 +5,20 @@
       "final_validation": {
         "final": {
           "validations": [
-            { "validator": "ruff", "status": "fail", "ok": false, "stderr": "E501", "duration_ms": 1200 },
-            { "name": "pytest", "status": "ok", "ok": true, "stdout": "2 passed", "duration_ms": 2500 }
+            {
+              "validator": "ruff",
+              "status": "fail",
+              "ok": false,
+              "stderr": "E501",
+              "duration_ms": 1200
+            },
+            {
+              "name": "pytest",
+              "status": "ok",
+              "ok": true,
+              "stdout": "2 passed",
+              "duration_ms": 2500
+            }
           ]
         }
       },
@@ -15,7 +27,12 @@
           {
             "task_id": "task-login",
             "last_validation": [
-              { "validator": "pytest", "status": "failed", "ok": false, "stderr": "test_login failed" }
+              {
+                "validator": "pytest",
+                "status": "failed",
+                "ok": false,
+                "stderr": "test_login failed"
+              }
             ]
           }
         ]
@@ -91,9 +108,21 @@
       "final_validation": {
         "schema_version": "v1",
         "results": [
-          { "name": "ruff", "status": "passed", "ok": true },
-          { "name": "mypy", "status": "warning", "ok": false, "message": "typing issue" },
-          { "name": "deps", "status": "skipped" }
+          {
+            "name": "ruff",
+            "status": "passed",
+            "ok": true
+          },
+          {
+            "name": "mypy",
+            "status": "warning",
+            "ok": false,
+            "message": "typing issue"
+          },
+          {
+            "name": "deps",
+            "status": "skipped"
+          }
         ]
       },
       "quality_index": {
@@ -163,6 +192,163 @@
             "scope": "final",
             "task_id": "",
             "artifact_path": ".autodev/task_final_last_validation.json"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-final-artifact-fallback-to-quality-final",
+      "final_validation": {},
+      "quality_index": {
+        "final": {
+          "validations": [
+            {
+              "name": "pytest",
+              "status": "failed",
+              "ok": false,
+              "stderr": "1 failed"
+            },
+            {
+              "validator": "ruff",
+              "status": "ok",
+              "ok": true
+            }
+          ]
+        },
+        "tasks": []
+      },
+      "expected": {
+        "summary": {
+          "total": 2,
+          "passed": 1,
+          "failed": 1,
+          "soft_fail": 0,
+          "skipped": 0,
+          "blocking_failed": 1,
+          "by_status": {
+            "failed": 1,
+            "passed": 1
+          },
+          "by_validator": {
+            "pytest": 1,
+            "ruff": 1
+          }
+        },
+        "validator_cards": [
+          {
+            "name": "pytest",
+            "status": "failed",
+            "ok": false,
+            "returncode": 1,
+            "duration_ms": 0,
+            "error_classification": "",
+            "note": "",
+            "phase": "final",
+            "stdout": "",
+            "stderr": "1 failed",
+            "scope": "final",
+            "task_id": "",
+            "artifact_path": ".autodev/task_final_last_validation.json"
+          },
+          {
+            "name": "ruff",
+            "status": "passed",
+            "ok": true,
+            "returncode": 0,
+            "duration_ms": 0,
+            "error_classification": "",
+            "note": "",
+            "phase": "final",
+            "stdout": "",
+            "stderr": "",
+            "scope": "final",
+            "task_id": "",
+            "artifact_path": ".autodev/task_final_last_validation.json"
+          }
+        ]
+      }
+    },
+    {
+      "name": "partial-task-validation-and-non-dict-rows",
+      "final_validation": {
+        "validation": [
+          {
+            "name": "mypy",
+            "status": "warning",
+            "ok": false,
+            "message": "typing drift"
+          },
+          "skip-me",
+          null
+        ]
+      },
+      "quality_index": {
+        "tasks": [
+          {
+            "task_id": "task-api",
+            "last_validation": [
+              {
+                "name": "pytest",
+                "status": "failed",
+                "ok": false,
+                "stderr": "boom"
+              }
+            ]
+          },
+          {
+            "task_id": "task-empty",
+            "last_validation": "bad-shape"
+          },
+          "junk-row"
+        ]
+      },
+      "expected": {
+        "summary": {
+          "total": 2,
+          "passed": 0,
+          "failed": 1,
+          "soft_fail": 1,
+          "skipped": 0,
+          "blocking_failed": 1,
+          "by_status": {
+            "soft_fail": 1,
+            "failed": 1
+          },
+          "by_validator": {
+            "mypy": 1,
+            "pytest": 1
+          }
+        },
+        "validator_cards": [
+          {
+            "name": "mypy",
+            "status": "soft_fail",
+            "ok": false,
+            "returncode": 1,
+            "duration_ms": 0,
+            "error_classification": "",
+            "note": "typing drift",
+            "phase": "final",
+            "stdout": "",
+            "stderr": "",
+            "scope": "final",
+            "task_id": "",
+            "artifact_path": ".autodev/task_final_last_validation.json"
+          },
+          {
+            "name": "pytest",
+            "status": "failed",
+            "ok": false,
+            "returncode": 1,
+            "duration_ms": 0,
+            "error_classification": "",
+            "note": "",
+            "phase": "implementation",
+            "stdout": "",
+            "stderr": "boom",
+            "scope": "task",
+            "task_id": "task-api",
+            "artifact_path": ".autodev/task_task-api_last_validation.json"
           }
         ]
       }

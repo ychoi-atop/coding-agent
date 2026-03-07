@@ -28,6 +28,26 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _load_compat_fixture(filename: str) -> dict[str, object]:
+    root = Path(__file__).resolve().parent / "fixtures" / "gui_compat"
+    return json.loads((root / filename).read_text(encoding="utf-8"))
+
+
+def _materialize_fixture_run(run_root: Path, files: list[dict[str, object]]) -> None:
+    for row in files:
+        rel_path = str(row.get("path") or "").strip()
+        if not rel_path:
+            continue
+        kind = str(row.get("kind") or "json").strip().lower()
+        target = run_root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        if kind == "raw":
+            target.write_text(str(row.get("content") or ""), encoding="utf-8")
+        else:
+            target.write_text(json.dumps(row.get("content")), encoding="utf-8")
+
+
 def _write_auth_config(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -235,6 +255,42 @@ def test_unknown_artifact_schema_version_includes_warning_and_fallback(tmp_path)
     warning = detail["artifact_schema_warnings"][0]
     assert warning["artifact"] == "task_quality_index"
     assert warning["fallback_version"] == "legacy-v0"
+
+
+def test_server_failure_matrix_fixture_preserves_typed_non_500_behavior(tmp_path):
+    fixture = _load_compat_fixture("error_path_variants.json")
+    cases = fixture.get("gui_server")
+    assert isinstance(cases, list)
+
+    for idx, case in enumerate(cases):
+        assert isinstance(case, dict)
+        run_name = str(case.get("run_name") or case.get("name") or "run-case")
+        case_root = tmp_path / f"case-{idx}"
+        run_dir = case_root / run_name
+
+        files = case.get("files")
+        assert isinstance(files, list)
+        _materialize_fixture_run(run_dir, files)
+
+        expected = case.get("expected")
+        assert isinstance(expected, dict)
+
+        if "status" in expected:
+            detail = _run_detail(run_dir)
+            assert detail["status"] == expected["status"]
+            if "error_codes" in expected:
+                expected_codes = sorted(str(code) for code in expected["error_codes"])
+                actual_codes = sorted(str(err.get("code") or "") for err in detail["artifact_errors"])
+                assert actual_codes == expected_codes
+            if "event_count" in expected:
+                assert detail["metadata"]["event_count"] == expected["event_count"]
+
+        if "trend_counters" in expected:
+            payload = _quality_trends(case_root, window=10)
+            expected_counters = expected["trend_counters"]
+            assert isinstance(expected_counters, dict)
+            for key, value in expected_counters.items():
+                assert payload["counters"][key] == value
 
 
 def test_run_compare_returns_normalized_summary_for_two_runs(tmp_path):

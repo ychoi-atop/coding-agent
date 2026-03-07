@@ -30,6 +30,26 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _load_compat_fixture(filename: str) -> dict[str, object]:
+    root = Path(__file__).resolve().parent / "fixtures" / "gui_compat"
+    return json.loads((root / filename).read_text(encoding="utf-8"))
+
+
+def _materialize_fixture_run(run_root: Path, files: list[dict[str, object]]) -> None:
+    for row in files:
+        rel_path = str(row.get("path") or "").strip()
+        if not rel_path:
+            continue
+        kind = str(row.get("kind") or "json").strip().lower()
+        target = run_root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        if kind == "raw":
+            target.write_text(str(row.get("content") or ""), encoding="utf-8")
+        else:
+            target.write_text(json.dumps(row.get("content")), encoding="utf-8")
+
+
 @pytest.fixture(autouse=True)
 def _reset_process_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state_file = tmp_path / "gui-process-state.json"
@@ -192,6 +212,41 @@ def test_list_runs_and_detail_include_json_parse_errors(tmp_path: Path) -> None:
     assert detail["status"] == "running"
     assert detail["run_metadata"] is None
     assert detail["artifact_errors"][0]["code"] == "artifact_json_malformed"
+
+
+def test_gui_api_failure_matrix_fixture_preserves_typed_errors(tmp_path: Path) -> None:
+    fixture = _load_compat_fixture("error_path_variants.json")
+    cases = fixture.get("gui_api")
+    assert isinstance(cases, list)
+
+    out_root = tmp_path / "generated_runs"
+
+    for case in cases:
+        assert isinstance(case, dict)
+        run_name = str(case.get("run_name") or case.get("name") or "run-case")
+        run_dir = out_root / run_name
+
+        files = case.get("files")
+        assert isinstance(files, list)
+        _materialize_fixture_run(run_dir, files)
+
+        expected = case.get("expected")
+        assert isinstance(expected, dict)
+        expected_status = str(expected.get("status") or "unknown")
+        expected_error_codes = expected.get("error_codes")
+        assert isinstance(expected_error_codes, list)
+
+        rows = list_runs(str(out_root), limit=50)
+        row = [item for item in rows if item.get("run_name") == run_name][0]
+        row_error_codes = sorted(str(err.get("code") or "") for err in row.get("artifact_errors", []))
+
+        detail = get_run_detail(str(out_root), run_name)
+        detail_error_codes = sorted(str(err.get("code") or "") for err in detail.get("artifact_errors", []))
+
+        assert row["status"] == expected_status
+        assert detail["status"] == expected_status
+        assert row_error_codes == sorted(str(code) for code in expected_error_codes)
+        assert detail_error_codes == sorted(str(code) for code in expected_error_codes)
 
 
 def test_unknown_artifact_schema_version_adds_warning_with_fallback(tmp_path: Path) -> None:

@@ -419,12 +419,17 @@ def _append_audit_event(event: dict[str, Any]) -> Path:
     return persist_audit_event(event, audit_dir=os.environ.get(AUDIT_DIR_ENV))
 
 
-def _load_json(path: Path) -> tuple[dict[str, Any] | list[Any] | None, dict[str, Any] | None]:
+def _load_json(
+    path: Path,
+    *,
+    expected_type: type[Any] | tuple[type[Any], ...] | None = None,
+    artifact_name: str = "",
+) -> tuple[Any | None, dict[str, Any] | None]:
     if not path.exists():
         return None, None
 
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         return None, {
             "kind": "artifact_json_error",
@@ -443,6 +448,21 @@ def _load_json(path: Path) -> tuple[dict[str, Any] | list[Any] | None, dict[str,
             "position": exc.pos,
         }
 
+    if expected_type is not None and not isinstance(parsed, expected_type):
+        expected_label = _expected_type_label(expected_type)
+        artifact_label = artifact_name or path.name
+        return None, {
+            "kind": "artifact_json_error",
+            "code": "artifact_json_type_mismatch",
+            "path": str(path),
+            "artifact": artifact_label,
+            "expected": expected_label,
+            "actual": type(parsed).__name__,
+            "message": f"expected JSON {expected_label} for {artifact_label}",
+        }
+
+    return parsed, None
+
 
 def _run_status(quality: dict[str, Any] | None) -> str:
     return normalize_run_status(quality_index=quality, default="unknown")
@@ -454,8 +474,16 @@ def _list_runs(runs_root: Path) -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     for d in sorted((p for p in runs_root.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True):
-        quality, quality_error = _load_json(d / ".autodev" / "task_quality_index.json")
-        run_trace, run_trace_error = _load_json(d / ".autodev" / "run_trace.json")
+        quality, quality_error = _load_json(
+            d / ".autodev" / "task_quality_index.json",
+            expected_type=dict,
+            artifact_name="task_quality_index",
+        )
+        run_trace, run_trace_error = _load_json(
+            d / ".autodev" / "run_trace.json",
+            expected_type=dict,
+            artifact_name="run_trace",
+        )
         trace_dto = normalize_run_trace(run_trace if isinstance(run_trace, dict) else None)
 
         profile = {}
@@ -487,9 +515,21 @@ def _list_runs(runs_root: Path) -> list[dict[str, Any]]:
 
 
 def _run_detail(run_dir: Path) -> dict[str, Any]:
-    quality, quality_error = _load_json(run_dir / ".autodev" / "task_quality_index.json")
-    final_validation, validation_error = _load_json(run_dir / ".autodev" / "task_final_last_validation.json")
-    run_trace, run_trace_error = _load_json(run_dir / ".autodev" / "run_trace.json")
+    quality, quality_error = _load_json(
+        run_dir / ".autodev" / "task_quality_index.json",
+        expected_type=dict,
+        artifact_name="task_quality_index",
+    )
+    final_validation, validation_error = _load_json(
+        run_dir / ".autodev" / "task_final_last_validation.json",
+        expected_type=dict,
+        artifact_name="task_final_last_validation",
+    )
+    run_trace, run_trace_error = _load_json(
+        run_dir / ".autodev" / "run_trace.json",
+        expected_type=dict,
+        artifact_name="run_trace",
+    )
     updated_at = datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat()
 
     quality_dict = quality if isinstance(quality, dict) else {}
@@ -631,6 +671,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _expected_type_label(expected_type: type[Any] | tuple[type[Any], ...]) -> str:
+    if isinstance(expected_type, tuple):
+        labels = [tp.__name__ for tp in expected_type]
+        return " or ".join(labels)
+    return expected_type.__name__
+
+
 def _derive_scorecard_from_quality(quality_index: dict[str, Any]) -> dict[str, Any]:
     tasks = quality_index.get("tasks") if isinstance(quality_index.get("tasks"), list) else []
     final = quality_index.get("final") if isinstance(quality_index.get("final"), dict) else {}
@@ -705,10 +752,26 @@ def _latest_scorecard_summary(runs_root: Path) -> dict[str, Any]:
         }
 
     run_dir = run_dirs[0]
-    quality_raw, quality_error = _load_json(run_dir / ".autodev" / "task_quality_index.json")
-    run_trace_raw, run_trace_error = _load_json(run_dir / ".autodev" / "run_trace.json")
-    metadata_raw, metadata_error = _load_json(run_dir / ".autodev" / "run_metadata.json")
-    checkpoint_raw, checkpoint_error = _load_json(run_dir / ".autodev" / "checkpoint.json")
+    quality_raw, quality_error = _load_json(
+        run_dir / ".autodev" / "task_quality_index.json",
+        expected_type=dict,
+        artifact_name="task_quality_index",
+    )
+    run_trace_raw, run_trace_error = _load_json(
+        run_dir / ".autodev" / "run_trace.json",
+        expected_type=dict,
+        artifact_name="run_trace",
+    )
+    metadata_raw, metadata_error = _load_json(
+        run_dir / ".autodev" / "run_metadata.json",
+        expected_type=dict,
+        artifact_name="run_metadata",
+    )
+    checkpoint_raw, checkpoint_error = _load_json(
+        run_dir / ".autodev" / "checkpoint.json",
+        expected_type=dict,
+        artifact_name="checkpoint",
+    )
 
     quality = quality_raw if isinstance(quality_raw, dict) else {}
     run_trace = run_trace_raw if isinstance(run_trace_raw, dict) else {}
@@ -796,8 +859,16 @@ def _quality_trends(runs_root: Path, window: int, *, allow_partial: bool = False
     run_rows: list[dict[str, Any]] = []
 
     for run_dir in windowed:
-        quality_raw, quality_error = _load_json(run_dir / ".autodev" / "task_quality_index.json")
-        validation_raw, validation_error = _load_json(run_dir / ".autodev" / "task_final_last_validation.json")
+        quality_raw, quality_error = _load_json(
+            run_dir / ".autodev" / "task_quality_index.json",
+            expected_type=dict,
+            artifact_name="task_quality_index",
+        )
+        validation_raw, validation_error = _load_json(
+            run_dir / ".autodev" / "task_final_last_validation.json",
+            expected_type=dict,
+            artifact_name="task_final_last_validation",
+        )
 
         quality_missing = quality_raw is None and quality_error is None
         validation_missing = validation_raw is None and validation_error is None
