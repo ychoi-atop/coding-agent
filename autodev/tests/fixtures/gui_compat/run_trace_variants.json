@@ -29,6 +29,62 @@
         "phase_timeline": [
           { "phase": "planning", "duration_ms": 600, "status": "ok" },
           { "phase": "implementation", "duration_ms": 2100, "status": "failed" }
+        ],
+        "timeline_events": [
+          {
+            "event_type": "run.start",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-01T10:00:00Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.start",
+            "event_category": "phase",
+            "phase": "planning",
+            "status": "",
+            "timestamp": "",
+            "elapsed_ms": 200,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "planning",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 800,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.start",
+            "event_category": "phase",
+            "phase": "implementation",
+            "status": "",
+            "timestamp": "",
+            "elapsed_ms": 900,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "implementation",
+            "status": "failed",
+            "timestamp": "",
+            "elapsed_ms": 3000,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "run.completed",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-01T10:00:04Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          }
         ]
       }
     },
@@ -63,6 +119,133 @@
         "phase_timeline": [
           { "phase": "planning", "duration_ms": 800, "status": "ok" },
           { "phase": "implementation", "duration_ms": 5100, "status": "ok" }
+        ],
+        "timeline_events": [
+          {
+            "event_type": "run.start",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-01T11:00:00Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "run.completed",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-01T11:00:08Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "planning",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 800,
+            "source": "phase_timeline"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "implementation",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 5100,
+            "source": "phase_timeline"
+          }
+        ]
+      }
+    },
+    {
+      "name": "modern-trace-events-v2",
+      "input": {
+        "llm_model": "gpt-modern",
+        "run": { "profile": "balanced" },
+        "run_id": "run-modern-v2",
+        "request_id": "req-modern-v2",
+        "phase_timeline": [
+          { "phase": "planning", "duration_ms": 300, "status": "ok" },
+          { "name": "validation", "duration_ms": 1200, "status": "failed" }
+        ],
+        "trace_events": [
+          { "type": "run_start", "timestamp": "2026-03-02T09:00:00Z" },
+          { "type": "task.completed", "phase": "implementation", "elapsed_ms": 700, "status": "ok" },
+          { "type": "validation.complete", "phase": "validation", "elapsed_ms": 1500, "status": "failed" },
+          { "type": "run.end", "timestamp": "2026-03-02T09:00:03Z" }
+        ]
+      },
+      "expected": {
+        "model": "gpt-modern",
+        "profile": "balanced",
+        "run_id": "run-modern-v2",
+        "request_id": "req-modern-v2",
+        "total_elapsed_ms": 0,
+        "event_count": 4,
+        "started_at": "2026-03-02T09:00:00Z",
+        "completed_at": "2026-03-02T09:00:03Z",
+        "phase_timeline": [
+          { "phase": "planning", "duration_ms": 300, "status": "ok" },
+          { "phase": "validation", "duration_ms": 1200, "status": "failed" }
+        ],
+        "timeline_events": [
+          {
+            "event_type": "run.start",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-02T09:00:00Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "task.end",
+            "event_category": "task",
+            "phase": "implementation",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 700,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "validation.end",
+            "event_category": "validation",
+            "phase": "validation",
+            "status": "failed",
+            "timestamp": "",
+            "elapsed_ms": 1500,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "run.completed",
+            "event_category": "run",
+            "phase": "",
+            "status": "",
+            "timestamp": "2026-03-02T09:00:03Z",
+            "elapsed_ms": 0,
+            "source": "event_stream"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "planning",
+            "status": "ok",
+            "timestamp": "",
+            "elapsed_ms": 300,
+            "source": "phase_timeline"
+          },
+          {
+            "event_type": "phase.end",
+            "event_category": "phase",
+            "phase": "validation",
+            "status": "failed",
+            "timestamp": "",
+            "elapsed_ms": 1200,
+            "source": "phase_timeline"
+          }
         ]
       }
     }

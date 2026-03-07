@@ -92,7 +92,8 @@ read_artifact(out_root: str, run_key: str, artifact_rel_path: str, max_bytes: in
 - run trace 정규화 (`normalize_run_trace`)
   - 지원 변형 1: legacy event stream (`events[]` + `phase.start/phase.end`)
   - 지원 변형 2: modern timeline (`phases[]` 또는 `phase_timeline[]`)
-  - 안정 필드: `model`, `profile`, `run_id`, `request_id`, `started_at`, `completed_at`, `phase_timeline[]`
+  - 안정 필드: `model`, `profile`, `run_id`, `request_id`, `started_at`, `completed_at`, `phase_timeline[]`, `timeline_events[]`
+  - `timeline_events[]`는 legacy(`events/event_type`) + modern(`timeline_events/trace_events`)를 공통 taxonomy(`event_type`, `event_category`, `phase`, `status`, `timestamp`, `elapsed_ms`, `source`)로 정규화
 - validation 정규화 (`normalize_validation`)
   - 지원 변형 1: `validation|validations|results|rows`
   - 지원 변형 2: legacy nested (`final.validations[]`) + quality fallback (`quality_index.final.validations[]`)

@@ -10,18 +10,9 @@ def normalize_run_trace(run_trace: dict[str, Any] | None) -> dict[str, Any]:
     trace = run_trace if isinstance(run_trace, dict) else {}
 
     timeline = _normalize_phase_timeline(trace)
-
-    started_at = ""
-    completed_at = ""
-    for ev in trace.get("events", []) if isinstance(trace.get("events"), list) else []:
-        if not isinstance(ev, dict):
-            continue
-        event_type = str(ev.get("event_type") or ev.get("event") or "")
-        ts = str(ev.get("timestamp") or "")
-        if event_type == "run.start" and ts and not started_at:
-            started_at = ts
-        elif event_type == "run.completed" and ts and not completed_at:
-            completed_at = ts
+    raw_events = _extract_raw_events(trace)
+    timeline_events = _normalize_timeline_events(raw_events, timeline)
+    started_at, completed_at = _extract_run_bounds(timeline_events)
 
     return {
         "model": _coerce_non_empty(
@@ -34,10 +25,11 @@ def normalize_run_trace(run_trace: dict[str, Any] | None) -> dict[str, Any]:
         "run_id": _coerce_non_empty(trace.get("run_id")),
         "request_id": _coerce_non_empty(trace.get("request_id")),
         "total_elapsed_ms": _to_int(trace.get("total_elapsed_ms"), default=0),
-        "event_count": _to_int(trace.get("event_count"), default=len(trace.get("events", [])) if isinstance(trace.get("events"), list) else 0),
+        "event_count": _to_int(trace.get("event_count"), default=len(raw_events)),
         "started_at": started_at,
         "completed_at": completed_at,
         "phase_timeline": timeline,
+        "timeline_events": timeline_events,
     }
 
 
@@ -456,6 +448,90 @@ def _normalize_validation_status(status: Any, ok: Any) -> str:
         return "passed"
     if ok is False:
         return "failed"
+    return "unknown"
+
+
+def _extract_raw_events(trace: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("events", "timeline_events", "trace_events"):
+        rows = trace.get(key)
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _normalize_timeline_events(raw_events: list[dict[str, Any]], timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+
+    for ev in raw_events:
+        normalized_type = _normalize_event_type(ev.get("event_type") or ev.get("event") or ev.get("type") or ev.get("name"))
+        if not normalized_type:
+            continue
+
+        out.append(
+            {
+                "event_type": normalized_type,
+                "event_category": _event_category(normalized_type),
+                "phase": _coerce_non_empty(ev.get("phase")),
+                "status": _coerce_non_empty(ev.get("status"), ev.get("result"), ev.get("outcome")),
+                "timestamp": _coerce_non_empty(ev.get("timestamp"), ev.get("ts"), ev.get("time")),
+                "elapsed_ms": _to_int(ev.get("elapsed_ms"), default=0),
+                "source": "event_stream",
+            }
+        )
+
+    # Modern artifacts often provide only phase summary rows; synthesize stable phase.end events.
+    existing_phase_end = {row.get("phase") for row in out if row.get("event_type") == "phase.end" and row.get("phase")}
+    for phase in timeline:
+        phase_name = str(phase.get("phase") or "").strip()
+        if not phase_name or phase_name in existing_phase_end:
+            continue
+        out.append(
+            {
+                "event_type": "phase.end",
+                "event_category": "phase",
+                "phase": phase_name,
+                "status": str(phase.get("status") or ""),
+                "timestamp": "",
+                "elapsed_ms": _to_int(phase.get("duration_ms"), default=0),
+                "source": "phase_timeline",
+            }
+        )
+
+    return out
+
+
+def _extract_run_bounds(events: list[dict[str, Any]]) -> tuple[str, str]:
+    started_at = ""
+    completed_at = ""
+    for ev in events:
+        event_type = str(ev.get("event_type") or "")
+        ts = str(ev.get("timestamp") or "")
+        if event_type == "run.start" and ts and not started_at:
+            started_at = ts
+        elif event_type == "run.completed" and ts and not completed_at:
+            completed_at = ts
+    return started_at, completed_at
+
+
+def _normalize_event_type(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("_", ".")
+    aliases = {
+        "run.end": "run.completed",
+        "run.complete": "run.completed",
+        "phase.complete": "phase.end",
+        "phase.completed": "phase.end",
+        "task.complete": "task.end",
+        "task.completed": "task.end",
+        "validation.complete": "validation.end",
+        "validation.completed": "validation.end",
+    }
+    return aliases.get(raw, raw)
+
+
+def _event_category(event_type: str) -> str:
+    head = event_type.split(".", 1)[0].strip().lower()
+    if head in {"run", "phase", "task", "validation"}:
+        return head
     return "unknown"
 
 
