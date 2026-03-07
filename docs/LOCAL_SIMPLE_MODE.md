@@ -36,7 +36,7 @@ autodev --prd examples/PRD.md --out ./generated_runs --profile local_simple
   - one-screen run controls for start/resume/stop/retry + **Quick Run** preset button
 - Optional `--open` flag launches the default browser to the GUI URL on startup (best-effort, non-fatal if unavailable)
 - Optional `--run <PRD>` triggers an immediate Quick Run kickoff on startup (best-effort, non-fatal if kickoff fails)
-- Startup summary prints GUI URL, browser-open status, run kickoff status, and suggested next steps
+- Startup output is a single concise summary block with GUI URL (plus `--open` result), kickoff status, and one next action
 
 ## One-command local workflow
 
