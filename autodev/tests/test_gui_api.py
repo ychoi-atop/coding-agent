@@ -284,6 +284,30 @@ def test_build_command_rejects_unsafe_profile() -> None:
         )
 
 
+def test_build_command_rejects_unsafe_model() -> None:
+    with pytest.raises(GuiApiError):
+        build_start_command(
+            {
+                "prd": "examples/PRD.md",
+                "out": "./generated_runs",
+                "profile": "enterprise",
+                "model": "anthropic/claude sonnet",
+            }
+        )
+
+
+def test_build_command_allows_legacy_blank_model() -> None:
+    cmd = build_start_command(
+        {
+            "prd": "examples/PRD.md",
+            "out": "./generated_runs",
+            "profile": "enterprise",
+            "model": "   ",
+        }
+    )
+    assert "--model" not in cmd
+
+
 def test_trigger_wrappers_dry_run_shape() -> None:
     payload = {
         "prd": "examples/PRD.md",

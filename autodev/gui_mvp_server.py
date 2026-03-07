@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from http import HTTPStatus
@@ -60,6 +61,7 @@ DEFAULT_TREND_WINDOW = 20
 MAX_TREND_WINDOW = 200
 DEFAULT_ARTIFACT_READ_MAX_BYTES = 512_000
 MAX_ARTIFACT_READ_MAX_BYTES = 2_000_000
+SAFE_RUN_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:/@+-]+$")
 
 
 @dataclass(frozen=True)
@@ -360,6 +362,14 @@ def _parse_allowed_roles(raw: Any) -> set[str] | None:
         return set()
     out = {str(v).strip().lower() for v in raw if str(v).strip()}
     return out
+
+
+def _contains_unsafe_path_chars(value: str) -> bool:
+    return any(ch in value for ch in ("\x00", "\n", "\r"))
+
+
+def _is_supported_run_token(value: str) -> bool:
+    return bool(SAFE_RUN_TOKEN_RE.fullmatch(value))
 
 
 def _error_payload(code: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -1187,30 +1197,70 @@ def _validate_run_control_payload(payload: dict[str, Any], *, action: str) -> di
         return None
 
     prd = payload.get("prd")
-    if not isinstance(prd, str) or not prd.strip():
-        return _error_payload("missing_prd", "'prd' is required")
+    if not isinstance(prd, str):
+        return _error_payload("missing_prd", "'prd' is required", field="prd")
+    prd_value = prd.strip()
+    if not prd_value:
+        return _error_payload("missing_prd", "'prd' is required", field="prd")
+    if _contains_unsafe_path_chars(prd_value):
+        return _error_payload(
+            "invalid_prd",
+            "'prd' contains unsafe characters (newline/NUL are not allowed)",
+            field="prd",
+        )
 
-    prd_path = Path(prd.strip()).expanduser()
+    prd_path = Path(prd_value).expanduser()
     if not prd_path.is_file():
-        return _error_payload("invalid_prd", "'prd' must point to an existing file")
+        return _error_payload("invalid_prd", "'prd' must point to an existing file", field="prd")
 
     out = payload.get("out")
-    if not isinstance(out, str) or not out.strip():
-        return _error_payload("missing_out", "'out' is required")
-    out_path = Path(out.strip()).expanduser()
+    if not isinstance(out, str):
+        return _error_payload("missing_out", "'out' is required", field="out")
+    out_value = out.strip()
+    if not out_value:
+        return _error_payload("missing_out", "'out' is required", field="out")
+    if _contains_unsafe_path_chars(out_value):
+        return _error_payload(
+            "invalid_out",
+            "'out' contains unsafe characters (newline/NUL are not allowed)",
+            field="out",
+        )
+    out_path = Path(out_value).expanduser()
 
     if out_path.exists() and not out_path.is_dir():
-        return _error_payload("invalid_out", "'out' must be a directory path")
+        return _error_payload("invalid_out", "'out' must be a directory path", field="out")
 
     if action == "resume" and not out_path.exists():
         return _error_payload(
             "resume_out_missing",
             "'out' must point to an existing run directory for resume",
+            field="out",
         )
 
     profile = payload.get("profile")
-    if not isinstance(profile, str) or not profile.strip():
-        return _error_payload("missing_profile", "'profile' is required")
+    if not isinstance(profile, str):
+        return _error_payload("missing_profile", "'profile' is required", field="profile")
+    profile_value = profile.strip()
+    if not profile_value:
+        return _error_payload("missing_profile", "'profile' is required", field="profile")
+    if not _is_supported_run_token(profile_value):
+        return _error_payload(
+            "invalid_profile",
+            "'profile' contains unsupported characters. Allowed: letters, digits, dot, underscore, slash, colon, at, plus, hyphen.",
+            field="profile",
+        )
+
+    model = payload.get("model")
+    if model is not None:
+        if not isinstance(model, str):
+            return _error_payload("invalid_model", "'model' must be a string", field="model")
+        model_value = model.strip()
+        if model_value and not _is_supported_run_token(model_value):
+            return _error_payload(
+                "invalid_model",
+                "'model' contains unsupported characters. Allowed: letters, digits, dot, underscore, slash, colon, at, plus, hyphen.",
+                field="model",
+            )
 
     config_val = payload.get("config")
     if config_val is not None:

@@ -616,6 +616,12 @@ function normalizeLocalPath(raw) {
   return val;
 }
 
+function normalizeRunToken(raw) {
+  const value = normalizeLocalPath(raw);
+  if (!value) return '';
+  return /^[A-Za-z0-9._:/@+-]+$/.test(value) ? value : '';
+}
+
 function firstNonEmpty(values) {
   for (const raw of values) {
     const value = normalizeLocalPath(raw);
@@ -639,7 +645,7 @@ function updateQuickRunHint() {
   if (!node) return;
 
   const defaults = state.guiContext?.defaults || {};
-  const profile = normalizeLocalPath(defaults.profile) || 'local_simple';
+  const profile = normalizeRunToken(defaults.profile) || 'local_simple';
   const out = normalizeLocalPath(el('controlOut')?.value) || normalizeLocalPath(defaults.out) || './generated_runs';
   const prd = resolveQuickRunPrdPath();
 
@@ -2514,7 +2520,7 @@ async function loadGuiContext() {
 
   const defaults = state.guiContext?.defaults || {};
   if (profileInput && !profileInput.value) {
-    profileInput.value = defaults.profile || 'enterprise';
+    profileInput.value = normalizeRunToken(defaults.profile) || 'enterprise';
   }
   if (outInput && !outInput.value) {
     outInput.value = defaults.out || './generated_runs';
@@ -2581,7 +2587,7 @@ async function runQuickPreset() {
   const configInput = el('controlConfig');
   const prdInput = el('controlPrd');
 
-  const quickProfile = normalizeLocalPath(defaults.profile) || 'local_simple';
+  const quickProfile = normalizeRunToken(defaults.profile) || 'local_simple';
   const quickOut = normalizeLocalPath(outInput?.value) || normalizeLocalPath(defaults.out) || './generated_runs';
   const quickConfig = normalizeLocalPath(configInput?.value) || normalizeLocalPath(defaults.config);
 

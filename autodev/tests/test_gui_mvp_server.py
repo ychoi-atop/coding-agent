@@ -730,6 +730,75 @@ def test_start_endpoint_validation_error_contains_fix_hints(gui_server, tmp_path
     assert any("PRD" in hint for hint in body["error"]["fix_hints"])
 
 
+@pytest.mark.parametrize(
+    ("payload_patch", "expected_code", "expected_field"),
+    [
+        ({"prd": ""}, "missing_prd", "prd"),
+        ({"prd": "bad\npath"}, "invalid_prd", "prd"),
+        ({"out": ""}, "missing_out", "out"),
+        ({"out": "bad\nout"}, "invalid_out", "out"),
+        ({"profile": "enterprise rm -rf"}, "invalid_profile", "profile"),
+        ({"model": "openai/gpt 5"}, "invalid_model", "model"),
+    ],
+)
+def test_start_endpoint_field_level_validation_matrix(
+    gui_server,
+    tmp_path,
+    monkeypatch,
+    payload_patch,
+    expected_code,
+    expected_field,
+):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    payload = {
+        "prd": str(prd),
+        "out": str(tmp_path / "out"),
+        "profile": "enterprise",
+        "execute": False,
+    }
+    payload.update(payload_patch)
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/start",
+        payload,
+        headers={"X-Autodev-Role": "developer"},
+    )
+
+    assert status == 422
+    assert body["error"]["code"] == expected_code
+    assert body["error"]["field"] == expected_field
+
+
+def test_start_endpoint_accepts_legacy_valid_payload_without_model(gui_server, tmp_path, monkeypatch):
+    base_url, _ = gui_server
+    audit_dir = tmp_path / "audit"
+    monkeypatch.setenv("AUTODEV_GUI_AUDIT_DIR", str(audit_dir))
+
+    prd = tmp_path / "PRD.md"
+    prd.write_text("# PRD", encoding="utf-8")
+
+    status, body = _post_json(
+        f"{base_url}/api/runs/start",
+        {
+            "prd": str(prd),
+            "out": str(tmp_path / "out"),
+            "profile": "enterprise",
+            "execute": False,
+        },
+        headers={"X-Autodev-Role": "developer"},
+    )
+
+    assert status == 200
+    assert body["spawned"] is False
+    assert body["command"] == ["autodev", "--prd", str(prd), "--out", str(tmp_path / "out"), "--profile", "enterprise"]
+
+
 def test_start_endpoint_operator_dry_run_persists_audit(gui_server, tmp_path, monkeypatch):
     base_url, _ = gui_server
     audit_dir = tmp_path / "audit"
