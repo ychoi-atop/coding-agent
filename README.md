@@ -433,6 +433,7 @@ Autonomous artifacts are written under the run directory:
 - `AUTONOMOUS_REPORT.md`
 
 See `docs/AUTONOMOUS_MODE.md` for detailed policy and operational behavior.
+For commercial-grade autonomous delivery strategy and rollout governance, see `docs/AUTONOMOUS_COMMERCIAL_PLAN.md`.
 
 ### GUI launcher (MVP)
 Hardened/default mode:
@@ -498,6 +499,7 @@ Next-week planning bundle (active):
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/DEMO_PLAYBOOK.md`
+- `docs/AUTONOMOUS_COMMERCIAL_PLAN.md` (commercial autonomous rollout strategy)
 
 Legacy showoff planning docs (reference/archive):
 - `docs/ROADMAP_SHOWOFF.md`

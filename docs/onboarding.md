@@ -311,6 +311,7 @@ Planning and execution docs (active):
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/DEMO_PLAYBOOK.md`
+- `docs/AUTONOMOUS_COMMERCIAL_PLAN.md` (commercial autonomous delivery strategy)
 
 Legacy showoff references:
 - `docs/ROADMAP_SHOWOFF.md`
