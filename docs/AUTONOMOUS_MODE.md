@@ -11,6 +11,8 @@
 
 This is a **v1 practical slice**: stable CLI loop + policy boundaries + resumable state.
 
+For commercial rollout governance (quality/release gates, recovery playbooks, KPI/roadmap), see `docs/AUTONOMOUS_COMMERCIAL_PLAN.md`.
+
 ---
 
 ## Command
