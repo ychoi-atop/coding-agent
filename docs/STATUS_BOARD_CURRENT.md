@@ -46,9 +46,21 @@ Status timestamp: 2026-03-07 (Asia/Seoul)
 - Hotfix-only change control
 - Exit-gate verification before returning to normal feature work
 
+## Day-1 stabilization run (2026-03-07 KST)
+
+- Status: ✅ PASS (all requested Day-1 checks green)
+- Docs check: `make check-docs` passed (35 files scanned)
+- Local-simple smoke: `make smoke-local-simple-e2e` passed
+  - Artifact: `artifacts/local-simple-e2e-smoke/20260307-120252`
+- Focused GUI/API stability tests: 98 passed
+  - Command: `python3 -m pytest -q autodev/tests/test_gui_api.py autodev/tests/test_gui_mvp_server.py autodev/tests/test_main_gui_cli.py generated_repo/tests/test_api.py generated_repo/tests/test_health.py`
+- Detailed report: `docs/STABILIZATION_DAY1_REPORT.md`
+- Hotfix recommendation: N/A (no Day-1 failure)
+
 ## Related docs
 
 - `docs/STABILIZATION_48H_CHECKLIST.md`
 - `docs/STABILIZATION_MODE.md`
+- `docs/STABILIZATION_DAY1_REPORT.md`
 - `docs/RC_NEXT_CUT_CHECKLIST.md`
 - `docs/CHANGELOG_DRAFT_NEXT_CUT.md`
