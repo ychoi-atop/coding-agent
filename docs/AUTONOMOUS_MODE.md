@@ -97,7 +97,7 @@ Sends a failed-run incident packet through pluggable targets (`stdout`, `log`, `
 `.autodev/autonomous_incident_send_audit.jsonl` (append-only JSONL with timestamped `entry_id`). Defaults are safe:
 `--dry-run true` and no automatic send unless enabled via autonomous policy. AV3-009 adds optional dedupe/rate-limit
 suppression (with typed reason codes) and an explicit operator override (`--force-send true`) when immediate delivery is
-required. AV3-010 replay uses audit entries and is dry-run by default; `--live` performs explicit live replay.
+required. AV3-010 replay uses audit entries and is dry-run by default; `--live` performs explicit live replay. AV3-011 replays fanout sends by attempt group (all targets from the selected send attempt).
 
 GUI/API parity: `GET /api/autonomous/quality-gate/latest` returns the latest run's autonomous summary snapshot
 (including gate/guard/preflight/operator guidance) and degrades gracefully when some artifacts are missing.
@@ -211,6 +211,7 @@ Notes:
 - Optional incident-send hooks can be enabled via `run.autonomous.incident_send.enabled`; default remains disabled with `dry_run=true` for side-effect-safe behavior.
 - AV3-009 adds optional incident-send dedupe/rate-limit controls (`dedupe_window_sec`, `rate_limit_window_sec`, `rate_limit_global_max`, `rate_limit_per_target_max`) with safe default values that preserve prior behavior when unset/zero.
 - Incident-send suppression/throttle decisions are persisted with typed reason codes (`incident_send.dedupe_window_active`, `incident_send.rate_limit_global`, `incident_send.rate_limit_target`) and exposed in report/summary artifacts; operators can explicitly override suppression with `force_send` / `--force-send true`.
+- AV3-011 adds deterministic fanout aggregate statuses: `success` (all sent), `partial_success` (mixed sent/failed/suppressed), `failed` (none sent), and `suppressed` (all suppressed). Per-target outcomes + aggregate status are persisted in incident-send artifacts/report/summary.
 - `webhook` target supports HMAC signing (`sha256=<digest>`) and bounded retry/backoff for transient failures (network/429/5xx); permanent 4xx failures are not retried.
 - Send attempts persist in `.autodev/autonomous_incident_send.json` and are exposed through report/summary surfaces.
 - Unknown or newly introduced reason codes still produce graceful fallback guidance/routing (generic or family-level actions + routing defaults) for backward compatibility.

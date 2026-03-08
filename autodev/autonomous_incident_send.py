@@ -17,7 +17,7 @@ from .autonomous_incident_export import SUPPORTED_EXPORT_FORMATS, load_incident_
 
 logger = logging.getLogger("autodev")
 
-AUTONOMOUS_INCIDENT_SEND_VERSION = "av3-009-v1"
+AUTONOMOUS_INCIDENT_SEND_VERSION = "av3-011-v1"
 AUTONOMOUS_INCIDENT_SEND_JSON = ".autodev/autonomous_incident_send.json"
 _DEFAULT_TARGET_FORMAT = "markdown"
 _DEFAULT_WEBHOOK_TIMEOUT_SEC = 10.0
@@ -356,6 +356,17 @@ def send_incident_packet(
     sent_count = len([item for item in attempts if item.get("status") == "sent"])
     failure_count = len([item for item in attempts if item.get("status") == "failed"])
 
+    sent_like_count = sent_count + dry_run_count
+    attempt_count = len(attempts)
+    if attempt_count > 0 and suppressed_count == attempt_count:
+        aggregate_status = "suppressed"
+    elif sent_like_count == 0:
+        aggregate_status = "failed"
+    elif failure_count == 0 and suppressed_count == 0 and sent_like_count == attempt_count:
+        aggregate_status = "success"
+    else:
+        aggregate_status = "partial_success"
+
     ok = failure_count == 0
     suppression_reason_codes = sorted(
         {
@@ -380,7 +391,8 @@ def send_incident_packet(
         "dry_run": dry_run,
         "targets": [f"{item.target}:{item.export_format}" for item in specs],
         "ok": ok,
-        "attempt_count": len(attempts),
+        "aggregate_status": aggregate_status,
+        "attempt_count": attempt_count,
         "success_count": len([item for item in attempts if item.get("ok") is True]),
         "failure_count": failure_count,
         "sent_count": sent_count,
@@ -396,6 +408,17 @@ def send_incident_packet(
             "reason_codes": sorted(set(force_send_override_reasons)),
             "code": _REASON_FORCE_SEND_OVERRIDE if forced_override_applied else None,
         },
+        "per_target_outcomes": [
+            {
+                "target": item.get("target"),
+                "format": item.get("format"),
+                "status": item.get("status"),
+                "ok": bool(item.get("ok") is True),
+                "reason_code": item.get("reason_code"),
+            }
+            for item in attempts
+            if isinstance(item, dict)
+        ],
         "attempts": attempts,
     }
 

@@ -691,3 +691,234 @@ def test_incident_replay_missing_or_invalid_entry_handling(tmp_path: Path) -> No
             "99",
         ])
     assert "incident replay index out of range" in str(exc_invalid.value)
+
+
+def test_incident_send_fanout_all_success_aggregate_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = tmp_path / "run-fanout-success"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+
+    def _ok_target(_packet: dict, _rendered: str, _dry_run: bool, _context: dict) -> dict:
+        return {"ok": True}
+
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "fanout_ok_a", _ok_target)
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "fanout_ok_b", _ok_target)
+
+    result = incident_send.send_incident_packet(
+        run_dir=run_dir,
+        targets=["fanout_ok_a", "fanout_ok_b"],
+        dry_run=False,
+        trigger="autonomous.cli.incident_send",
+    )
+
+    assert result["aggregate_status"] == "success"
+    assert result["ok"] is True
+    assert result["failure_count"] == 0
+    assert result["sent_count"] == 2
+    assert len(result["per_target_outcomes"]) == 2
+
+
+def test_incident_send_fanout_partial_success_aggregate_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = tmp_path / "run-fanout-partial"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+
+    def _ok_target(_packet: dict, _rendered: str, _dry_run: bool, _context: dict) -> dict:
+        return {"ok": True}
+
+    def _fail_target(_packet: dict, _rendered: str, _dry_run: bool, _context: dict) -> dict:
+        raise RuntimeError("simulated fanout failure")
+
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "fanout_partial_ok", _ok_target)
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "fanout_partial_fail", _fail_target)
+
+    result = incident_send.send_incident_packet(
+        run_dir=run_dir,
+        targets=["fanout_partial_ok", "fanout_partial_fail"],
+        dry_run=False,
+        trigger="autonomous.cli.incident_send",
+    )
+
+    assert result["aggregate_status"] == "partial_success"
+    assert result["ok"] is False
+    assert result["sent_count"] == 1
+    assert result["failure_count"] == 1
+
+
+def test_incident_send_fanout_all_failed_and_all_suppressed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir_failed = tmp_path / "run-fanout-all-failed"
+    _write_json(run_dir_failed / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+
+    def _fail_target(_packet: dict, _rendered: str, _dry_run: bool, _context: dict) -> dict:
+        raise RuntimeError("simulated failure")
+
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "fanout_fail_a", _fail_target)
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "fanout_fail_b", _fail_target)
+
+    failed_result = incident_send.send_incident_packet(
+        run_dir=run_dir_failed,
+        targets=["fanout_fail_a", "fanout_fail_b"],
+        dry_run=False,
+        trigger="autonomous.cli.incident_send",
+    )
+
+    assert failed_result["aggregate_status"] == "failed"
+    assert failed_result["ok"] is False
+    assert failed_result["sent_count"] == 0
+    assert failed_result["failure_count"] == 2
+
+    run_dir_suppressed = tmp_path / "run-fanout-all-suppressed"
+    packet = _sample_packet()
+    _write_json(run_dir_suppressed / ".autodev" / "autonomous_incident_packet.json", packet)
+    fingerprint = incident_send._incident_fingerprint(packet)
+
+    suppressed_result = incident_send.send_incident_packet(
+        run_dir=run_dir_suppressed,
+        targets=["stdout", "log"],
+        dry_run=False,
+        trigger="autonomous.cli.incident_send",
+        send_policy={"dedupe_window_sec": 600},
+        history_attempts=[
+            {
+                "decided_at": "2026-03-08T11:10:00Z",
+                "dry_run": False,
+                "incident_fingerprint": fingerprint,
+                "attempts": [
+                    {"target": "stdout", "status": "sent", "ok": True},
+                    {"target": "log", "status": "sent", "ok": True},
+                ],
+            }
+        ],
+        now_ts=1741432320.0,
+    )
+
+    assert suppressed_result["aggregate_status"] == "suppressed"
+    assert suppressed_result["suppressed"] is True
+    assert suppressed_result["suppressed_count"] == 2
+    assert suppressed_result["sent_count"] == 0
+
+
+def test_report_and_summary_expose_fanout_aggregate_and_per_target(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-summary-fanout"
+    artifacts = run_dir / ".autodev"
+
+    incident_send_payload = {
+        "schema_version": "av3-011-v1",
+        "trigger": "autonomous.run_failed",
+        "run_dir": str(run_dir),
+        "dry_run": False,
+        "ok": False,
+        "aggregate_status": "partial_success",
+        "targets": ["stdout:markdown", "log:markdown"],
+        "success_count": 1,
+        "failure_count": 1,
+        "suppressed": False,
+        "suppressed_count": 0,
+        "suppression_reason_codes": [],
+        "per_target_outcomes": [
+            {"target": "stdout", "format": "markdown", "status": "sent", "ok": True, "reason_code": None},
+            {"target": "log", "format": "markdown", "status": "failed", "ok": False, "reason_code": None},
+        ],
+        "force_send_override": {"applied": False, "code": None, "reason_codes": []},
+    }
+
+    state = {
+        "run_id": "run-summary-fanout",
+        "request_id": "req-summary-fanout",
+        "run_out": str(run_dir),
+        "profile": "minimal",
+        "attempts": [],
+    }
+    report, report_md = autonomous_mode._render_report(
+        state,
+        ok=False,
+        last_validation=[],
+        incident_send=incident_send_payload,
+    )
+
+    _write_json(artifacts / "autonomous_report.json", report)
+    _write_json(
+        artifacts / "autonomous_incident_send.json",
+        {
+            "schema_version": "av3-011-v1",
+            "latest": incident_send_payload,
+            "attempts": [incident_send_payload],
+        },
+    )
+
+    summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
+    assert "aggregate_status=partial_success" in report_md
+    assert "Per-target outcomes" in report_md
+    assert summary["incident_send_aggregate_status"] == "partial_success"
+    assert len(summary["incident_send_per_target_outcomes"]) == 2
+
+
+def test_incident_replay_uses_fanout_group_targets_and_keeps_live_dryrun_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    run_dir = tmp_path / "run-replay-fanout"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+    _write_json(
+        run_dir / ".autodev" / "autonomous_report.json",
+        {
+            "policy": {
+                "incident_send_policy": {
+                    "dedupe_window_sec": 0,
+                    "rate_limit_window_sec": 0,
+                    "rate_limit_global_max": None,
+                    "rate_limit_per_target_max": None,
+                    "force_send": False,
+                }
+            },
+            "incident_send_attempted": True,
+        },
+    )
+
+    calls: list[str] = []
+
+    def _fanout_target(_packet: dict, _rendered: str, _dry_run: bool, context: dict) -> dict:
+        calls.append(str(context.get("target")))
+        return {"ok": True}
+
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "replay_fanout_a", _fanout_target)
+    monkeypatch.setitem(incident_send._INCIDENT_SEND_TARGETS, "replay_fanout_b", _fanout_target)
+
+    autonomous_mode.cli([
+        "incident-send",
+        "--run-dir",
+        str(run_dir),
+        "--target",
+        "replay_fanout_a",
+        "--target",
+        "replay_fanout_b",
+        "--dry-run",
+        "false",
+    ])
+
+    capsys.readouterr()
+    autonomous_mode.cli([
+        "incident-replay",
+        "--run-dir",
+        str(run_dir),
+        "--entry",
+        "1",
+    ])
+    replay_dry = json.loads(capsys.readouterr().out)
+
+    assert replay_dry["dry_run"] is True
+    assert replay_dry["attempt_count"] == 2
+    assert replay_dry["replay"]["targets"] == ["replay_fanout_a:markdown", "replay_fanout_b:markdown"]
+
+    autonomous_mode.cli([
+        "incident-replay",
+        "--run-dir",
+        str(run_dir),
+        "--entry",
+        "1",
+        "--live",
+    ])
+    replay_live = json.loads(capsys.readouterr().out)
+
+    assert replay_live["dry_run"] is False
+    assert replay_live["attempt_count"] == 2
+    assert replay_live["replay"]["live"] is True
