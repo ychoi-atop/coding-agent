@@ -827,7 +827,42 @@ def test_build_autonomous_incident_packet_includes_expected_sections() -> None:
     assert packet["failure_codes"]["root_cause_codes"][0] == "tests.min_pass_rate_not_met"
     assert packet["incident_routing"]["primary"]["owner_team"] == "Feature Engineering"
     assert packet["operator_guidance"]["top_actions"]
+    retention = packet["retention_decisions"]
+    assert retention["decision_version"] == "av4-009-v1"
+    assert any(item["category"] == "retention" for item in retention["decisions"])
+    assert any(item["category"] == "compaction" for item in retention["decisions"])
+    assert any("AUTONOMOUS_V4_WAVE_PLAN.md" in link for link in retention["rationale_links"])
     assert packet["reproduction"]["artifact_paths"]["report_md"] == "AUTONOMOUS_REPORT.md"
+
+
+def test_build_autonomous_incident_packet_prefers_explicit_retention_decisions_from_report() -> None:
+    state = {"run_id": "run-retention", "attempts": []}
+    report = {
+        "run_id": "run-retention",
+        "retention_decision": {
+            "decision": "archive_after_30d",
+            "rationale": "Policy default for non-critical artifacts.",
+        },
+        "compaction_decision": {
+            "decision": "compact_trace_after_7d",
+            "rationale": "Reduce storage cost while preserving summary artifacts.",
+        },
+        "retention_rationale_links": [
+            "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#gate-failures",
+            "docs/AUTONOMOUS_V4_WAVE_PLAN.md#risks",
+        ],
+    }
+
+    packet = autonomous_mode._build_autonomous_incident_packet(state=state, report=report, ok=False)
+
+    assert packet is not None
+    retention = packet["retention_decisions"]
+    assert any(item["decision"] == "archive_after_30d" for item in retention["decisions"])
+    assert any(item["decision"] == "compact_trace_after_7d" for item in retention["decisions"])
+    assert retention["rationale_links"] == [
+        "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#gate-failures",
+        "docs/AUTONOMOUS_V4_WAVE_PLAN.md#risks",
+    ]
 
 
 def test_resolve_retry_strategy_rotates_after_no_improvement_on_same_strategy() -> None:

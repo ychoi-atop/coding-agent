@@ -66,7 +66,9 @@ _AUTONOMOUS_BUDGET_GUARD_DIAGNOSTIC_VERSION = "av2-010"
 _AUTONOMOUS_OPERATOR_GUIDANCE_VERSION = "av2-011"
 _AUTONOMOUS_INCIDENT_ROUTING_VERSION = "av3-004-v1"
 _AUTONOMOUS_INCIDENT_PACKET_VERSION = "av3-005-v1"
+_AUTONOMOUS_INCIDENT_RETENTION_VERSION = "av4-009-v1"
 _AUTONOMOUS_FAILURE_PLAYBOOK_DOC = "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md"
+_AUTONOMOUS_RETENTION_POLICY_DOC = "docs/AUTONOMOUS_V4_WAVE_PLAN.md#risks"
 
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_GATE_FAILURES = 3
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_NO_IMPROVEMENT = 2
@@ -2680,6 +2682,77 @@ def _build_incident_routing(reason_codes: list[str]) -> dict[str, Any]:
     }
 
 
+def _build_retention_decisions_payload(
+    *,
+    state: dict[str, Any],
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    decisions: list[dict[str, str]] = []
+
+    retention_decision = report.get("retention_decision") or state.get("retention_decision")
+    if isinstance(retention_decision, dict):
+        decisions.append(
+            {
+                "category": "retention",
+                "decision": str(retention_decision.get("decision") or retention_decision.get("status") or "unspecified"),
+                "rationale": str(retention_decision.get("rationale") or "Retention decision captured from run metadata."),
+            }
+        )
+
+    compaction_decision = report.get("compaction_decision") or state.get("compaction_decision")
+    if isinstance(compaction_decision, dict):
+        decisions.append(
+            {
+                "category": "compaction",
+                "decision": str(compaction_decision.get("decision") or compaction_decision.get("status") or "unspecified"),
+                "rationale": str(compaction_decision.get("rationale") or "Compaction decision captured from run metadata."),
+            }
+        )
+
+    if not decisions:
+        decisions = [
+            {
+                "category": "retention",
+                "decision": "retain_full_incident_artifacts",
+                "rationale": "Failed runs keep full incident artifacts during active triage to preserve forensic context.",
+            },
+            {
+                "category": "compaction",
+                "decision": "defer_compaction_until_recovery",
+                "rationale": "Compaction is deferred for failed runs until recovery actions complete.",
+            },
+        ]
+
+    rationale_links: list[str] = []
+    raw_links = report.get("retention_rationale_links") or state.get("retention_rationale_links")
+    if isinstance(raw_links, list):
+        for item in raw_links:
+            link = str(item or "").strip()
+            if link:
+                rationale_links.append(link)
+
+    if not rationale_links:
+        rationale_links = [
+            _AUTONOMOUS_RETENTION_POLICY_DOC,
+            _AUTONOMOUS_FAILURE_PLAYBOOK_DOC,
+            "docs/AUTONOMOUS_V4_BACKLOG.md#prioritization-notes",
+        ]
+
+    deduped_links: list[str] = []
+    seen_links: set[str] = set()
+    for link in rationale_links:
+        if link in seen_links:
+            continue
+        seen_links.add(link)
+        deduped_links.append(link)
+
+    return {
+        "decision_version": _AUTONOMOUS_INCIDENT_RETENTION_VERSION,
+        "decisions": decisions,
+        "rationale_links": deduped_links,
+    }
+
+
 def _build_autonomous_incident_packet(
     *,
     state: dict[str, Any],
@@ -2795,6 +2868,7 @@ def _build_autonomous_incident_packet(
             "playbook": _AUTONOMOUS_FAILURE_PLAYBOOK_DOC,
             "top_actions": top_actions,
         },
+        "retention_decisions": _build_retention_decisions_payload(state=state, report=report),
         "generated_at": _utc_now(),
     }
 

@@ -78,7 +78,7 @@ autodev autonomous incident-export --run-dir ./generated_runs/<run_id> --format 
 autodev autonomous incident-export --run-dir ./generated_runs/<run_id> --format email
 ```
 
-Exports `.autodev/autonomous_incident_packet.json` into operator-ready channel formats. If the incident
+Exports `.autodev/autonomous_incident_packet.json` into operator-ready channel formats (including retention/compaction decisions and rationale links). If the incident
 packet is missing (for example, successful/non-incident runs), CLI exits with a clear diagnostic and a
 pointer to `autodev autonomous summary`.
 
@@ -232,7 +232,7 @@ Notes:
 - Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
 - Report/summary artifacts expose `operator_guidance` resolved from typed gate/guard/preflight/budget reason codes with links into `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`.
 - Report/summary artifacts also expose `incident_routing` derived from typed reason codes (owner/team, severity, target SLA, escalation class), including summary top fields (`incident_owner_team`, `incident_severity`, `incident_target_sla`, `incident_escalation_class`).
-- Failed outcomes now emit `.autodev/autonomous_incident_packet.json` with structured run summary, typed/root-cause codes, routing, reproduction pointers, and top operator actions. Successful outcomes keep no-op behavior (incident packet is not generated).
+- Failed outcomes now emit `.autodev/autonomous_incident_packet.json` with structured run summary, typed/root-cause codes, routing, reproduction pointers, top operator actions, and retention/compaction decisions with rationale links. Successful outcomes keep no-op behavior (incident packet is not generated).
 - Failed outcomes also emit `.autodev/autonomous_ticket_draft.md` and `.autodev/autonomous_ticket_draft.json` for operator handoff; missing-source cases degrade gracefully with diagnostics and fallback triage guidance.
 - Optional incident-send hooks can be enabled via `run.autonomous.incident_send.enabled`; default remains disabled with `dry_run=true` for side-effect-safe behavior.
 - AV3-009 adds optional incident-send dedupe/rate-limit controls (`dedupe_window_sec`, `rate_limit_window_sec`, `rate_limit_global_max`, `rate_limit_per_target_max`) with safe default values that preserve prior behavior when unset/zero.

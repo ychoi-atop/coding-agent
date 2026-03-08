@@ -62,6 +62,13 @@ def _incident_view(packet: dict[str, Any]) -> dict[str, Any]:
     artifact_paths = reproduction.get("artifact_paths") if isinstance(reproduction.get("artifact_paths"), dict) else {}
     operator_guidance = packet.get("operator_guidance") if isinstance(packet.get("operator_guidance"), dict) else {}
     top_actions = _safe_list(operator_guidance.get("top_actions"))
+    retention_decisions = packet.get("retention_decisions") if isinstance(packet.get("retention_decisions"), dict) else {}
+    retention_entries = _safe_list(retention_decisions.get("decisions"))
+    retention_links = [
+        str(item).strip()
+        for item in _safe_list(retention_decisions.get("rationale_links"))
+        if str(item).strip()
+    ]
 
     typed_codes = [str(item).strip() for item in _safe_list(failure_codes.get("typed_codes")) if str(item).strip()]
     root_cause_codes = [str(item).strip() for item in _safe_list(failure_codes.get("root_cause_codes")) if str(item).strip()]
@@ -86,6 +93,9 @@ def _incident_view(packet: dict[str, Any]) -> dict[str, Any]:
         "artifact_paths": artifact_paths,
         "playbook": _safe_str(operator_guidance.get("playbook")),
         "top_actions": top_actions,
+        "retention_decision_version": _safe_str(retention_decisions.get("decision_version")),
+        "retention_decisions": retention_entries,
+        "retention_rationale_links": retention_links,
         "generated_at": _safe_str(packet.get("generated_at")),
     }
 
@@ -119,6 +129,29 @@ def _render_artifacts_bullets(artifact_paths: dict[str, Any], *, bullet: str) ->
     return lines
 
 
+def _render_retention_decisions_bullets(entries: list[Any], *, bullet: str) -> list[str]:
+    if not entries:
+        return [f"{bullet} -"]
+
+    lines: list[str] = []
+    for idx, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            continue
+        category = _safe_str(entry.get("category"))
+        decision = _safe_str(entry.get("decision"))
+        rationale = _safe_str(entry.get("rationale"))
+        lines.append(f"{bullet} {idx}. [{category}] {decision}")
+        lines.append(f"{bullet}    rationale: {rationale}")
+
+    return lines or [f"{bullet} -"]
+
+
+def _render_link_bullets(links: list[str], *, bullet: str) -> list[str]:
+    if not links:
+        return [f"{bullet} -"]
+    return [f"{bullet} {link}" for link in links]
+
+
 def _render_slack(packet: dict[str, Any]) -> str:
     view = _incident_view(packet)
     typed_codes = ", ".join(view["typed_codes"]) if view["typed_codes"] else "-"
@@ -135,6 +168,10 @@ def _render_slack(packet: dict[str, Any]) -> str:
         f"*Root cause codes:* {root_codes}",
         "*Top operator actions:*",
         *_render_top_actions_bullets(view["top_actions"], bullet="•"),
+        f"*Retention decisions:* version={view['retention_decision_version']}",
+        *_render_retention_decisions_bullets(view["retention_decisions"], bullet="•"),
+        "*Retention rationale links:*",
+        *_render_link_bullets(view["retention_rationale_links"], bullet="•"),
         "*Reproduction:*",
         f"• run_dir: {view['reproduction_run_dir']}",
         "*Artifacts:*",
@@ -174,6 +211,12 @@ def _render_markdown(packet: dict[str, Any]) -> str:
         "",
         "## Top Operator Actions",
         *_render_top_actions_bullets(view["top_actions"], bullet="-"),
+        "",
+        "## Retention / Compaction Decisions",
+        f"- Decision Schema: `{view['retention_decision_version']}`",
+        *_render_retention_decisions_bullets(view["retention_decisions"], bullet="-"),
+        "- Rationale Links:",
+        *_render_link_bullets(view["retention_rationale_links"], bullet="  -"),
         "",
         "## Reproduction",
         f"- Run Directory: `{view['reproduction_run_dir']}`",
@@ -221,6 +264,12 @@ def _render_email(packet: dict[str, Any]) -> str:
         "",
         "Top Actions",
         *_render_top_actions_bullets(view["top_actions"], bullet="-"),
+        "",
+        "Retention / Compaction Decisions",
+        f"- Decision Schema: {view['retention_decision_version']}",
+        *_render_retention_decisions_bullets(view["retention_decisions"], bullet="-"),
+        "- Rationale Links:",
+        *_render_link_bullets(view["retention_rationale_links"], bullet="  -"),
         "",
         "Reproduction",
         f"- Run Directory: {view['reproduction_run_dir']}",
