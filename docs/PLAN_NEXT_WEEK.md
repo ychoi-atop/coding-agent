@@ -1,26 +1,22 @@
-# PLAN — Next Wave (AV3 Kickoff)
+# PLAN — Next Wave (AV4 Kickoff)
 
 ## Scope
 
-This plan reflects `main` after AV2 closure and marks AV3 kickoff as started.
-Primary objective is to move from AV3 candidate listing to an execution-ready wave package with milestone slices and PR-splittable backlog.
+This plan reflects `main` after AV3 closure.
+Primary objective is to execute the AV4 kickoff set with reliability and operator-safety guardrails retained from AV3.
 
 ## Current state snapshot
 
-- AV2 wave (`AV2-001` ~ `AV2-014`) is complete and merged (PR `#32` → `#45`).
-- AV3 kickoff docs are now published:
-  - `docs/AUTONOMOUS_V3_WAVE_PLAN.md`
-  - `docs/AUTONOMOUS_V3_BACKLOG.md`
+- AV2 wave (`AV2-001` ~ `AV2-014`) is complete and merged.
+- AV3 wave (`AV3-001` ~ `AV3-013`) is complete and merged.
+- AV3 closure summary: `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
 
-## AV3 kickoff execution plan
+## AV4 kickoff execution plan
 
-1. **Milestone slicing (2 weeks):** week-1 foundation/enforcement, week-2 control-surface/policy hardening.
-2. **Architecture transition:** AV2 snapshot-centric flow → AV3 timeline/control/policy model.
-3. **Risk-managed rollout:** prioritized tickets with explicit PR split guidance.
-4. **Gate discipline:** keep smoke/release/docs checks deterministic and green while AV3 lands.
-
-Detailed milestone and architecture deltas are defined in `docs/AUTONOMOUS_V3_WAVE_PLAN.md`.
-Detailed ticket-level DoD/test/PR splits are defined in `docs/AUTONOMOUS_V3_BACKLOG.md`.
+1. **Carryover + hardening:** land AV4 baseline from deferred/next items (`AV3-014` carryover + new AV4 priorities).
+2. **Operational confidence:** keep autonomous evidence, docs checks, and GUI/API operator flows stable.
+3. **Narrow PR slices:** preserve reviewability with compact, dependency-aware patches.
+4. **Risk containment:** keep rollout gated by deterministic checks and playbook-ready recovery paths.
 
 ## Workflow confidence checks
 
@@ -28,20 +24,18 @@ Detailed ticket-level DoD/test/PR splits are defined in `docs/AUTONOMOUS_V3_BACK
 - Keep `make check-release-autonomous` in release-readiness flow.
 - Keep `make check-docs` mandatory for docs/process updates.
 
-## Definition of done (kickoff package)
+## Definition of done (AV4 kickoff package)
 
-- AV3 kickoff status is reflected in status/plan docs.
-- AV3 wave plan includes goals, milestones, architecture deltas, and risk mitigations.
-- AV3 backlog includes prioritized executable tickets with DoD/test/PR split guidance.
-- README/docs navigation includes AV3 plan/backlog links.
+- AV3 closure is reflected in status/plan/backlog docs.
+- AV4 candidate list is prioritized and actionable.
+- README/docs navigation includes AV3 closure and AV4 planning links.
 - Docs validation remains green (`make check-docs`).
 
 ## Related docs
 
-- `docs/AUTONOMOUS_V3_WAVE_PLAN.md`
-- `docs/AUTONOMOUS_V3_BACKLOG.md`
+- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
+- `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/STATUS_BOARD_CURRENT.md`
-- `docs/AUTONOMOUS_V2_WAVE_CLOSURE.md`
 - `docs/AUTONOMOUS_MODE.md`
-- `docs/ops/AUTONOMOUS_V2_RELEASE_CHECKLIST.md`
 - `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`
+- `docs/ops/AUTONOMOUS_V2_RELEASE_CHECKLIST.md`
