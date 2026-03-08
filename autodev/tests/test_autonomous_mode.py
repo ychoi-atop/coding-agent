@@ -737,3 +737,215 @@ def test_autonomous_strategy_trace_artifact_persisted_and_report_state_include_l
     assert len(strategy_trace["attempts"]) == 4
     assert report["latest_strategy"]["name"] == "security-focused"
     assert state["last_strategy"]["name"] == "security-focused"
+
+
+def test_autonomous_resume_state_clean_path_preserves_attempt_history(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    outcomes = [False, True]
+
+    async def _fake_run(*_args, **_kwargs):
+        ok = outcomes.pop(0)
+        return ok, {"project": {}}, {"tasks": []}, []
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    with pytest.raises(SystemExit):
+        autonomous_mode.cli(
+            [
+                "start",
+                "--prd",
+                str(prd),
+                "--out",
+                str(out_root),
+                "--config",
+                str(cfg),
+                "--profile",
+                "minimal",
+                "--max-iterations",
+                "1",
+                "--workspace-allowlist",
+                str(tmp_path),
+            ]
+        )
+
+    run_dir = sorted(out_root.iterdir())[0]
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--config",
+            str(cfg),
+            "--out",
+            str(out_root),
+            "--profile",
+            "minimal",
+            "--resume-state",
+            "--run-dir",
+            str(run_dir),
+            "--max-iterations",
+            "3",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+    assert state["status"] == "completed"
+    assert [a["iteration"] for a in state["attempts"]] == [1, 2]
+    assert state["current_iteration"] == 2
+    assert state.get("resume_diagnostics") == []
+
+
+def test_autonomous_resume_state_recovers_from_corrupt_state_artifact(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+    run_dir = tmp_path / "run-corrupt"
+    artifacts_dir = run_dir / ".autodev"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    (artifacts_dir / "autonomous_state.json").write_text("{not-valid-json", encoding="utf-8")
+    (artifacts_dir / "autonomous_report.json").write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "attempts": [
+                    {
+                        "iteration": 1,
+                        "ok": False,
+                        "resume": False,
+                        "reason": "quality_gate_failed",
+                        "strategy": {"name": "mixed", "rotation_applied": False},
+                        "gate_results": {"passed": False, "fail_reasons": [{"code": "tests.min_pass_rate_not_met"}]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    async def _fake_run(*_args, **_kwargs):
+        return True, {"project": {}}, {"tasks": []}, []
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--config",
+            str(cfg),
+            "--out",
+            str(out_root),
+            "--profile",
+            "minimal",
+            "--resume-state",
+            "--run-dir",
+            str(run_dir),
+            "--max-iterations",
+            "3",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    state = json.loads((artifacts_dir / "autonomous_state.json").read_text(encoding="utf-8"))
+    report = json.loads((artifacts_dir / "autonomous_report.json").read_text(encoding="utf-8"))
+
+    assert [a["iteration"] for a in state["attempts"]] == [1, 2]
+    assert state["current_iteration"] == 2
+    codes = {item.get("code") for item in state.get("resume_diagnostics", []) if isinstance(item, dict)}
+    assert "resume.state.invalid_json" in codes
+    assert "resume.state.recovered_from_report_artifact" in codes
+    assert report["resume_warning_count"] >= 2
+
+
+def test_autonomous_resume_state_deduplicates_attempt_indices_before_retry(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+    run_dir = tmp_path / "run-duplicate"
+    artifacts_dir = run_dir / ".autodev"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    state = autonomous_mode._new_state(
+        run_id="run-dup",
+        request_id="req-dup",
+        run_out=str(run_dir),
+        profile="minimal",
+        policy=autonomous_mode.AutonomousPolicy(
+            max_iterations=3,
+            time_budget_sec=600,
+            workspace_allowlist=[str(tmp_path)],
+            blocked_paths=[],
+            allow_docker_build=False,
+            allow_external_side_effects=False,
+        ),
+        quality_gate_policy=None,
+        stop_guard_policy=autonomous_mode.AutonomousStopGuardPolicy(),
+        prd_path=str(prd),
+        config_path=str(cfg),
+    )
+    state["current_iteration"] = 1
+    state["attempts"] = [
+        {
+            "iteration": 1,
+            "ok": False,
+            "resume": False,
+            "reason": "first",
+            "strategy": {"name": "mixed", "rotation_applied": False},
+        },
+        {
+            "iteration": 1,
+            "ok": False,
+            "resume": True,
+            "reason": "duplicate",
+            "strategy": {"name": "tests-focused", "rotation_applied": False},
+        },
+    ]
+    (artifacts_dir / "autonomous_state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    async def _fake_run(*_args, **_kwargs):
+        return True, {"project": {}}, {"tasks": []}, []
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    autonomous_mode.cli(
+        [
+            "start",
+            "--prd",
+            str(prd),
+            "--config",
+            str(cfg),
+            "--out",
+            str(out_root),
+            "--profile",
+            "minimal",
+            "--resume-state",
+            "--run-dir",
+            str(run_dir),
+            "--max-iterations",
+            "3",
+            "--workspace-allowlist",
+            str(tmp_path),
+        ]
+    )
+
+    recovered_state = json.loads((artifacts_dir / "autonomous_state.json").read_text(encoding="utf-8"))
+    iterations = [a["iteration"] for a in recovered_state["attempts"]]
+    assert iterations == [1, 2]
+    assert recovered_state["attempts"][0]["reason"] == "duplicate"
+    codes = {item.get("code") for item in recovered_state.get("resume_diagnostics", []) if isinstance(item, dict)}
+    assert "resume.state.attempts_deduplicated" in codes

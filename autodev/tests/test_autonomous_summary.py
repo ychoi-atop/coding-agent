@@ -198,3 +198,37 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     assert "status: failed" in text_out
     assert "dominant_fail_codes: tests.min_pass_rate_not_met(1)" in text_out
     assert "guard_decision: stop (autonomous_guard.repeated_gate_failure_limit_reached)" in text_out
+
+
+def test_extract_autonomous_summary_exposes_typed_resume_diagnostics(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-resume-diag"
+    artifacts = run_dir / ".autodev"
+
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-resume-diag",
+            "latest_strategy": {"name": "mixed"},
+            "resume_diagnostics": [
+                {
+                    "type": "autonomous_resume_diagnostic",
+                    "taxonomy_version": "av2-008",
+                    "code": "resume.state.invalid_json",
+                    "message": "state file is not valid JSON; recovery fallback will be used",
+                    "severity": "warning",
+                    "recovered": True,
+                }
+            ],
+        },
+    )
+
+    summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
+
+    assert summary["resume_diagnostics"][0]["code"] == "resume.state.invalid_json"
+    assert any(isinstance(item, dict) and item.get("code") == "resume.state.invalid_json" for item in summary["diagnostics"])
+    assert any(isinstance(item, dict) and item.get("artifact") == "gate_results" for item in summary["diagnostics"])
+
+    rendered = autonomous_mode._render_autonomous_summary_text(summary)
+    assert "Resume diagnostics:" in rendered
+    assert "resume.state.invalid_json" in rendered

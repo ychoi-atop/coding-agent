@@ -35,7 +35,7 @@ autodev autonomous start \
 - `--allow-docker-build`: opt-in docker build execution (default: blocked)
 - `--allow-external-side-effects`: explicit flag for future higher-risk external actions (default: false)
 - `--resume`: first attempt starts with normal run checkpoint resume behavior
-- `--resume-state --run-dir <existing_run>`: continue a prior autonomous session from saved state
+- `--resume-state --run-dir <existing_run>`: continue a prior autonomous session from saved state (with deterministic recovery for partial/corrupt state artifacts)
 
 ### Status helper
 
@@ -99,6 +99,8 @@ Notes:
 - Strategy selection uses a bounded no-improvement heuristic to avoid repeating identical strategies when the prior same-strategy retry did not measurably reduce gate failures.
 - Stop-guard policy (`stop_guard_policy`) adds deterministic early-stop decisions before exhausting wasteful retries when (a) gate failures repeat consecutively or (b) consecutive gate-failed attempts show no measurable improvement.
 - Guard decisions persist typed reason codes (for example `autonomous_guard.repeated_gate_failure_limit_reached`) and optional rollback recommendation markers across state/report/summary artifacts.
+- `--resume-state` now performs deterministic state normalization (attempt de-duplication + `current_iteration` alignment) to prevent duplicate/lost attempt indexing across restart boundaries.
+- Resume/recovery paths emit typed `resume_diagnostics` entries in state/report/summary outputs so operators can see when corrupt/partial artifacts were auto-recovered.
 - Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
 
 ---

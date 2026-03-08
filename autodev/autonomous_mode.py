@@ -37,6 +37,7 @@ AUTONOMOUS_GATE_BASELINE_JSON = ".autodev/autonomous_gate_baseline.json"
 AUTONOMOUS_STRATEGY_TRACE_JSON = ".autodev/autonomous_strategy_trace.json"
 AUTONOMOUS_GUARD_DECISIONS_JSON = ".autodev/autonomous_guard_decisions.json"
 _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
+_AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION = "av2-008"
 
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_GATE_FAILURES = 3
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_NO_IMPROVEMENT = 2
@@ -739,7 +740,7 @@ def _write_strategy_trace_artifact(ws: Workspace, attempts: list[dict[str, Any]]
         "attempts": strategy_attempts,
         "latest": latest,
     }
-    ws.write_text(AUTONOMOUS_STRATEGY_TRACE_JSON, json_dumps(payload))
+    _write_json_if_changed(ws, AUTONOMOUS_STRATEGY_TRACE_JSON, payload, ignore_keys=("updated_at",))
 
 
 def _evaluate_stop_guard_decision(
@@ -845,7 +846,7 @@ def _write_guard_decisions_artifact(
         "decisions": decisions,
         "latest": decisions[-1]["guard_decision"] if decisions else None,
     }
-    ws.write_text(AUTONOMOUS_GUARD_DECISIONS_JSON, json_dumps(payload))
+    _write_json_if_changed(ws, AUTONOMOUS_GUARD_DECISIONS_JSON, payload, ignore_keys=("updated_at",))
 
 
 def _latest_strategy_from_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1227,28 +1228,229 @@ def _new_state(
         "policy": policy_payload,
         "current_iteration": 0,
         "attempts": [],
+        "resume_diagnostics": [],
         "last_strategy": None,
         "started_at": _utc_now(),
         "updated_at": _utc_now(),
     }
 
 
-def _load_state(ws: Workspace) -> dict[str, Any] | None:
-    if not ws.exists(AUTONOMOUS_STATE_FILE):
-        return None
-    try:
-        raw = ws.read_text(AUTONOMOUS_STATE_FILE)
-        payload = json.loads(raw)
-    except Exception as e:
-        raise SystemExit(f"Failed to load autonomous state: {e}") from e
-    if not isinstance(payload, dict):
-        raise SystemExit("Invalid autonomous state format: expected JSON object")
+def _make_resume_diagnostic(
+    code: str,
+    message: str,
+    *,
+    severity: str = "warning",
+    recovered: bool = True,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "autonomous_resume_diagnostic",
+        "taxonomy_version": _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION,
+        "code": code,
+        "message": message,
+        "severity": severity,
+        "recovered": recovered,
+        "at": _utc_now(),
+    }
+    if isinstance(details, dict) and details:
+        payload["details"] = details
     return payload
 
 
+def _write_text_if_changed(ws: Workspace, rel_path: str, content: str) -> None:
+    if ws.exists(rel_path):
+        try:
+            if ws.read_text(rel_path) == content:
+                return
+        except Exception:
+            pass
+    ws.write_text(rel_path, content)
+
+
+def _write_json_if_changed(
+    ws: Workspace,
+    rel_path: str,
+    payload: dict[str, Any],
+    *,
+    ignore_keys: tuple[str, ...] = (),
+) -> None:
+    if not ws.exists(rel_path):
+        ws.write_text(rel_path, json_dumps(payload))
+        return
+
+    existing_payload: dict[str, Any] | None = None
+    try:
+        existing_raw = ws.read_text(rel_path)
+        parsed = json.loads(existing_raw)
+        if isinstance(parsed, dict):
+            existing_payload = parsed
+    except Exception:
+        existing_payload = None
+
+    if isinstance(existing_payload, dict):
+        if ignore_keys:
+            comparable_existing = dict(existing_payload)
+            comparable_next = dict(payload)
+            for key in ignore_keys:
+                comparable_existing.pop(key, None)
+                comparable_next.pop(key, None)
+            if comparable_existing == comparable_next:
+                return
+        elif existing_payload == payload:
+            return
+
+    ws.write_text(rel_path, json_dumps(payload))
+
+
+def _safe_json_read(ws: Workspace, rel_path: str) -> dict[str, Any] | None:
+    if not ws.exists(rel_path):
+        return None
+    try:
+        payload = json.loads(ws.read_text(rel_path))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _recover_attempts_from_artifacts(ws: Workspace) -> list[dict[str, Any]]:
+    report_payload = _safe_json_read(ws, AUTONOMOUS_REPORT_JSON)
+    if not isinstance(report_payload, dict):
+        return []
+    attempts = report_payload.get("attempts")
+    if not isinstance(attempts, list):
+        return []
+    return [item for item in attempts if isinstance(item, dict)]
+
+
+def _normalize_state_for_resume(state: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    normalized = dict(state)
+    diagnostics: list[dict[str, Any]] = []
+
+    attempts_raw = normalized.get("attempts")
+    if not isinstance(attempts_raw, list):
+        attempts_raw = []
+        diagnostics.append(
+            _make_resume_diagnostic(
+                "resume.state.attempts_invalid",
+                "state attempts payload was invalid and reset to empty list",
+                details={"field": "attempts"},
+            )
+        )
+
+    deduped: dict[int, dict[str, Any]] = {}
+    invalid_attempts = 0
+    duplicate_attempts = 0
+    for item in attempts_raw:
+        if not isinstance(item, dict):
+            invalid_attempts += 1
+            continue
+        iteration = _as_int(item.get("iteration"))
+        if iteration is None or iteration <= 0:
+            invalid_attempts += 1
+            continue
+        if iteration in deduped:
+            duplicate_attempts += 1
+        deduped[iteration] = item
+
+    attempts = [deduped[idx] for idx in sorted(deduped.keys())]
+    if invalid_attempts > 0:
+        diagnostics.append(
+            _make_resume_diagnostic(
+                "resume.state.attempts_invalid_entries_dropped",
+                "invalid attempt entries were dropped during resume normalization",
+                details={"dropped": invalid_attempts},
+            )
+        )
+    if duplicate_attempts > 0:
+        diagnostics.append(
+            _make_resume_diagnostic(
+                "resume.state.attempts_deduplicated",
+                "duplicate attempt iterations detected; latest record kept per iteration",
+                details={"deduplicated": duplicate_attempts},
+            )
+        )
+
+    normalized["attempts"] = attempts
+    attempt_max_iteration = max([_as_int(a.get("iteration")) or 0 for a in attempts], default=0)
+    current_iteration = _as_int(normalized.get("current_iteration")) or 0
+    normalized_iteration = max(current_iteration, attempt_max_iteration)
+    if normalized_iteration > 0 and not attempts and current_iteration > 0:
+        normalized_iteration = current_iteration
+    if normalized_iteration != current_iteration:
+        diagnostics.append(
+            _make_resume_diagnostic(
+                "resume.state.current_iteration_aligned",
+                "current_iteration aligned to highest persisted attempt index",
+                details={"before": current_iteration, "after": normalized_iteration},
+            )
+        )
+    normalized["current_iteration"] = normalized_iteration
+
+    latest_strategy = _latest_strategy_from_attempts(attempts)
+    if isinstance(latest_strategy, dict):
+        normalized["last_strategy"] = latest_strategy
+
+    gate_attempts = [a for a in attempts if isinstance(a.get("gate_results"), dict)]
+    if gate_attempts:
+        normalized["last_gate_results"] = gate_attempts[-1].get("gate_results")
+
+    guard_attempts = [a for a in attempts if isinstance(a.get("guard_decision"), dict)]
+    if guard_attempts:
+        normalized["guard_decision"] = guard_attempts[-1].get("guard_decision")
+
+    existing_diags = normalized.get("resume_diagnostics")
+    merged_diags: list[dict[str, Any]] = []
+    if isinstance(existing_diags, list):
+        merged_diags.extend([item for item in existing_diags if isinstance(item, dict)])
+    merged_diags.extend(diagnostics)
+    normalized["resume_diagnostics"] = merged_diags
+    return normalized, diagnostics
+
+
+def _load_state_for_resume(ws: Workspace) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if not ws.exists(AUTONOMOUS_STATE_FILE):
+        return None, []
+    try:
+        payload = json.loads(ws.read_text(AUTONOMOUS_STATE_FILE))
+    except Exception as e:
+        return None, [
+            _make_resume_diagnostic(
+                "resume.state.invalid_json",
+                "state file is not valid JSON; recovery fallback will be used",
+                details={"error": str(e)},
+            )
+        ]
+    if not isinstance(payload, dict):
+        return None, [
+            _make_resume_diagnostic(
+                "resume.state.invalid_format",
+                "state file has invalid format; expected JSON object",
+            )
+        ]
+    normalized, diagnostics = _normalize_state_for_resume(payload)
+    return normalized, diagnostics
+
+
+def _load_state(ws: Workspace) -> dict[str, Any] | None:
+    payload, diagnostics = _load_state_for_resume(ws)
+    if payload is not None:
+        return payload
+    if diagnostics:
+        first = diagnostics[0]
+        if isinstance(first, dict):
+            raise SystemExit(f"Failed to load autonomous state: {first.get('message')}")
+        raise SystemExit("Failed to load autonomous state")
+    return None
+
+
 def _write_state(ws: Workspace, state: dict[str, Any]) -> None:
-    state["updated_at"] = _utc_now()
-    ws.write_text(AUTONOMOUS_STATE_FILE, json_dumps(state))
+    if not isinstance(state.get("resume_diagnostics"), list):
+        state["resume_diagnostics"] = []
+    payload = dict(state)
+    payload["updated_at"] = _utc_now()
+    _write_json_if_changed(ws, AUTONOMOUS_STATE_FILE, payload, ignore_keys=("updated_at",))
 
 
 def _write_gate_results_artifact(
@@ -1278,7 +1480,7 @@ def _write_gate_results_artifact(
         "policy": asdict(policy),
         "attempts": gate_attempts,
     }
-    ws.write_text(AUTONOMOUS_GATE_RESULTS_JSON, json_dumps(payload))
+    _write_json_if_changed(ws, AUTONOMOUS_GATE_RESULTS_JSON, payload, ignore_keys=("updated_at",))
 
 
 def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> tuple[dict[str, Any], str]:
@@ -1292,6 +1494,9 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         if isinstance(a, dict) and isinstance(a.get("guard_decision"), dict)
     ]
     latest_guard_decision = guard_decisions[-1] if guard_decisions else None
+    resume_diagnostics = [
+        d for d in (state.get("resume_diagnostics") or []) if isinstance(d, dict)
+    ]
     report = {
         "mode": "autonomous_v1",
         "ok": ok,
@@ -1314,6 +1519,8 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         "latest_strategy": latest_strategy,
         "guard_decision": latest_guard_decision,
         "guard_decisions_total": len(guard_decisions),
+        "resume_diagnostics": resume_diagnostics,
+        "resume_warning_count": len(resume_diagnostics),
         "last_validation": last_validation,
         "attempts": attempts,
         "completed_at": _utc_now(),
@@ -1380,6 +1587,15 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         md.append("```json")
         md.append(json_dumps(report["guard_decision"]))
         md.append("```")
+
+    if resume_diagnostics:
+        md.append("")
+        md.append("## Resume Diagnostics")
+        for item in resume_diagnostics:
+            md.append(
+                f"- {item.get('code', '-')}: {item.get('message', '-')} "
+                f"(severity={item.get('severity', '-')}, recovered={item.get('recovered')})"
+            )
 
     md.append("")
     return report, "\n".join(md)
@@ -1458,10 +1674,51 @@ def _start(argv: list[str]) -> None:
     ws = Workspace(run_out)
 
     if args.resume_state:
-        loaded = _load_state(ws)
-        if loaded is None:
+        loaded, resume_diagnostics = _load_state_for_resume(ws)
+        if loaded is None and not resume_diagnostics:
             raise SystemExit(f"--resume-state requested, but state file missing: {run_out}/{AUTONOMOUS_STATE_FILE}")
-        state = loaded
+
+        state_source = "autonomous_state"
+        if loaded is None:
+            recovered_attempts = _recover_attempts_from_artifacts(ws)
+            state = _new_state(
+                run_id=uuid4().hex,
+                request_id=uuid4().hex,
+                run_out=run_out,
+                profile=profile_name,
+                policy=policy,
+                quality_gate_policy=quality_gate_policy,
+                stop_guard_policy=stop_guard_policy,
+                prd_path=args.prd,
+                config_path=args.config,
+            )
+            state["attempts"] = recovered_attempts
+            if recovered_attempts:
+                max_iteration = max([_as_int(a.get("iteration")) or 0 for a in recovered_attempts], default=0)
+                state["current_iteration"] = max_iteration
+                state["phase"] = "auto_fix_retry"
+                resume_diagnostics.append(
+                    _make_resume_diagnostic(
+                        "resume.state.recovered_from_report_artifact",
+                        "state file was invalid; recovered attempt history from autonomous_report artifact",
+                        details={"recovered_attempts": len(recovered_attempts), "state_source": state_source},
+                    )
+                )
+            else:
+                resume_diagnostics.append(
+                    _make_resume_diagnostic(
+                        "resume.state.reinitialized",
+                        "state file was invalid and no recoverable attempts were found; reinitialized state",
+                        details={"state_source": state_source},
+                    )
+                )
+        else:
+            state = loaded
+
+        state, _ = _normalize_state_for_resume(state)
+        if not isinstance(state.get("resume_diagnostics"), list):
+            state["resume_diagnostics"] = []
+        state["resume_diagnostics"].extend(resume_diagnostics)
         run_id = str(state.get("run_id") or uuid4().hex)
         request_id = str(state.get("request_id") or uuid4().hex)
     else:
@@ -1583,7 +1840,7 @@ def _start(argv: list[str]) -> None:
     if quality_gate_policy is not None:
         run_metadata["autonomous_quality_gate_policy"] = asdict(quality_gate_policy)
     run_metadata["autonomous_stop_guard_policy"] = asdict(stop_guard_policy)
-    ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
+    _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata)
     _write_state(ws, state)
 
     start_monotonic = time.monotonic()
@@ -1757,14 +2014,14 @@ def _start(argv: list[str]) -> None:
     run_metadata["autonomous_strategy_trace_path"] = AUTONOMOUS_STRATEGY_TRACE_JSON
     run_metadata["autonomous_guard_decisions_path"] = AUTONOMOUS_GUARD_DECISIONS_JSON
     run_metadata["autonomous_guard_decision"] = state.get("guard_decision")
-    ws.write_text(".autodev/run_metadata.json", json_dumps(run_metadata))
+    _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata, ignore_keys=("run_completed_at",))
 
     attempts_for_artifact = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     _write_guard_decisions_artifact(ws, policy=stop_guard_policy, attempts=attempts_for_artifact)
 
     report_json, report_md = _render_report(state, ok=ok, last_validation=last_validation)
-    ws.write_text(AUTONOMOUS_REPORT_JSON, json_dumps(report_json))
-    ws.write_text(AUTONOMOUS_REPORT_MD, report_md)
+    _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
+    _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
 
     write_report(ws.root, prd_struct, plan, last_validation, ok)
     _log_event(
@@ -1818,6 +2075,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     guard_payload, guard_error = _safe_load_json(guard_path)
 
     warnings: list[str] = []
+    diagnostics: list[dict[str, Any]] = []
     artifact_status = {
         "report": {"path": str(report_path), "status": "ok" if report_error is None else report_error},
         "gate_results": {"path": str(gate_path), "status": "ok" if gate_error is None else gate_error},
@@ -1833,6 +2091,16 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     ):
         if err is not None:
             warnings.append(f"{name}: {err}")
+            diagnostics.append(
+                {
+                    "type": "autonomous_summary_warning",
+                    "taxonomy_version": _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION,
+                    "code": "summary.artifact_unavailable",
+                    "artifact": name,
+                    "severity": "warning",
+                    "message": f"{name}: {err}",
+                }
+            )
 
     status = "unknown"
     if isinstance(report_payload, dict):
@@ -1905,6 +2173,13 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         guard_source = "report"
         guard_decisions_total = int(report_payload.get("guard_decisions_total") or 0)
 
+    resume_diagnostics = []
+    if isinstance(report_payload, dict) and isinstance(report_payload.get("resume_diagnostics"), list):
+        resume_diagnostics = [
+            item for item in report_payload.get("resume_diagnostics", []) if isinstance(item, dict)
+        ]
+        diagnostics.extend(resume_diagnostics)
+
     return {
         "mode": "autonomous_v1_summary",
         "run_dir": str(run_path),
@@ -1927,7 +2202,9 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "guard_decision": latest_guard_decision,
         "guard_decision_source": guard_source,
         "guard_decisions_total": guard_decisions_total,
+        "resume_diagnostics": resume_diagnostics,
         "warnings": warnings,
+        "diagnostics": diagnostics,
     }
 
 
@@ -1980,6 +2257,18 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         lines.append("Warnings:")
         for warning in warnings:
             lines.append(f"- {warning}")
+
+    resume_diagnostics = summary.get("resume_diagnostics")
+    if isinstance(resume_diagnostics, list) and resume_diagnostics:
+        lines.append("")
+        lines.append("Resume diagnostics:")
+        for item in resume_diagnostics:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('code', '-')}: {item.get('message', '-')} "
+                f"(severity={item.get('severity', '-')}, recovered={item.get('recovered')})"
+            )
 
     return "\n".join(lines)
 
