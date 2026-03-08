@@ -191,6 +191,7 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     assert payload["status"] == "failed"
     assert payload["gate_counts"]["fail"] == 1
     assert payload["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
+    assert payload["operator_guidance"]["top"]
 
     autonomous_mode.cli(["summary", "--run-dir", str(run_dir), "--format", "text"])
     text_out = capsys.readouterr().out
@@ -198,6 +199,50 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     assert "status: failed" in text_out
     assert "dominant_fail_codes: tests.min_pass_rate_not_met(1)" in text_out
     assert "guard_decision: stop (autonomous_guard.repeated_gate_failure_limit_reached)" in text_out
+    assert "operator_guidance_top:" in text_out
+    assert "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md" in text_out
+
+
+def test_extract_autonomous_summary_builds_operator_guidance_with_fallbacks(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-guidance-fallback"
+    artifacts = run_dir / ".autodev"
+
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-guidance-fallback",
+            "preflight": {
+                "status": "failed",
+                "reason_codes": ["autonomous_preflight.path_not_allowlisted"],
+            },
+        },
+    )
+    _write_json(
+        artifacts / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": False,
+                        "fail_reasons": [{"code": "custom.operator_code"}],
+                    },
+                }
+            ]
+        },
+    )
+
+    summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
+
+    guidance = summary["operator_guidance"]
+    assert guidance["taxonomy_version"] == "av2-011"
+    assert any(item["code"] == "autonomous_preflight.path_not_allowlisted" for item in guidance["resolved"])
+    assert any(
+        item["code"] == "custom.operator_code" and item["source"] == "generic_fallback"
+        for item in guidance["resolved"]
+    )
+
 
 
 def test_extract_autonomous_summary_surfaces_budget_guard_outcome(tmp_path: Path) -> None:

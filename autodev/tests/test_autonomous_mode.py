@@ -676,6 +676,72 @@ def test_route_strategy_from_fail_reasons_maps_single_and_mixed_domains() -> Non
     assert "security.max_high_findings_exceeded" in mixed["gate_fail_codes"]
 
 
+def test_resolve_operator_guidance_entry_exact_and_unknown_fallback() -> None:
+    mapped = autonomous_mode._resolve_operator_guidance_entry("autonomous_preflight.path_blocked")
+    assert mapped["family"] == "preflight"
+    assert mapped["source"] == "exact"
+    assert mapped["playbook_url"].endswith("#preflight-failures")
+
+    unknown = autonomous_mode._resolve_operator_guidance_entry("custom.operator_code")
+    assert unknown["family"] == "unknown"
+    assert unknown["source"] == "generic_fallback"
+    assert unknown["playbook_url"].endswith("#unknown-or-unmapped-codes")
+
+
+def test_render_report_includes_operator_guidance_payload_and_markdown_section() -> None:
+    state = {
+        "run_id": "run-guidance",
+        "request_id": "req-guidance",
+        "run_out": "/tmp/run-guidance",
+        "profile": "minimal",
+        "attempts": [
+            {
+                "iteration": 1,
+                "ok": False,
+                "resume": False,
+                "reason": "quality_gate_failed",
+                "gate_results": {
+                    "passed": False,
+                    "fail_reasons": [
+                        {"code": "tests.min_pass_rate_not_met"},
+                        {"code": "custom.operator_code"},
+                    ],
+                },
+                "guard_decision": {
+                    "decision": "stop",
+                    "reason_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+                },
+            }
+        ],
+        "preflight": {
+            "status": "failed",
+            "reason_codes": ["autonomous_preflight.path_blocked"],
+            "diagnostics": [],
+        },
+        "budget_guard": {
+            "status": "triggered",
+            "decision": {
+                "decision": "stop",
+                "reason_code": "autonomous_budget_guard.max_autonomous_iterations_reached",
+            },
+            "diagnostics": [],
+        },
+    }
+
+    report, report_md = autonomous_mode._render_report(state, ok=False, last_validation=[])
+
+    guidance = report["operator_guidance"]
+    assert guidance["taxonomy_version"] == "av2-011"
+    assert any(item["code"] == "tests.min_pass_rate_not_met" for item in guidance["resolved"])
+    assert any(
+        item["code"] == "custom.operator_code" and item["source"] == "generic_fallback"
+        for item in guidance["resolved"]
+    )
+
+    assert "## Operator Guidance" in report_md
+    assert "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#gate-failures" in report_md
+
+
 def test_resolve_retry_strategy_rotates_after_no_improvement_on_same_strategy() -> None:
     fail_reasons = [
         {
