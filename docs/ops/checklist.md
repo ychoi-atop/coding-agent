@@ -55,6 +55,16 @@ make perf-strict
 - `perf-smoke`: parses latest `.autodev/task_quality_index.json` (or task quality snapshots), persists `generated_dir/.autodev/perf.json`, and prints summary.
 - `perf-strict`: compares `perf.json` against previous run, failing on conservative regressions.
 
+## 2.2) Smoke confidence lanes
+
+```bash
+make smoke-local-simple-e2e
+make smoke-autonomous-e2e
+```
+
+- `smoke-local-simple-e2e`: GUI/API local-simple critical-path smoke.
+- `smoke-autonomous-e2e`: deterministic autonomous end-to-end smoke (preflight → gate fail eval → guard stop → summary CLI → `/api/autonomous/quality-gate/latest`).
+
 ## 3) Release-readiness (Go/No-Go)
 
 ### Owners

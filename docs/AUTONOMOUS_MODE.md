@@ -64,6 +64,23 @@ strategy, stop-guard decision fields, and `operator_guidance` (playbook-linked t
 GUI/API parity: `GET /api/autonomous/quality-gate/latest` returns the latest run's autonomous summary snapshot
 (including gate/guard/preflight/operator guidance) and degrades gracefully when some artifacts are missing.
 
+### Deterministic E2E smoke lane (AV2-013)
+
+```bash
+make smoke-autonomous-e2e
+# or
+python scripts/autonomous_e2e_smoke.py --artifacts-dir ./artifacts/autonomous-e2e-smoke
+```
+
+The smoke run is deterministic and lightweight (no live LLM/network dependency):
+1) autonomous preflight pass
+2) quality-gate evaluation failure capture
+3) stop-guard decision (`autonomous_guard.repeated_gate_failure_limit_reached`)
+4) `autodev autonomous summary` JSON/text extraction
+5) GUI/API snapshot parity via `/api/autonomous/quality-gate/latest`
+
+Artifacts/logs are persisted under `artifacts/autonomous-e2e-smoke/<timestamp>/` for debugging.
+
 ---
 
 ## Policy profile (config)

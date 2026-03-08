@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks check-docs benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-template check-locks check-docs benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve smoke-autonomous-e2e
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
@@ -57,6 +57,10 @@ test-backend:
 # Local-simple GUI/API smoke lane (NXT-007).
 smoke-local-simple-e2e:
 	$(PYTHON) scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simple-e2e-smoke
+
+# Autonomous E2E smoke lane (AV2-013).
+smoke-autonomous-e2e:
+	$(PYTHON) scripts/autonomous_e2e_smoke.py --artifacts-dir ./artifacts/autonomous-e2e-smoke
 
 # Fast local CI-equivalent pass for quick iteration.
 ci-fast: compile check-fast tests-fast
