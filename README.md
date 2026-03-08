@@ -427,10 +427,18 @@ Inspect autonomous state:
 autodev autonomous status --run-dir ./generated_runs/<run_dir>
 ```
 
+Summarize autonomous quality gate outcomes and latest strategy:
+```bash
+autodev autonomous summary --run-dir ./generated_runs/<run_dir>
+# optional human-readable format
+autodev autonomous summary --run-dir ./generated_runs/<run_dir> --format text
+```
+
 Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_state.json`
 - `.autodev/autonomous_report.json` (includes latest `gate_results` when configured)
 - `.autodev/autonomous_gate_results.json` (per-iteration quality gate evaluations)
+- `.autodev/autonomous_strategy_trace.json` (per-iteration strategy routing/rotation trace)
 - `AUTONOMOUS_REPORT.md`
 - `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 
