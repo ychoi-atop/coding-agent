@@ -152,6 +152,7 @@ Notes:
 - Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
 - Report/summary artifacts expose `operator_guidance` resolved from typed gate/guard/preflight/budget reason codes with links into `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`.
 - Report/summary artifacts also expose `incident_routing` derived from typed reason codes (owner/team, severity, target SLA, escalation class), including summary top fields (`incident_owner_team`, `incident_severity`, `incident_target_sla`, `incident_escalation_class`).
+- Failed outcomes now emit `.autodev/autonomous_incident_packet.json` with structured run summary, typed/root-cause codes, routing, reproduction pointers, and top operator actions. Successful outcomes keep no-op behavior (incident packet is not generated).
 - Unknown or newly introduced reason codes still produce graceful fallback guidance/routing (generic or family-level actions + routing defaults) for backward compatibility.
 
 ---
@@ -166,7 +167,8 @@ Each autonomous run writes:
 - `.autodev/autonomous_gate_baseline.json` — persistent recent gate observations used for trend-aware regression checks
 - `.autodev/autonomous_strategy_trace.json` — per-iteration strategy routing/rotation trace with latest selected strategy
 - `.autodev/autonomous_guard_decisions.json` — stop-guard decision history with typed reason codes and rollback recommendation markers
-- `AUTONOMOUS_REPORT.md` — quick human summary
+- `.autodev/autonomous_incident_packet.json` — structured incident packet emitted for failed outcomes
+- `AUTONOMOUS_REPORT.md` — quick human summary (includes incident packet section/reference)
 - existing run artifacts (`report.json`, quality artifacts, checkpoints) are preserved
 
 Terminal conditions:

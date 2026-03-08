@@ -92,6 +92,14 @@ def test_extract_autonomous_summary_aggregates_gate_and_strategy_artifacts(tmp_p
             },
         },
     )
+    _write_json(
+        artifacts / "autonomous_incident_packet.json",
+        {
+            "schema_version": "av3-005-v1",
+            "status": "failed",
+            "run_summary": {"run_id": "run-001"},
+        },
+    )
 
     summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
 
@@ -108,6 +116,7 @@ def test_extract_autonomous_summary_aggregates_gate_and_strategy_artifacts(tmp_p
     assert summary["incident_severity"] == "high"
     assert summary["incident_target_sla"] == "4h"
     assert summary["incident_escalation_class"] == "engineering_hotfix"
+    assert summary["incident_packet"]["status"] == "ok"
     assert summary["warnings"] == []
 
 
@@ -137,10 +146,31 @@ def test_extract_autonomous_summary_handles_missing_or_partial_artifacts(tmp_pat
     assert summary["incident_severity"] == "medium"
     assert summary["incident_target_sla"] == "12h"
     assert summary["incident_escalation_class"] == "manual_triage"
+    assert summary["incident_packet"]["status"] == "not_generated"
     assert len(summary["warnings"]) == 3
     assert any("gate_results: missing" in item for item in summary["warnings"])
     assert any("strategy_trace: missing" in item for item in summary["warnings"])
     assert any("guard_decisions: missing" in item for item in summary["warnings"])
+
+
+def test_extract_autonomous_summary_warns_when_failed_run_missing_incident_packet(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-missing-packet"
+    artifacts = run_dir / ".autodev"
+
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-missing-packet",
+            "latest_strategy": {"name": "mixed"},
+        },
+    )
+
+    summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
+
+    assert summary["status"] == "failed"
+    assert summary["incident_packet"]["status"] == "missing"
+    assert any("incident_packet: missing" in item for item in summary["warnings"])
 
 
 def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) -> None:
@@ -192,6 +222,14 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
             },
         },
     )
+    _write_json(
+        artifacts / "autonomous_incident_packet.json",
+        {
+            "schema_version": "av3-005-v1",
+            "status": "failed",
+            "run_summary": {"run_id": "run-cli"},
+        },
+    )
 
     autonomous_mode.cli(["summary", "--run-dir", str(run_dir)])
     json_out = capsys.readouterr().out
@@ -199,6 +237,7 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     assert payload["status"] == "failed"
     assert payload["gate_counts"]["fail"] == 1
     assert payload["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
+    assert payload["incident_packet"]["status"] == "ok"
     assert payload["operator_guidance"]["top"]
 
     autonomous_mode.cli(["summary", "--run-dir", str(run_dir), "--format", "text"])
@@ -207,6 +246,7 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     assert "status: failed" in text_out
     assert "incident_owner_team: Feature Engineering" in text_out
     assert "incident_target_sla: 4h" in text_out
+    assert "incident_packet: ok" in text_out
     assert "dominant_fail_codes: tests.min_pass_rate_not_met(1)" in text_out
     assert "guard_decision: stop (autonomous_guard.repeated_gate_failure_limit_reached)" in text_out
     assert "operator_guidance_top:" in text_out

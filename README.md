@@ -439,6 +439,7 @@ Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_report.json` (includes latest `gate_results` when configured)
 - `.autodev/autonomous_gate_results.json` (per-iteration quality gate evaluations)
 - `.autodev/autonomous_strategy_trace.json` (per-iteration strategy routing/rotation trace)
+- `.autodev/autonomous_incident_packet.json` (auto-generated on failed outcomes; structured incident packet for operator triage)
 - `AUTONOMOUS_REPORT.md`
 - `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 

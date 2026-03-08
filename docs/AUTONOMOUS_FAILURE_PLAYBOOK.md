@@ -5,6 +5,7 @@ Operator-facing quick actions for typed autonomous failure codes.
 This document is intentionally concise and linkable from:
 - `AUTONOMOUS_REPORT.md`
 - `.autodev/autonomous_report.json` (`operator_guidance`, `incident_routing`)
+- `.autodev/autonomous_incident_packet.json` (`failure_codes`, `reproduction`, `operator_guidance.top_actions`)
 - `autodev autonomous summary`
 
 ## Routing defaults (owner/SLA/escalation)

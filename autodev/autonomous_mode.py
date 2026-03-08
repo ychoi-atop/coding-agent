@@ -33,6 +33,7 @@ logger = logging.getLogger("autodev")
 AUTONOMOUS_STATE_FILE = ".autodev/autonomous_state.json"
 AUTONOMOUS_REPORT_JSON = ".autodev/autonomous_report.json"
 AUTONOMOUS_REPORT_MD = "AUTONOMOUS_REPORT.md"
+AUTONOMOUS_INCIDENT_PACKET_JSON = ".autodev/autonomous_incident_packet.json"
 AUTONOMOUS_GATE_RESULTS_JSON = ".autodev/autonomous_gate_results.json"
 AUTONOMOUS_GATE_BASELINE_JSON = ".autodev/autonomous_gate_baseline.json"
 AUTONOMOUS_STRATEGY_TRACE_JSON = ".autodev/autonomous_strategy_trace.json"
@@ -43,6 +44,7 @@ _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION = "av2-009"
 _AUTONOMOUS_BUDGET_GUARD_DIAGNOSTIC_VERSION = "av2-010"
 _AUTONOMOUS_OPERATOR_GUIDANCE_VERSION = "av2-011"
 _AUTONOMOUS_INCIDENT_ROUTING_VERSION = "av3-004-v1"
+_AUTONOMOUS_INCIDENT_PACKET_VERSION = "av3-005-v1"
 _AUTONOMOUS_FAILURE_PLAYBOOK_DOC = "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md"
 
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_GATE_FAILURES = 3
@@ -2236,6 +2238,125 @@ def _build_incident_routing(reason_codes: list[str]) -> dict[str, Any]:
     }
 
 
+def _build_autonomous_incident_packet(
+    *,
+    state: dict[str, Any],
+    report: dict[str, Any],
+    ok: bool,
+) -> dict[str, Any] | None:
+    if ok:
+        return None
+
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    reason_codes = _collect_operator_reason_codes(state, attempts)
+    deduped_reason_codes: list[str] = []
+    seen_codes: set[str] = set()
+    for item in reason_codes:
+        code = str(item or "").strip()
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+        deduped_reason_codes.append(code)
+
+    fail_code_counter: Counter[str] = Counter()
+    first_attempt_started_at: str | None = None
+    last_attempt_ended_at: str | None = None
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        started_at = attempt.get("started_at")
+        ended_at = attempt.get("ended_at")
+        if first_attempt_started_at is None and started_at:
+            first_attempt_started_at = str(started_at)
+        if ended_at:
+            last_attempt_ended_at = str(ended_at)
+        gate_results = attempt.get("gate_results") if isinstance(attempt.get("gate_results"), dict) else None
+        if not isinstance(gate_results, dict):
+            continue
+        fail_reasons = gate_results.get("fail_reasons")
+        if not isinstance(fail_reasons, list):
+            continue
+        for reason in fail_reasons:
+            if not isinstance(reason, dict):
+                continue
+            code = str(reason.get("code") or "").strip()
+            if code:
+                fail_code_counter[code] += 1
+
+    dominant_fail_codes = [
+        {"code": code, "count": count}
+        for code, count in fail_code_counter.most_common()
+    ]
+    root_cause_codes = [item["code"] for item in dominant_fail_codes if isinstance(item, dict) and item.get("code")][:3]
+    if not root_cause_codes:
+        root_cause_codes = deduped_reason_codes[:3]
+
+    incident_routing = report.get("incident_routing") if isinstance(report.get("incident_routing"), dict) else _build_incident_routing(deduped_reason_codes)
+    operator_guidance = report.get("operator_guidance") if isinstance(report.get("operator_guidance"), dict) else _build_operator_guidance(deduped_reason_codes)
+    guidance_top = operator_guidance.get("top") if isinstance(operator_guidance.get("top"), list) else []
+
+    top_actions: list[dict[str, Any]] = []
+    for entry in guidance_top[:3]:
+        if not isinstance(entry, dict):
+            continue
+        actions = entry.get("actions") if isinstance(entry.get("actions"), list) else []
+        top_actions.append(
+            {
+                "code": str(entry.get("code") or "-"),
+                "title": str(entry.get("title") or "Operator guidance"),
+                "action": str(actions[0]) if actions else "See playbook",
+                "playbook_url": str(entry.get("playbook_url") or _AUTONOMOUS_FAILURE_PLAYBOOK_DOC),
+            }
+        )
+
+    run_summary = {
+        "run_id": report.get("run_id") or state.get("run_id"),
+        "request_id": report.get("request_id") or state.get("request_id"),
+        "profile": report.get("profile") or state.get("profile"),
+        "status": "failed",
+        "failure_reason": state.get("failure_reason") or "unknown",
+        "iterations_total": int(report.get("iterations_total") or len(attempts)),
+        "iterations_failed": int(report.get("iterations_failed") or len([a for a in attempts if isinstance(a, dict) and a.get("ok") is False])),
+        "completed_at": report.get("completed_at"),
+    }
+
+    return {
+        "schema_version": _AUTONOMOUS_INCIDENT_PACKET_VERSION,
+        "mode": "autonomous_incident_packet_v1",
+        "status": "failed",
+        "run_summary": run_summary,
+        "failure_codes": {
+            "typed_codes": deduped_reason_codes,
+            "root_cause_codes": root_cause_codes,
+            "dominant_fail_codes": dominant_fail_codes,
+        },
+        "incident_routing": incident_routing,
+        "reproduction": {
+            "run_id": run_summary.get("run_id"),
+            "run_dir": report.get("run_out") or state.get("run_out"),
+            "artifact_paths": {
+                "state": AUTONOMOUS_STATE_FILE,
+                "report_json": AUTONOMOUS_REPORT_JSON,
+                "report_md": AUTONOMOUS_REPORT_MD,
+                "gate_results": AUTONOMOUS_GATE_RESULTS_JSON,
+                "strategy_trace": AUTONOMOUS_STRATEGY_TRACE_JSON,
+                "guard_decisions": AUTONOMOUS_GUARD_DECISIONS_JSON,
+                "incident_packet": AUTONOMOUS_INCIDENT_PACKET_JSON,
+            },
+            "key_timestamps": {
+                "first_attempt_started_at": first_attempt_started_at,
+                "last_attempt_ended_at": last_attempt_ended_at,
+                "run_completed_at": report.get("completed_at"),
+            },
+        },
+        "operator_guidance": {
+            "playbook": _AUTONOMOUS_FAILURE_PLAYBOOK_DOC,
+            "top_actions": top_actions,
+        },
+        "generated_at": _utc_now(),
+    }
+
+
 def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> tuple[dict[str, Any], str]:
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     gate_attempts = [a for a in attempts if isinstance(a, dict) and isinstance(a.get("gate_results"), dict)]
@@ -2282,6 +2403,8 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         "guard_decisions_total": len(guard_decisions),
         "operator_guidance": operator_guidance,
         "incident_routing": incident_routing,
+        "incident_packet_path": AUTONOMOUS_INCIDENT_PACKET_JSON,
+        "incident_packet_generated": not ok,
         "resume_diagnostics": resume_diagnostics,
         "resume_warning_count": len(resume_diagnostics),
         "last_validation": last_validation,
@@ -2404,6 +2527,14 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
             )
     else:
         md.append(f"- No typed failure codes observed. See `{_AUTONOMOUS_FAILURE_PLAYBOOK_DOC}` for fallback operations.")
+
+    md.append("")
+    md.append("## Incident Packet")
+    if ok:
+        md.append("- Run completed successfully; incident packet is not generated.")
+    else:
+        md.append(f"- Artifact: `{AUTONOMOUS_INCIDENT_PACKET_JSON}`")
+        md.append("- Includes run summary, typed failure/root-cause codes, incident routing, reproduction pointers, and top operator actions.")
 
     if isinstance(preflight, dict):
         preflight_diagnostics = preflight.get("diagnostics") if isinstance(preflight.get("diagnostics"), list) else []
@@ -2598,6 +2729,9 @@ def _start(argv: list[str]) -> None:
         report_json, report_md = _render_report(state, ok=False, last_validation=[])
         _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
         _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
+        incident_packet = _build_autonomous_incident_packet(state=state, report=report_json, ok=False)
+        if isinstance(incident_packet, dict):
+            _write_json_if_changed(ws, AUTONOMOUS_INCIDENT_PACKET_JSON, incident_packet, ignore_keys=("generated_at",))
 
         failure_metadata = {
             "run_id": run_id,
@@ -2979,6 +3113,9 @@ def _start(argv: list[str]) -> None:
     report_json, report_md = _render_report(state, ok=ok, last_validation=last_validation)
     _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
     _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
+    incident_packet = _build_autonomous_incident_packet(state=state, report=report_json, ok=ok)
+    if isinstance(incident_packet, dict):
+        _write_json_if_changed(ws, AUTONOMOUS_INCIDENT_PACKET_JSON, incident_packet, ignore_keys=("generated_at",))
 
     write_report(ws.root, prd_struct, plan, last_validation, ok)
     _log_event(
@@ -3025,11 +3162,13 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     gate_path = artifacts_dir / "autonomous_gate_results.json"
     strategy_path = artifacts_dir / "autonomous_strategy_trace.json"
     guard_path = artifacts_dir / "autonomous_guard_decisions.json"
+    incident_packet_path = artifacts_dir / "autonomous_incident_packet.json"
 
     report_payload, report_error = _safe_load_json(report_path)
     gate_payload, gate_error = _safe_load_json(gate_path)
     strategy_payload, strategy_error = _safe_load_json(strategy_path)
     guard_payload, guard_error = _safe_load_json(guard_path)
+    incident_packet_payload, incident_packet_error = _safe_load_json(incident_packet_path)
 
     warnings: list[str] = []
     diagnostics: list[dict[str, Any]] = []
@@ -3038,6 +3177,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "gate_results": {"path": str(gate_path), "status": "ok" if gate_error is None else gate_error},
         "strategy_trace": {"path": str(strategy_path), "status": "ok" if strategy_error is None else strategy_error},
         "guard_decisions": {"path": str(guard_path), "status": "ok" if guard_error is None else guard_error},
+        "incident_packet": {"path": str(incident_packet_path), "status": "ok" if incident_packet_error is None else incident_packet_error},
     }
 
     for name, err in (
@@ -3064,6 +3204,23 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         if isinstance(report_payload.get("ok"), bool):
             status = "completed" if report_payload["ok"] else "failed"
         status = str(report_payload.get("status") or status)
+
+    incident_packet_status = "ok" if incident_packet_error is None else incident_packet_error
+    if incident_packet_error == "missing" and status == "completed":
+        incident_packet_status = "not_generated"
+    artifact_status["incident_packet"]["status"] = incident_packet_status
+    if status == "failed" and incident_packet_error is not None:
+        warnings.append(f"incident_packet: {incident_packet_error}")
+        diagnostics.append(
+            {
+                "type": "autonomous_summary_warning",
+                "taxonomy_version": _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION,
+                "code": "summary.artifact_unavailable",
+                "artifact": "incident_packet",
+                "severity": "warning",
+                "message": f"incident_packet: {incident_packet_error}",
+            }
+        )
 
     preflight = report_payload.get("preflight") if isinstance(report_payload, dict) and isinstance(report_payload.get("preflight"), dict) else None
     preflight_status = str(preflight.get("status") or "unknown") if isinstance(preflight, dict) else "unknown"
@@ -3222,6 +3379,12 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "incident_severity": str(primary_routing.get("severity") or "-"),
         "incident_target_sla": str(primary_routing.get("target_sla") or "-"),
         "incident_escalation_class": str(primary_routing.get("escalation_class") or "-"),
+        "incident_packet": {
+            "path": str(incident_packet_path),
+            "status": incident_packet_status,
+            "payload": incident_packet_payload,
+        },
+        "incident_packet_status": incident_packet_status,
         "resume_diagnostics": resume_diagnostics,
         "preflight_diagnostics": preflight_diagnostics,
         "warnings": warnings,
@@ -3238,6 +3401,8 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
     artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), dict) else {}
     operator_guidance = summary.get("operator_guidance") if isinstance(summary.get("operator_guidance"), dict) else {}
 
+    incident_packet = summary.get("incident_packet") if isinstance(summary.get("incident_packet"), dict) else {}
+
     lines = [
         "# Autonomous Run Summary",
         f"- run_dir: {summary.get('run_dir')}",
@@ -3248,6 +3413,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         f"- incident_severity: {summary.get('incident_severity', '-')}",
         f"- incident_target_sla: {summary.get('incident_target_sla', '-')}",
         f"- incident_escalation_class: {summary.get('incident_escalation_class', '-')}",
+        f"- incident_packet: {incident_packet.get('status', '-') } ({incident_packet.get('path', '-')})",
         f"- gate_counts: pass={gate_counts.get('pass', 0)}, fail={gate_counts.get('fail', 0)}, total={gate_counts.get('total', 0)}",
     ]
 
@@ -3336,7 +3502,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("Artifacts:")
-    for name in ("report", "gate_results", "strategy_trace", "guard_decisions"):
+    for name in ("report", "gate_results", "strategy_trace", "guard_decisions", "incident_packet"):
         item = artifacts.get(name) if isinstance(artifacts.get(name), dict) else {}
         lines.append(f"- {name}: {item.get('status', 'missing')} ({item.get('path', '-')})")
 

@@ -132,9 +132,15 @@ def test_autonomous_start_retries_until_success(tmp_path, monkeypatch):
     assert calls == [False, True]
 
     report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+    report_md = (run_dir / "AUTONOMOUS_REPORT.md").read_text(encoding="utf-8")
     assert report["ok"] is True
     assert report["iterations_total"] == 2
     assert report["preflight"]["status"] == "passed"
+    assert report["incident_packet_generated"] is False
+    assert report["incident_packet_path"] == ".autodev/autonomous_incident_packet.json"
+    assert not (run_dir / ".autodev" / "autonomous_incident_packet.json").exists()
+    assert "## Incident Packet" in report_md
+    assert "incident packet is not generated" in report_md
 
 
 def test_autonomous_start_preflight_fails_early_on_blocked_path(tmp_path, monkeypatch):
@@ -178,12 +184,17 @@ def test_autonomous_start_preflight_fails_early_on_blocked_path(tmp_path, monkey
     run_dir = sorted(out_root.iterdir())[0]
     state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
     report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+    incident_packet = json.loads((run_dir / ".autodev" / "autonomous_incident_packet.json").read_text(encoding="utf-8"))
 
     assert state["status"] == "failed"
     assert state["failure_reason"] == "preflight_failed"
     assert state["preflight"]["status"] == "failed"
     assert "autonomous_preflight.path_blocked" in state["preflight"]["reason_codes"]
     assert report["preflight"]["status"] == "failed"
+    assert report["incident_packet_generated"] is True
+    assert incident_packet["status"] == "failed"
+    assert "autonomous_preflight.path_blocked" in incident_packet["failure_codes"]["typed_codes"]
+    assert incident_packet["reproduction"]["artifact_paths"]["incident_packet"] == ".autodev/autonomous_incident_packet.json"
 
 
 def test_autonomous_start_preflight_fails_early_on_missing_prd(tmp_path, monkeypatch):
@@ -761,10 +772,57 @@ def test_render_report_includes_operator_guidance_payload_and_markdown_section()
     assert any(item["code"] == "tests.min_pass_rate_not_met" for item in routing["resolved"])
     assert any(item["code"] == "custom.operator_code" and item["source"] == "generic_fallback" for item in routing["resolved"])
 
+    assert report["incident_packet_generated"] is True
+    assert report["incident_packet_path"] == ".autodev/autonomous_incident_packet.json"
+
     assert "## Incident Routing" in report_md
     assert "owner/team=" in report_md
     assert "## Operator Guidance" in report_md
+    assert "## Incident Packet" in report_md
+    assert ".autodev/autonomous_incident_packet.json" in report_md
     assert "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#gate-failures" in report_md
+
+
+def test_build_autonomous_incident_packet_includes_expected_sections() -> None:
+    state = {
+        "run_id": "run-incident",
+        "request_id": "req-incident",
+        "run_out": "/tmp/run-incident",
+        "profile": "minimal",
+        "failure_reason": "autonomous_guard_stop",
+        "attempts": [
+            {
+                "iteration": 1,
+                "started_at": "2026-03-08T00:00:00Z",
+                "ended_at": "2026-03-08T00:00:10Z",
+                "ok": False,
+                "gate_results": {
+                    "passed": False,
+                    "fail_reasons": [
+                        {"code": "tests.min_pass_rate_not_met"},
+                        {"code": "tests.min_pass_rate_not_met"},
+                    ],
+                },
+                "guard_decision": {
+                    "decision": "stop",
+                    "reason_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+                },
+            }
+        ],
+        "preflight": {"status": "passed", "reason_codes": []},
+    }
+    report, _ = autonomous_mode._render_report(state, ok=False, last_validation=[])
+
+    packet = autonomous_mode._build_autonomous_incident_packet(state=state, report=report, ok=False)
+
+    assert packet is not None
+    assert packet["schema_version"] == "av3-005-v1"
+    assert packet["run_summary"]["run_id"] == "run-incident"
+    assert "tests.min_pass_rate_not_met" in packet["failure_codes"]["typed_codes"]
+    assert packet["failure_codes"]["root_cause_codes"][0] == "tests.min_pass_rate_not_met"
+    assert packet["incident_routing"]["primary"]["owner_team"] == "Feature Engineering"
+    assert packet["operator_guidance"]["top_actions"]
+    assert packet["reproduction"]["artifact_paths"]["report_md"] == "AUTONOMOUS_REPORT.md"
 
 
 def test_resolve_retry_strategy_rotates_after_no_improvement_on_same_strategy() -> None:
