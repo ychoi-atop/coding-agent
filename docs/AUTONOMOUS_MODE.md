@@ -93,6 +93,18 @@ Generates issue/ticket-ready draft content from autonomous failure artifacts (in
 including concise title, severity/owner/SLA triage fields, repro steps, evidence paths, suggested next actions,
 and clear diagnostics if source artifacts are missing.
 
+### GitHub issue export helper (AV3-013)
+
+```bash
+autodev autonomous issue-export --run-dir ./generated_runs/<run_id> --repo owner/repo
+autodev autonomous issue-export --run-dir ./generated_runs/<run_id> --repo owner/repo --dry-run false
+```
+
+Builds a GitHub issue create payload from the autonomous ticket draft and writes attempt metadata to
+`.autodev/autonomous_issue_export.json`. Default mode is safe (`--dry-run true`): payload + command preview only,
+no network call. Live mode (`--dry-run false`) uses `gh issue create` and surfaces clear guard diagnostics when
+`gh` is missing or not authenticated.
+
 ### Incident send helper (AV3-009)
 
 ```bash

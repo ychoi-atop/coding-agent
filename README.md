@@ -447,6 +447,12 @@ autodev autonomous ticket-draft --run-dir ./generated_runs/<run_dir> --format ma
 autodev autonomous ticket-draft --run-dir ./generated_runs/<run_dir> --format json
 ```
 
+Export ticket draft into a GitHub issue create payload (dry-run default):
+```bash
+autodev autonomous issue-export --run-dir ./generated_runs/<run_dir> --repo owner/repo
+autodev autonomous issue-export --run-dir ./generated_runs/<run_dir> --repo owner/repo --dry-run false
+```
+
 Replay a previous incident-send audit entry (dry-run by default):
 ```bash
 autodev autonomous incident-replay --run-dir ./generated_runs/<run_dir> --entry 1
@@ -460,6 +466,7 @@ Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_strategy_trace.json` (per-iteration strategy routing/rotation trace)
 - `.autodev/autonomous_incident_packet.json` (auto-generated on failed outcomes; structured incident packet for operator triage)
 - `.autodev/autonomous_ticket_draft.md` / `.autodev/autonomous_ticket_draft.json` (auto-generated ticket draft for handoff/escalation)
+- `.autodev/autonomous_issue_export.json` (GitHub issue export attempts, payload previews, and live-result diagnostics)
 - `.autodev/autonomous_incident_send.json` (incident-send attempt history)
 - `.autodev/autonomous_incident_send_audit.jsonl` (append-only per-attempt delivery audit trail)
 - `AUTONOMOUS_REPORT.md`

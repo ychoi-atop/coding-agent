@@ -29,6 +29,11 @@ from .autonomous_incident_send import (
     AUTONOMOUS_INCIDENT_SEND_JSON,
     send_incident_packet,
 )
+from .autonomous_issue_export import (
+    AUTONOMOUS_ISSUE_EXPORT_JSON,
+    export_github_issue,
+    persist_issue_export_attempt,
+)
 from .autonomous_ticket_draft import (
     AUTONOMOUS_TICKET_DRAFT_JSON,
     AUTONOMOUS_TICKET_DRAFT_MD,
@@ -1918,6 +1923,18 @@ def _safe_json_read(ws: Workspace, rel_path: str) -> dict[str, Any] | None:
     return payload
 
 
+def _persist_issue_export_report_fields(ws: Workspace, latest_attempt: dict[str, Any]) -> None:
+    report_payload = _safe_json_read(ws, AUTONOMOUS_REPORT_JSON)
+    if not isinstance(report_payload, dict):
+        return
+
+    report_payload["issue_export_path"] = AUTONOMOUS_ISSUE_EXPORT_JSON
+    report_payload["issue_export_attempted"] = True
+    report_payload["issue_export_latest"] = latest_attempt
+    report_payload["issue_export_latest_status"] = str(latest_attempt.get("status") or "unknown")
+    _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_payload, ignore_keys=("completed_at",))
+
+
 def _incident_send_target_formats(send_result: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     targets = send_result.get("targets") if isinstance(send_result.get("targets"), list) else []
@@ -2841,6 +2858,10 @@ def _render_report(
         "ticket_draft_markdown_path": AUTONOMOUS_TICKET_DRAFT_MD,
         "ticket_draft_json_path": AUTONOMOUS_TICKET_DRAFT_JSON,
         "ticket_draft_generated": not ok,
+        "issue_export_path": AUTONOMOUS_ISSUE_EXPORT_JSON,
+        "issue_export_attempted": False,
+        "issue_export_latest": None,
+        "issue_export_latest_status": "not_attempted",
         "incident_send": incident_send,
         "incident_send_attempted": isinstance(incident_send, dict),
         "incident_send_audit_latest_entry_id": (
@@ -2996,6 +3017,11 @@ def _render_report(
         md.append("- Regenerate via: `autodev autonomous ticket-draft --run-dir <path> --format markdown|json`")
 
     md.append("")
+    md.append("## GitHub Issue Export")
+    md.append(f"- Artifact: `{AUTONOMOUS_ISSUE_EXPORT_JSON}`")
+    md.append("- CLI: `autodev autonomous issue-export --run-dir <path> --repo <owner/repo> [--dry-run true|false]`")
+
+    md.append("")
     md.append("## Incident Send")
     if isinstance(incident_send, dict):
         target_list = incident_send.get("targets") if isinstance(incident_send.get("targets"), list) else []
@@ -3135,6 +3161,11 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     ticket_draft = sub.add_parser("ticket-draft", help="generate autonomous ticket draft from incident artifacts")
     ticket_draft.add_argument("--run-dir", required=True)
     ticket_draft.add_argument("--format", choices=list(SUPPORTED_TICKET_DRAFT_FORMATS), default="markdown")
+
+    issue_export = sub.add_parser("issue-export", help="export autonomous ticket draft as GitHub issue payload")
+    issue_export.add_argument("--run-dir", required=True)
+    issue_export.add_argument("--repo", required=True, help="GitHub repository in owner/repo format")
+    issue_export.add_argument("--dry-run", default="true", type=_parse_cli_bool)
 
     incident_replay = sub.add_parser("incident-replay", help="replay a prior incident-send audit entry")
     incident_replay.add_argument("--run-dir", required=True)
@@ -3744,6 +3775,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     incident_send_audit_path = artifacts_dir / "autonomous_incident_send_audit.jsonl"
     ticket_draft_md_path = artifacts_dir / "autonomous_ticket_draft.md"
     ticket_draft_json_path = artifacts_dir / "autonomous_ticket_draft.json"
+    issue_export_path = artifacts_dir / "autonomous_issue_export.json"
 
     report_payload, report_error = _safe_load_json(report_path)
     gate_payload, gate_error = _safe_load_json(gate_path)
@@ -3752,6 +3784,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     incident_packet_payload, incident_packet_error = _safe_load_json(incident_packet_path)
     incident_send_payload, incident_send_error = _safe_load_json(incident_send_path)
     ticket_draft_json_payload, ticket_draft_json_error = _safe_load_json(ticket_draft_json_path)
+    issue_export_payload, issue_export_error = _safe_load_json(issue_export_path)
 
     warnings: list[str] = []
     diagnostics: list[dict[str, Any]] = []
@@ -3765,6 +3798,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "incident_send_audit": {"path": str(incident_send_audit_path), "status": "missing"},
         "ticket_draft_markdown": {"path": str(ticket_draft_md_path), "status": "ok" if ticket_draft_md_path.exists() else "missing"},
         "ticket_draft_json": {"path": str(ticket_draft_json_path), "status": "ok" if ticket_draft_json_error is None else ticket_draft_json_error},
+        "issue_export": {"path": str(issue_export_path), "status": "ok" if issue_export_error is None else issue_export_error},
     }
 
     for name, err in (
@@ -3827,6 +3861,24 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             }
         )
 
+    issue_export_attempted = bool(report_payload.get("issue_export_attempted")) if isinstance(report_payload, dict) else False
+    issue_export_status = "ok" if issue_export_error is None else issue_export_error
+    if issue_export_error == "missing" and not issue_export_attempted:
+        issue_export_status = "not_attempted"
+    if issue_export_attempted and issue_export_error is not None:
+        warnings.append(f"issue_export: {issue_export_error}")
+        diagnostics.append(
+            {
+                "type": "autonomous_summary_warning",
+                "taxonomy_version": _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION,
+                "code": "summary.artifact_unavailable",
+                "artifact": "issue_export",
+                "severity": "warning",
+                "message": f"issue_export: {issue_export_error}",
+            }
+        )
+    artifact_status["issue_export"]["status"] = issue_export_status
+
     incident_send_attempted = bool(report_payload.get("incident_send_attempted")) if isinstance(report_payload, dict) else False
     incident_send_status = "ok" if incident_send_error is None else incident_send_error
     if incident_send_error == "missing" and not incident_send_attempted:
@@ -3879,6 +3931,9 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     artifact_status["incident_send_audit"]["status"] = incident_send_audit_status
 
     incident_send_audit_latest = incident_send_audit_entries[-1] if incident_send_audit_entries else None
+
+    issue_export_latest = issue_export_payload.get("latest") if isinstance(issue_export_payload, dict) and isinstance(issue_export_payload.get("latest"), dict) else None
+    issue_export_latest_status = str(issue_export_latest.get("status") or "") if isinstance(issue_export_latest, dict) else ""
 
     incident_send_latest = incident_send_payload.get("latest") if isinstance(incident_send_payload, dict) and isinstance(incident_send_payload.get("latest"), dict) else None
     incident_send_reason_codes = (
@@ -4057,6 +4112,15 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             "payload": incident_packet_payload,
         },
         "incident_packet_status": incident_packet_status,
+        "issue_export": {
+            "path": str(issue_export_path),
+            "status": issue_export_status,
+            "payload": issue_export_payload,
+            "latest": issue_export_latest,
+        },
+        "issue_export_status": issue_export_status,
+        "issue_export_attempted": issue_export_attempted,
+        "issue_export_latest_status": issue_export_latest_status or ("not_attempted" if not issue_export_attempted else "unknown"),
         "incident_send": {
             "path": str(incident_send_path),
             "status": incident_send_status,
@@ -4102,6 +4166,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
     operator_guidance = summary.get("operator_guidance") if isinstance(summary.get("operator_guidance"), dict) else {}
 
     incident_packet = summary.get("incident_packet") if isinstance(summary.get("incident_packet"), dict) else {}
+    issue_export = summary.get("issue_export") if isinstance(summary.get("issue_export"), dict) else {}
     incident_send = summary.get("incident_send") if isinstance(summary.get("incident_send"), dict) else {}
     ticket_draft = summary.get("ticket_draft") if isinstance(summary.get("ticket_draft"), dict) else {}
     ticket_draft_markdown = ticket_draft.get("markdown") if isinstance(ticket_draft.get("markdown"), dict) else {}
@@ -4118,6 +4183,8 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         f"- incident_target_sla: {summary.get('incident_target_sla', '-')}",
         f"- incident_escalation_class: {summary.get('incident_escalation_class', '-')}",
         f"- incident_packet: {incident_packet.get('status', '-') } ({incident_packet.get('path', '-')})",
+        f"- issue_export: {issue_export.get('status', '-') } ({issue_export.get('path', '-')})",
+        f"- issue_export_latest_status: {summary.get('issue_export_latest_status', '-')}",
         f"- ticket_draft_markdown: {ticket_draft_markdown.get('status', '-') } ({ticket_draft_markdown.get('path', '-')})",
         f"- ticket_draft_json: {ticket_draft_json.get('status', '-') } ({ticket_draft_json.get('path', '-')})",
         f"- incident_send: {incident_send.get('status', '-') } ({incident_send.get('path', '-')})",
@@ -4230,6 +4297,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         "strategy_trace",
         "guard_decisions",
         "incident_packet",
+        "issue_export",
         "ticket_draft_markdown",
         "ticket_draft_json",
         "incident_send",
@@ -4341,6 +4409,27 @@ def _ticket_draft(argv: list[str]) -> None:
     print(rendered)
 
 
+def _issue_export(argv: list[str]) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(["issue-export", *argv])
+    run_dir = str(Path(args.run_dir).expanduser().resolve())
+    ws = Workspace(run_dir)
+
+    try:
+        send_result = export_github_issue(
+            run_dir=run_dir,
+            repo=args.repo,
+            dry_run=bool(args.dry_run),
+        )
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+
+    payload, _ = persist_issue_export_attempt(run_dir, send_result)
+    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else send_result
+    _persist_issue_export_report_fields(ws, latest)
+    print(json_dumps(latest))
+
+
 def _incident_replay(argv: list[str]) -> None:
     parser = _build_cli_parser()
     args = parser.parse_args(["incident-replay", *argv])
@@ -4394,7 +4483,7 @@ def _incident_replay(argv: list[str]) -> None:
 
 def cli(argv: list[str]) -> None:
     if not argv:
-        raise SystemExit("Usage: autodev autonomous <start|status|summary|incident-export|incident-send|ticket-draft|incident-replay> ...")
+        raise SystemExit("Usage: autodev autonomous <start|status|summary|incident-export|incident-send|ticket-draft|issue-export|incident-replay> ...")
     action = argv[0]
     if action == "start":
         _start(argv[1:])
@@ -4413,6 +4502,9 @@ def cli(argv: list[str]) -> None:
         return
     if action == "ticket-draft":
         _ticket_draft(argv[1:])
+        return
+    if action == "issue-export":
+        _issue_export(argv[1:])
         return
     if action == "incident-replay":
         _incident_replay(argv[1:])
