@@ -13,6 +13,7 @@ from autodev.gui_api import _reset_process_manager_for_tests
 from autodev.gui_mvp_server import (
     GuiConfig,
     GuiRequestHandler,
+    _latest_quality_gate_snapshot,
     _latest_scorecard_summary,
     _list_runs,
     _quality_trends,
@@ -459,6 +460,130 @@ def test_scorecard_latest_endpoint_returns_payload(gui_server):
     assert body["latest"]["status"] == "ok"
     assert body["summary"]["task_pass_fraction"] == "1/1"
     assert body["cards"][0]["value"] == "100.0%"
+
+
+def test_latest_quality_gate_snapshot_uses_latest_run(tmp_path):
+    run = tmp_path / "run-autonomous"
+    _write_json(
+        run / ".autodev" / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-autonomous",
+            "request_id": "req-001",
+            "profile": "minimal",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "guard_decision": {
+                "decision": "stop",
+                "reason_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+            },
+            "operator_guidance": {
+                "top": [
+                    {
+                        "code": "tests.min_pass_rate_not_met",
+                        "actions": ["Stabilize failing tests before retry."],
+                    }
+                ]
+            },
+        },
+    )
+    _write_json(
+        run / ".autodev" / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": False,
+                        "fail_reasons": [{"code": "tests.min_pass_rate_not_met"}],
+                    },
+                }
+            ]
+        },
+    )
+
+    payload = _latest_quality_gate_snapshot(tmp_path)
+    assert payload["empty"] is False
+    assert payload["latest"]["run_id"] == "run-autonomous"
+    assert payload["summary"]["status"] == "failed"
+    assert payload["summary"]["preflight_status"] == "passed"
+    assert payload["summary"]["gate_counts"] == {"pass": 0, "fail": 1, "total": 1}
+    assert payload["summary"]["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
+    assert payload["summary"]["operator_guidance_top"][0]["code"] == "tests.min_pass_rate_not_met"
+
+
+def test_quality_gate_snapshot_latest_endpoint_returns_payload(gui_server):
+    base_url, runs_root = gui_server
+    run = runs_root / "run-autonomous-endpoint"
+    _write_json(
+        run / ".autodev" / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-autonomous-endpoint",
+            "request_id": "req-002",
+            "profile": "enterprise",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "guard_decision": {
+                "decision": "stop",
+                "reason_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+            },
+            "operator_guidance": {
+                "top": [
+                    {
+                        "code": "tests.min_pass_rate_not_met",
+                        "actions": ["Stabilize failing tests before retry."],
+                    }
+                ]
+            },
+        },
+    )
+    _write_json(
+        run / ".autodev" / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": False,
+                        "fail_reasons": [{"code": "tests.min_pass_rate_not_met"}],
+                    },
+                }
+            ]
+        },
+    )
+
+    status, body = _get_json(f"{base_url}/api/autonomous/quality-gate/latest")
+    assert status == 200
+    assert body["empty"] is False
+    assert body["latest"]["run_id"] == "run-autonomous-endpoint"
+    assert body["summary"]["status"] == "failed"
+    assert body["summary"]["preflight_status"] == "passed"
+    assert body["summary"]["gate_counts"] == {"pass": 0, "fail": 1, "total": 1}
+    assert body["summary"]["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
+    assert body["summary"]["operator_guidance_top"][0]["code"] == "tests.min_pass_rate_not_met"
+
+
+def test_quality_gate_snapshot_latest_endpoint_handles_missing_artifacts(gui_server):
+    base_url, runs_root = gui_server
+    run = runs_root / "run-autonomous-missing"
+    _write_json(
+        run / ".autodev" / "autonomous_report.json",
+        {
+            "ok": True,
+            "run_id": "run-autonomous-missing",
+            "profile": "minimal",
+            "latest_strategy": {"name": "mixed"},
+        },
+    )
+
+    status, body = _get_json(f"{base_url}/api/autonomous/quality-gate/latest")
+    assert status == 200
+    assert body["empty"] is False
+    assert body["latest"]["run_id"] == "run-autonomous-missing"
+    assert body["summary"]["status"] == "completed"
+    assert body["summary"]["gate_counts"] == {"pass": 0, "fail": 0, "total": 0}
+    assert any("gate_results: missing" in item for item in body["warnings"])
+    assert any("strategy_trace: missing" in item for item in body["warnings"])
+    assert any("guard_decisions: missing" in item for item in body["warnings"])
 
 
 def test_artifact_read_endpoint_returns_json_payload(gui_server):

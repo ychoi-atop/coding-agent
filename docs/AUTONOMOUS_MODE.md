@@ -61,6 +61,9 @@ Default output is machine-readable JSON with latest run status, preflight status
 budget-guard outcome/reason codes, gate pass/fail counts, dominant gate fail codes, latest auto-fix
 strategy, stop-guard decision fields, and `operator_guidance` (playbook-linked top actions with graceful fallback for unmapped codes).
 
+GUI/API parity: `GET /api/autonomous/quality-gate/latest` returns the latest run's autonomous summary snapshot
+(including gate/guard/preflight/operator guidance) and degrades gracefully when some artifacts are missing.
+
 ---
 
 ## Policy profile (config)
