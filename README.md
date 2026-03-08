@@ -441,12 +441,20 @@ autodev autonomous incident-export --run-dir ./generated_runs/<run_dir> --format
 autodev autonomous incident-export --run-dir ./generated_runs/<run_dir> --format email
 ```
 
+Replay a previous incident-send audit entry (dry-run by default):
+```bash
+autodev autonomous incident-replay --run-dir ./generated_runs/<run_dir> --entry 1
+autodev autonomous incident-replay --run-dir ./generated_runs/<run_dir> --entry <audit_entry_id> --live
+```
+
 Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_state.json`
 - `.autodev/autonomous_report.json` (includes latest `gate_results` when configured)
 - `.autodev/autonomous_gate_results.json` (per-iteration quality gate evaluations)
 - `.autodev/autonomous_strategy_trace.json` (per-iteration strategy routing/rotation trace)
 - `.autodev/autonomous_incident_packet.json` (auto-generated on failed outcomes; structured incident packet for operator triage)
+- `.autodev/autonomous_incident_send.json` (incident-send attempt history)
+- `.autodev/autonomous_incident_send_audit.jsonl` (append-only per-attempt delivery audit trail)
 - `AUTONOMOUS_REPORT.md`
 - `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 
