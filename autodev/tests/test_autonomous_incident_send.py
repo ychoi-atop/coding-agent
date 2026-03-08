@@ -529,3 +529,165 @@ def test_webhook_target_missing_secret_has_clear_diagnostics(tmp_path: Path, mon
     details = attempt["details"]
     assert details["code"] == "webhook_secret_missing"
     assert details["expected_env"] == "AUTODEV_WEBHOOK_SECRET"
+
+
+def test_incident_send_appends_audit_entries(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-audit-append"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+
+    autonomous_mode.cli([
+        "incident-send",
+        "--run-dir",
+        str(run_dir),
+        "--target",
+        "stdout",
+        "--dry-run",
+        "true",
+    ])
+    autonomous_mode.cli([
+        "incident-send",
+        "--run-dir",
+        str(run_dir),
+        "--target",
+        "stdout",
+        "--dry-run",
+        "true",
+    ])
+
+    audit_path = run_dir / ".autodev" / "autonomous_incident_send_audit.jsonl"
+    lines = [line for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 2
+
+    first = json.loads(lines[0])
+    assert first["incident_fingerprint"]
+    assert first["target"] == "stdout"
+    assert first["format"] == "markdown"
+    assert first["delivery_mode"] == "dry_run"
+    assert first["decision"] == "sent"
+    assert isinstance(first["attempt_count"], int)
+    assert isinstance(first["response_metadata"], dict)
+
+
+def test_incident_replay_dry_run_respects_suppression_policy(tmp_path: Path, capsys) -> None:
+    run_dir = tmp_path / "run-replay-dry"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+    _write_json(
+        run_dir / ".autodev" / "autonomous_report.json",
+        {
+            "policy": {
+                "incident_send_policy": {
+                    "dedupe_window_sec": 600,
+                    "rate_limit_window_sec": 0,
+                    "rate_limit_global_max": None,
+                    "rate_limit_per_target_max": None,
+                    "force_send": False,
+                }
+            },
+            "incident_send_attempted": True,
+        },
+    )
+
+    autonomous_mode.cli([
+        "incident-send",
+        "--run-dir",
+        str(run_dir),
+        "--target",
+        "log",
+        "--dry-run",
+        "false",
+    ])
+
+    capsys.readouterr()
+    autonomous_mode.cli([
+        "incident-replay",
+        "--run-dir",
+        str(run_dir),
+        "--entry",
+        "1",
+    ])
+    replay_payload = json.loads(capsys.readouterr().out)
+
+    assert replay_payload["dry_run"] is True
+    assert replay_payload["attempts"][0]["status"] == "suppressed"
+    assert replay_payload["suppression_reason_codes"] == ["incident_send.dedupe_window_active"]
+
+
+def test_incident_replay_live_requires_explicit_opt_in_and_overrides_suppression(tmp_path: Path, capsys) -> None:
+    run_dir = tmp_path / "run-replay-live"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+    _write_json(
+        run_dir / ".autodev" / "autonomous_report.json",
+        {
+            "policy": {
+                "incident_send_policy": {
+                    "dedupe_window_sec": 600,
+                    "rate_limit_window_sec": 0,
+                    "rate_limit_global_max": None,
+                    "rate_limit_per_target_max": None,
+                    "force_send": False,
+                }
+            },
+            "incident_send_attempted": True,
+        },
+    )
+
+    autonomous_mode.cli([
+        "incident-send",
+        "--run-dir",
+        str(run_dir),
+        "--target",
+        "log",
+        "--dry-run",
+        "false",
+    ])
+
+    capsys.readouterr()
+    autonomous_mode.cli([
+        "incident-replay",
+        "--run-dir",
+        str(run_dir),
+        "--entry",
+        "1",
+        "--live",
+    ])
+    replay_payload = json.loads(capsys.readouterr().out)
+
+    assert replay_payload["dry_run"] is False
+    assert replay_payload["attempts"][0]["status"] == "sent"
+    assert replay_payload["force_send_override"]["applied"] is True
+    assert replay_payload["replay"]["live"] is True
+
+
+def test_incident_replay_missing_or_invalid_entry_handling(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-replay-invalid"
+    _write_json(run_dir / ".autodev" / "autonomous_incident_packet.json", _sample_packet())
+
+    with pytest.raises(SystemExit) as exc_missing:
+        autonomous_mode.cli([
+            "incident-replay",
+            "--run-dir",
+            str(run_dir),
+            "--entry",
+            "1",
+        ])
+    assert "incident replay audit trail is empty" in str(exc_missing.value)
+
+    audit_entry = {
+        "entry_id": "entry-1",
+        "target": "stdout",
+        "format": "markdown",
+        "decision": "sent",
+    }
+    audit_path = run_dir / ".autodev" / "autonomous_incident_send_audit.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text(json.dumps(audit_entry) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_invalid:
+        autonomous_mode.cli([
+            "incident-replay",
+            "--run-dir",
+            str(run_dir),
+            "--entry",
+            "99",
+        ])
+    assert "incident replay index out of range" in str(exc_invalid.value)

@@ -87,12 +87,17 @@ autodev autonomous incident-send --run-dir ./generated_runs/<run_id>
 autodev autonomous incident-send --run-dir ./generated_runs/<run_id> --target stdout --target log:markdown --dry-run false
 autodev autonomous incident-send --run-dir ./generated_runs/<run_id> --target webhook:markdown --dry-run false
 autodev autonomous incident-send --run-dir ./generated_runs/<run_id> --dry-run false --force-send true
+
+autodev autonomous incident-replay --run-dir ./generated_runs/<run_id> --entry 1
+autodev autonomous incident-replay --run-dir ./generated_runs/<run_id> --entry <audit_entry_id> --live
 ```
 
 Sends a failed-run incident packet through pluggable targets (`stdout`, `log`, `webhook`) and persists send attempts in
-`.autodev/autonomous_incident_send.json`. Defaults are safe: `--dry-run true` and no automatic send unless enabled
-via autonomous policy. AV3-009 adds optional dedupe/rate-limit suppression (with typed reason codes) and an explicit
-operator override (`--force-send true`) when immediate delivery is required.
+`.autodev/autonomous_incident_send.json`. AV3-010 additionally appends per-attempt audit entries to
+`.autodev/autonomous_incident_send_audit.jsonl` (append-only JSONL with timestamped `entry_id`). Defaults are safe:
+`--dry-run true` and no automatic send unless enabled via autonomous policy. AV3-009 adds optional dedupe/rate-limit
+suppression (with typed reason codes) and an explicit operator override (`--force-send true`) when immediate delivery is
+required. AV3-010 replay uses audit entries and is dry-run by default; `--live` performs explicit live replay.
 
 GUI/API parity: `GET /api/autonomous/quality-gate/latest` returns the latest run's autonomous summary snapshot
 (including gate/guard/preflight/operator guidance) and degrades gracefully when some artifacts are missing.
@@ -224,6 +229,7 @@ Each autonomous run writes:
 - `.autodev/autonomous_guard_decisions.json` — stop-guard decision history with typed reason codes and rollback recommendation markers
 - `.autodev/autonomous_incident_packet.json` — structured incident packet emitted for failed outcomes
 - `.autodev/autonomous_incident_send.json` — incident send-attempt history (`latest` + attempt records per target)
+- `.autodev/autonomous_incident_send_audit.jsonl` — append-only delivery audit trail (timestamped entry per target attempt/event)
 - `AUTONOMOUS_REPORT.md` — quick human summary (includes incident packet/send sections)
 - existing run artifacts (`report.json`, quality artifacts, checkpoints) are preserved
 

@@ -47,6 +47,7 @@ AUTONOMOUS_GATE_RESULTS_JSON = ".autodev/autonomous_gate_results.json"
 AUTONOMOUS_GATE_BASELINE_JSON = ".autodev/autonomous_gate_baseline.json"
 AUTONOMOUS_STRATEGY_TRACE_JSON = ".autodev/autonomous_strategy_trace.json"
 AUTONOMOUS_GUARD_DECISIONS_JSON = ".autodev/autonomous_guard_decisions.json"
+AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL = ".autodev/autonomous_incident_send_audit.jsonl"
 _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
 _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION = "av2-008"
 _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION = "av2-009"
@@ -1911,10 +1912,188 @@ def _safe_json_read(ws: Workspace, rel_path: str) -> dict[str, Any] | None:
     return payload
 
 
+def _incident_send_target_formats(send_result: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    targets = send_result.get("targets") if isinstance(send_result.get("targets"), list) else []
+    for raw in targets:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        target = token
+        export_format = "markdown"
+        if ":" in token:
+            left, right = token.split(":", 1)
+            target = left.strip()
+            export_format = right.strip() or "markdown"
+        target = target.lower()
+        if target:
+            out[target] = export_format
+    return out
+
+
+def _incident_send_decision_for_attempt(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {"suppressed", "failed"}:
+        return normalized
+    return "sent"
+
+
+def _append_incident_send_audit_entries(
+    ws: Workspace,
+    *,
+    send_result: dict[str, Any],
+    source: str,
+    replay_of: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    attempts = send_result.get("attempts") if isinstance(send_result.get("attempts"), list) else []
+    target_formats = _incident_send_target_formats(send_result)
+    decided_at = str(send_result.get("decided_at") or _utc_now())
+    global_reason_codes = [
+        str(code)
+        for code in send_result.get("suppression_reason_codes", [])
+        if code
+    ] if isinstance(send_result.get("suppression_reason_codes"), list) else []
+
+    entries: list[dict[str, Any]] = []
+    for attempt_index, attempt in enumerate(attempts, start=1):
+        if not isinstance(attempt, dict):
+            continue
+        target = str(attempt.get("target") or "").strip().lower()
+        export_format = str(attempt.get("format") or target_formats.get(target) or "markdown")
+        status = str(attempt.get("status") or "")
+        reason_codes = list(global_reason_codes)
+        reason_code = str(attempt.get("reason_code") or "").strip()
+        if reason_code and reason_code not in reason_codes:
+            reason_codes.append(reason_code)
+
+        dry_run = bool(send_result.get("dry_run", attempt.get("dry_run", False)))
+        entry = {
+            "schema_version": "av3-010-v1",
+            "entry_id": uuid4().hex,
+            "recorded_at": _utc_now(),
+            "decided_at": decided_at,
+            "source": str(source or "incident_send"),
+            "trigger": str(send_result.get("trigger") or "-"),
+            "run_dir": str(send_result.get("run_dir") or ws.root),
+            "packet_run_id": str(send_result.get("packet_run_id") or "-"),
+            "incident_fingerprint": str(send_result.get("incident_fingerprint") or "-"),
+            "target": target or "unknown",
+            "format": export_format,
+            "dry_run": dry_run,
+            "delivery_mode": "dry_run" if dry_run else "live",
+            "decision": _incident_send_decision_for_attempt(status),
+            "attempt_status": status or "unknown",
+            "reason_codes": sorted(set(reason_codes)),
+            "attempt_count": int(send_result.get("attempt_count") or len(attempts)),
+            "target_attempt_index": attempt_index,
+            "response_metadata": attempt.get("details") if isinstance(attempt.get("details"), dict) else {},
+            "ok": bool(attempt.get("ok") is True),
+        }
+        if isinstance(replay_of, dict):
+            entry["replay_of"] = {
+                "entry_id": replay_of.get("entry_id"),
+                "index": replay_of.get("index"),
+            }
+        entries.append(entry)
+
+    if not entries:
+        return []
+
+    audit_path = Path(ws.root) / AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    with audit_path.open("a", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+    return entries
+
+
+def _load_incident_send_audit_entries(ws: Workspace) -> list[dict[str, Any]]:
+    audit_path = Path(ws.root) / AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL
+    if not audit_path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    try:
+        for raw in audit_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                entries.append(parsed)
+    except Exception:
+        return []
+    return entries
+
+
+def _resolve_incident_send_policy_from_artifacts(ws: Workspace) -> dict[str, Any]:
+    report_payload = _safe_json_read(ws, AUTONOMOUS_REPORT_JSON)
+    policy = None
+    if isinstance(report_payload, dict):
+        report_policy = report_payload.get("policy") if isinstance(report_payload.get("policy"), dict) else {}
+        policy = report_policy.get("incident_send_policy") if isinstance(report_policy.get("incident_send_policy"), dict) else None
+
+    if not isinstance(policy, dict):
+        metadata_payload = _safe_json_read(ws, ".autodev/run_metadata.json")
+        if isinstance(metadata_payload, dict) and isinstance(metadata_payload.get("autonomous_incident_send_policy"), dict):
+            policy = metadata_payload.get("autonomous_incident_send_policy")
+
+    policy = policy if isinstance(policy, dict) else {}
+    return {
+        "dedupe_window_sec": int(_as_int(policy.get("dedupe_window_sec")) or 0),
+        "rate_limit_window_sec": int(_as_int(policy.get("rate_limit_window_sec")) or 0),
+        "rate_limit_global_max": _as_int(policy.get("rate_limit_global_max")),
+        "rate_limit_per_target_max": _as_int(policy.get("rate_limit_per_target_max")),
+        "force_send": bool(policy.get("force_send", False)),
+    }
+
+
+def _resolve_incident_replay_entry(
+    entries: list[dict[str, Any]],
+    entry_ref: str,
+) -> tuple[dict[str, Any], int]:
+    token = str(entry_ref or "").strip()
+    if not token:
+        raise ValueError("incident replay entry must be provided")
+
+    for index, item in enumerate(entries, start=1):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("entry_id") or "") == token:
+            return item, index
+
+    parsed_index = _as_int(token)
+    if parsed_index is None:
+        raise ValueError(f"incident replay entry not found: {token}")
+    if parsed_index <= 0:
+        raise ValueError("incident replay index must be >= 1 (1-based)")
+    if parsed_index > len(entries):
+        raise ValueError(f"incident replay index out of range: {parsed_index} (entries={len(entries)})")
+
+    selected = entries[parsed_index - 1]
+    if not isinstance(selected, dict):
+        raise ValueError(f"incident replay entry at index {parsed_index} is invalid")
+    return selected, parsed_index
+
+
+def _incident_replay_target_from_entry(entry: dict[str, Any]) -> str:
+    target = str(entry.get("target") or "").strip().lower()
+    export_format = str(entry.get("format") or "markdown").strip() or "markdown"
+    if not target:
+        raise ValueError("incident replay entry is missing target")
+    return f"{target}:{export_format}"
+
+
 def _persist_incident_send_attempt(
     ws: Workspace,
     *,
     send_result: dict[str, Any],
+    source: str = "incident_send",
+    replay_of: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     existing = _safe_json_read(ws, AUTONOMOUS_INCIDENT_SEND_JSON)
     if not isinstance(existing, dict):
@@ -1923,12 +2102,28 @@ def _persist_incident_send_attempt(
             "attempts": [],
         }
 
+    audit_entries = _append_incident_send_audit_entries(
+        ws,
+        send_result=send_result,
+        source=source,
+        replay_of=replay_of,
+    )
+    latest_audit = audit_entries[-1] if audit_entries else None
+
+    persisted_attempt = dict(send_result)
+    if isinstance(latest_audit, dict):
+        persisted_attempt["audit_trail"] = {
+            "path": AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL,
+            "latest_entry_id": latest_audit.get("entry_id"),
+            "latest_recorded_at": latest_audit.get("recorded_at"),
+        }
+
     attempts = existing.get("attempts") if isinstance(existing.get("attempts"), list) else []
-    attempts.append(send_result)
+    attempts.append(persisted_attempt)
     payload = {
         "schema_version": existing.get("schema_version") or send_result.get("schema_version") or "av3-009-v1",
         "updated_at": _utc_now(),
-        "latest": send_result,
+        "latest": persisted_attempt,
         "attempts": attempts,
     }
     ws.write_text(AUTONOMOUS_INCIDENT_SEND_JSON, json_dumps(payload))
@@ -1963,7 +2158,7 @@ def _maybe_send_incident_packet(
         },
         history_attempts=[item for item in history_attempts if isinstance(item, dict)],
     )
-    persisted = _persist_incident_send_attempt(ws, send_result=result)
+    persisted = _persist_incident_send_attempt(ws, send_result=result, source="autonomous")
     latest = persisted.get("latest")
     return latest if isinstance(latest, dict) else result
 
@@ -2588,8 +2783,14 @@ def _render_report(
         "incident_packet_path": AUTONOMOUS_INCIDENT_PACKET_JSON,
         "incident_packet_generated": not ok,
         "incident_send_path": AUTONOMOUS_INCIDENT_SEND_JSON,
+        "incident_send_audit_path": AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL,
         "incident_send": incident_send,
         "incident_send_attempted": isinstance(incident_send, dict),
+        "incident_send_audit_latest_entry_id": (
+            str((incident_send.get("audit_trail") or {}).get("latest_entry_id") or "")
+            if isinstance(incident_send, dict) and isinstance(incident_send.get("audit_trail"), dict)
+            else ""
+        ),
         "incident_send_suppressed": bool(incident_send.get("suppressed")) if isinstance(incident_send, dict) else False,
         "incident_send_reason_codes": (
             [str(code) for code in incident_send.get("suppression_reason_codes", []) if code]
@@ -2748,9 +2949,16 @@ def _render_report(
                 f"- Force override: applied={force_override.get('applied')} "
                 f"(code={force_override.get('code') or '-'})"
             )
+        audit_trail = incident_send.get("audit_trail") if isinstance(incident_send.get("audit_trail"), dict) else None
+        if isinstance(audit_trail, dict):
+            md.append(
+                f"- Audit trail: `{audit_trail.get('path') or AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL}` "
+                f"(latest_entry_id={audit_trail.get('latest_entry_id') or '-'})"
+            )
         md.append(f"- Artifact: `{AUTONOMOUS_INCIDENT_SEND_JSON}`")
     else:
         md.append("- Attempted: no")
+        md.append(f"- Audit trail: `{AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL}`")
 
     if isinstance(preflight, dict):
         preflight_diagnostics = preflight.get("diagnostics") if isinstance(preflight.get("diagnostics"), list) else []
@@ -2845,6 +3053,11 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     incident_send.add_argument("--target", action="append", default=None, help="Target spec, e.g. stdout or log:markdown")
     incident_send.add_argument("--dry-run", default="true", type=_parse_cli_bool)
     incident_send.add_argument("--force-send", default="false", type=_parse_cli_bool)
+
+    incident_replay = sub.add_parser("incident-replay", help="replay a prior incident-send audit entry")
+    incident_replay.add_argument("--run-dir", required=True)
+    incident_replay.add_argument("--entry", required=True, help="Audit entry id or 1-based index")
+    incident_replay.add_argument("--live", action="store_true", help="Send live replay (default dry-run).")
 
     return ap
 
@@ -3440,6 +3653,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     guard_path = artifacts_dir / "autonomous_guard_decisions.json"
     incident_packet_path = artifacts_dir / "autonomous_incident_packet.json"
     incident_send_path = artifacts_dir / "autonomous_incident_send.json"
+    incident_send_audit_path = artifacts_dir / "autonomous_incident_send_audit.jsonl"
 
     report_payload, report_error = _safe_load_json(report_path)
     gate_payload, gate_error = _safe_load_json(gate_path)
@@ -3457,6 +3671,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "guard_decisions": {"path": str(guard_path), "status": "ok" if guard_error is None else guard_error},
         "incident_packet": {"path": str(incident_packet_path), "status": "ok" if incident_packet_error is None else incident_packet_error},
         "incident_send": {"path": str(incident_send_path), "status": "ok" if incident_send_error is None else incident_send_error},
+        "incident_send_audit": {"path": str(incident_send_audit_path), "status": "missing"},
     }
 
     for name, err in (
@@ -3518,6 +3733,41 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             }
         )
     artifact_status["incident_send"]["status"] = incident_send_status
+
+    incident_send_audit_entries: list[dict[str, Any]] = []
+    incident_send_audit_error: str | None = None
+    if incident_send_audit_path.exists():
+        try:
+            for raw in incident_send_audit_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    incident_send_audit_entries.append(parsed)
+        except Exception as e:
+            incident_send_audit_error = f"invalid_jsonl: {e}"
+    else:
+        incident_send_audit_error = "missing"
+
+    incident_send_audit_status = "ok" if incident_send_audit_error is None else incident_send_audit_error
+    if incident_send_audit_error == "missing" and not incident_send_attempted:
+        incident_send_audit_status = "not_attempted"
+    if incident_send_attempted and incident_send_audit_error is not None:
+        warnings.append(f"incident_send_audit: {incident_send_audit_error}")
+        diagnostics.append(
+            {
+                "type": "autonomous_summary_warning",
+                "taxonomy_version": _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION,
+                "code": "summary.artifact_unavailable",
+                "artifact": "incident_send_audit",
+                "severity": "warning",
+                "message": f"incident_send_audit: {incident_send_audit_error}",
+            }
+        )
+    artifact_status["incident_send_audit"]["status"] = incident_send_audit_status
+
+    incident_send_audit_latest = incident_send_audit_entries[-1] if incident_send_audit_entries else None
 
     incident_send_latest = incident_send_payload.get("latest") if isinstance(incident_send_payload, dict) and isinstance(incident_send_payload.get("latest"), dict) else None
     incident_send_reason_codes = (
@@ -3696,6 +3946,18 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             "payload": incident_send_payload,
         },
         "incident_send_status": incident_send_status,
+        "incident_send_audit": {
+            "path": str(incident_send_audit_path),
+            "status": incident_send_audit_status,
+            "latest": incident_send_audit_latest,
+            "entries_count": len(incident_send_audit_entries),
+        },
+        "incident_send_audit_status": incident_send_audit_status,
+        "incident_send_audit_latest_entry_id": (
+            str(incident_send_audit_latest.get("entry_id") or "")
+            if isinstance(incident_send_audit_latest, dict)
+            else ""
+        ),
         "incident_send_suppressed": incident_send_suppressed,
         "incident_send_reason_codes": incident_send_reason_codes,
         "resume_diagnostics": resume_diagnostics,
@@ -3729,6 +3991,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         f"- incident_escalation_class: {summary.get('incident_escalation_class', '-')}",
         f"- incident_packet: {incident_packet.get('status', '-') } ({incident_packet.get('path', '-')})",
         f"- incident_send: {incident_send.get('status', '-') } ({incident_send.get('path', '-')})",
+        f"- incident_send_audit: {summary.get('incident_send_audit_status', '-') } ({(summary.get('incident_send_audit') or {}).get('path', '-')})",
         f"- incident_send_suppressed: {summary.get('incident_send_suppressed', False)}",
         f"- gate_counts: pass={gate_counts.get('pass', 0)}, fail={gate_counts.get('fail', 0)}, total={gate_counts.get('total', 0)}",
     ]
@@ -3758,6 +4021,12 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         lines.append(f"- incident_send_reason_codes: {','.join(str(code) for code in incident_send_reason_codes)}")
     else:
         lines.append("- incident_send_reason_codes: -")
+
+    incident_send_audit_latest_entry_id = str(summary.get("incident_send_audit_latest_entry_id") or "").strip()
+    if incident_send_audit_latest_entry_id:
+        lines.append(f"- incident_send_audit_latest_entry_id: {incident_send_audit_latest_entry_id}")
+    else:
+        lines.append("- incident_send_audit_latest_entry_id: -")
 
     if dominant_codes:
         codes_text = ", ".join(
@@ -3824,7 +4093,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("Artifacts:")
-    for name in ("report", "gate_results", "strategy_trace", "guard_decisions", "incident_packet", "incident_send"):
+    for name in ("report", "gate_results", "strategy_trace", "guard_decisions", "incident_packet", "incident_send", "incident_send_audit"):
         item = artifacts.get(name) if isinstance(artifacts.get(name), dict) else {}
         lines.append(f"- {name}: {item.get('status', 'missing')} ({item.get('path', '-')})")
 
@@ -3914,14 +4183,64 @@ def _incident_send(argv: list[str]) -> None:
     except (FileNotFoundError, ValueError) as e:
         raise SystemExit(str(e)) from e
 
-    payload = _persist_incident_send_attempt(ws, send_result=send_result)
+    payload = _persist_incident_send_attempt(ws, send_result=send_result, source="cli.incident_send")
+    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else send_result
+    print(json_dumps(latest))
+
+
+def _incident_replay(argv: list[str]) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(["incident-replay", *argv])
+    ws = Workspace(str(Path(args.run_dir).expanduser().resolve()))
+
+    audit_entries = _load_incident_send_audit_entries(ws)
+    if not audit_entries:
+        raise SystemExit(f"incident replay audit trail is empty: {ws.root}/{AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL}")
+
+    try:
+        selected_entry, selected_index = _resolve_incident_replay_entry(audit_entries, args.entry)
+        replay_target = _incident_replay_target_from_entry(selected_entry)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+
+    existing = _safe_json_read(ws, AUTONOMOUS_INCIDENT_SEND_JSON)
+    history_attempts = existing.get("attempts") if isinstance(existing, dict) and isinstance(existing.get("attempts"), list) else []
+
+    send_policy = _resolve_incident_send_policy_from_artifacts(ws)
+    send_policy["force_send"] = bool(args.live)
+
+    try:
+        send_result = send_incident_packet(
+            run_dir=args.run_dir,
+            targets=[replay_target],
+            dry_run=(not bool(args.live)),
+            trigger="autonomous.cli.incident_replay",
+            send_policy=send_policy,
+            history_attempts=[item for item in history_attempts if isinstance(item, dict)],
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
+    send_result["replay"] = {
+        "source_entry_id": selected_entry.get("entry_id"),
+        "source_entry_index": selected_index,
+        "source_decision": selected_entry.get("decision"),
+        "live": bool(args.live),
+    }
+
+    payload = _persist_incident_send_attempt(
+        ws,
+        send_result=send_result,
+        source="cli.incident_replay",
+        replay_of={"entry_id": selected_entry.get("entry_id"), "index": selected_index},
+    )
     latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else send_result
     print(json_dumps(latest))
 
 
 def cli(argv: list[str]) -> None:
     if not argv:
-        raise SystemExit("Usage: autodev autonomous <start|status|summary|incident-export|incident-send> ...")
+        raise SystemExit("Usage: autodev autonomous <start|status|summary|incident-export|incident-send|incident-replay> ...")
     action = argv[0]
     if action == "start":
         _start(argv[1:])
@@ -3937,5 +4256,8 @@ def cli(argv: list[str]) -> None:
         return
     if action == "incident-send":
         _incident_send(argv[1:])
+        return
+    if action == "incident-replay":
+        _incident_replay(argv[1:])
         return
     raise SystemExit(f"Unknown autonomous subcommand: {action}")
