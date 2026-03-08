@@ -279,7 +279,7 @@ Precedence: `--model` > `AUTODEV_LLM_MODEL` > `config.yaml` (`llm.model`).
 
 ### Performance knobs (generate cycles)
 - `make fast` for quick iteration
-- `make strict` (or `make ci`) before pushing/release
+- `make strict` (or `make ci`) before pushing/release (`make strict` now includes `make check-release-autonomous`)
 - `make benchmark-generate` for baseline vs optimized generation timing smoke
 - `make perf-smoke` for lightweight performance snapshot from a generated run
 - `make perf-strict` for conservative regression gate against previous `generated_dir/.autodev/perf.json`
@@ -443,6 +443,7 @@ Autonomous artifacts are written under the run directory:
 - `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 
 See `docs/AUTONOMOUS_MODE.md` for detailed policy and operational behavior.
+For release gate steps and rollout guardrails, see `docs/ops/AUTONOMOUS_V2_RELEASE_CHECKLIST.md`.
 For commercial-grade autonomous delivery strategy and rollout governance, see `docs/AUTONOMOUS_COMMERCIAL_PLAN.md`.
 
 Update (v1b, 2026-03-07): autonomous commercial rollout references were refreshed across README/onboarding/autonomous-mode docs for easier operator discovery.
@@ -502,6 +503,15 @@ python scripts/autonomous_e2e_smoke.py --artifacts-dir ./artifacts/autonomous-e2
 This deterministic smoke lane validates preflight pass, quality-gate failure evaluation, stop-guard decision persistence,
 `autodev autonomous summary` extraction, and GUI/API parity via `/api/autonomous/quality-gate/latest`.
 Artifacts are persisted under `./artifacts/autonomous-e2e-smoke/<timestamp>/`.
+
+Autonomous release evidence check (AV2-014):
+```bash
+make check-release-autonomous
+# or
+python scripts/check_release_autonomous.py --artifacts-dir ./artifacts/autonomous-e2e-smoke
+```
+The checker validates required release signals exist (preflight/gate/guard/summary/API smoke evidence)
+and returns deterministic fail reasons for missing artifacts.
 
 RC dry-run command (no process spawn):
 ```bash

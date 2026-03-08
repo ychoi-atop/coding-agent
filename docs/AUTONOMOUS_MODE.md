@@ -12,6 +12,7 @@
 This is a **v1 practical slice**: stable CLI loop + policy boundaries + resumable state.
 
 For commercial rollout governance (quality/release gates, recovery playbooks, KPI/roadmap), see `docs/AUTONOMOUS_COMMERCIAL_PLAN.md`.
+For release checklist + rollout guardrails used in Go/No-Go decisions, see `docs/ops/AUTONOMOUS_V2_RELEASE_CHECKLIST.md`.
 
 Update (v1b, 2026-03-07): link and rollout-governance references were refreshed to keep autonomous-mode operators aligned with the commercial delivery plan.
 
@@ -80,6 +81,18 @@ The smoke run is deterministic and lightweight (no live LLM/network dependency):
 5) GUI/API snapshot parity via `/api/autonomous/quality-gate/latest`
 
 Artifacts/logs are persisted under `artifacts/autonomous-e2e-smoke/<timestamp>/` for debugging.
+
+### Autonomous release evidence check (AV2-014)
+
+```bash
+make check-release-autonomous
+# or
+python scripts/check_release_autonomous.py --artifacts-dir ./artifacts/autonomous-e2e-smoke
+```
+
+This deterministic checker validates required release evidence signals from the latest smoke run:
+preflight, quality-gate attempts, stop-guard reason code, summary snapshot, and
+`/api/autonomous/quality-gate/latest` parity snapshot.
 
 ---
 

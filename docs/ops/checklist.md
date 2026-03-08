@@ -60,10 +60,12 @@ make perf-strict
 ```bash
 make smoke-local-simple-e2e
 make smoke-autonomous-e2e
+make check-release-autonomous
 ```
 
 - `smoke-local-simple-e2e`: GUI/API local-simple critical-path smoke.
 - `smoke-autonomous-e2e`: deterministic autonomous end-to-end smoke (preflight → gate fail eval → guard stop → summary CLI → `/api/autonomous/quality-gate/latest`).
+- `check-release-autonomous`: validates required autonomous release evidence signals (preflight/gate/guard/summary/API smoke) from the latest smoke artifact.
 
 ## 3) Release-readiness (Go/No-Go)
 
@@ -79,7 +81,8 @@ make smoke-autonomous-e2e
 2. `make check-template` must pass (workflow parity drift free)
 3. `make check-locks` must pass (requirements vs lock parity)
 4. `docs/ops/check_template_parity_audit.py` pass criteria: workflow/docs references are in sync
-5. Known-risk items must have mitigation notes in this checklist
+5. `make check-release-autonomous` must pass (autonomous v2 smoke evidence complete)
+6. Known-risk items must have mitigation notes in this checklist
 
 ### Weekly cadence
 - **Mon**: lightweight run `make compile`, `make check`
