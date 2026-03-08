@@ -7,8 +7,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from autodev.autonomous_evidence_schema import (  # noqa: E402
+    AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
+    validate_schema_payload,
+)
+
 DEFAULT_ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "autonomous-e2e-smoke"
 
 
@@ -49,8 +56,44 @@ def _expect_non_empty(value: Any, *, path: str, errors: list[str]) -> None:
         errors.append(f"{path} is missing or empty")
 
 
-def validate(run_dir: Path) -> dict[str, Any]:
+def _validate_schema(
+    *,
+    artifacts: dict[str, tuple[str, Any]],
+    tolerant_legacy: bool,
+    errors: list[str],
+    warnings: list[str],
+) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for name, (path, value) in artifacts.items():
+        if not isinstance(value, dict):
+            if tolerant_legacy and name in ("report", "strategy"):
+                warnings.append(
+                    f"legacy compatibility mode: optional {path} missing; accepted for AV2 artifacts"
+                )
+                versions[name] = "av2-legacy"
+                continue
+            errors.append(f"{path} must be an object")
+            continue
+
+        version, diagnostics = validate_schema_payload(
+            name=name,
+            payload=value,
+            path=path,
+            tolerant_legacy=tolerant_legacy,
+        )
+        versions[name] = version
+        for item in diagnostics:
+            if item.level == "warning":
+                warnings.append(item.message)
+            else:
+                errors.append(item.message)
+
+    return versions
+
+
+def validate(run_dir: Path, *, tolerant_legacy: bool = True) -> dict[str, Any]:
     errors: list[str] = []
+    warnings: list[str] = []
 
     result = _load_json(run_dir / "result.json")
     snapshots = _load_json(run_dir / "snapshots.json")
@@ -105,12 +148,28 @@ def validate(run_dir: Path) -> dict[str, Any]:
         errors=errors,
     )
 
+    schema_versions = _validate_schema(
+        artifacts={
+            "report": ("snapshots.report", snapshots_obj.get("report")),
+            "gate": ("snapshots.gate_results", gate_results),
+            "strategy": ("snapshots.strategy_trace", snapshots_obj.get("strategy_trace")),
+            "guard": ("snapshots.guard", guard),
+            "preflight": ("snapshots.state.preflight", preflight),
+            "summary_snapshot": ("snapshots.summary_json", summary),
+        },
+        tolerant_legacy=tolerant_legacy,
+        errors=errors,
+        warnings=warnings,
+    )
+
     if errors:
         raise ValidationError(errors)
 
     return {
         "ok": True,
         "run_dir": str(run_dir),
+        "warnings": warnings,
+        "schema_versions": schema_versions,
         "signals": {
             "preflight": preflight.get("status"),
             "gate_attempts": len(attempts),
@@ -122,7 +181,7 @@ def validate(run_dir: Path) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="AV2-014 autonomous release evidence checker")
+    ap = argparse.ArgumentParser(description="AV3-002 autonomous release evidence checker")
     ap.add_argument(
         "--artifacts-dir",
         default=str(DEFAULT_ARTIFACTS_DIR),
@@ -132,6 +191,14 @@ def parse_args() -> argparse.Namespace:
         "--run-dir",
         default="",
         help="specific smoke run directory to verify (defaults to latest under --artifacts-dir)",
+    )
+    ap.add_argument(
+        "--strict-schema",
+        action="store_true",
+        help=(
+            "require declared schema_version for all evidence artifacts "
+            f"(expected {AUTONOMOUS_EVIDENCE_SCHEMA_VERSION})"
+        ),
     )
     ap.add_argument("--json", action="store_true", help="print machine-readable JSON output")
     return ap.parse_args()
@@ -143,12 +210,12 @@ def main() -> int:
     run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else _latest_run_dir(Path(args.artifacts_dir).expanduser().resolve())
 
     try:
-        summary = validate(run_dir)
+        summary = validate(run_dir, tolerant_legacy=not bool(args.strict_schema))
     except ValidationError as exc:
         if args.json:
             print(json.dumps({"ok": False, "run_dir": str(run_dir), "errors": exc.errors}, ensure_ascii=False, indent=2))
         else:
-            print("[AV2-014 release check] FAIL")
+            print("[AV3-002 release check] FAIL")
             print(f"run_dir: {run_dir}")
             for idx, error in enumerate(exc.errors, start=1):
                 print(f"  {idx}. {error}")
@@ -157,9 +224,13 @@ def main() -> int:
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
-        print("[AV2-014 release check] PASS")
+        print("[AV3-002 release check] PASS")
         print(f"run_dir: {summary['run_dir']}")
         print(f"guard_reason_code: {summary['signals']['guard_reason_code']}")
+        if summary.get("warnings"):
+            print("warnings:")
+            for warning in summary["warnings"]:
+                print(f"  - {warning}")
     return 0
 
 

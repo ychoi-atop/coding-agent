@@ -11,7 +11,7 @@ make smoke-autonomous-e2e
 Expected output:
 - `[AV2-013 smoke] PASS`
 - new artifact run under `artifacts/autonomous-e2e-smoke/<timestamp>/`
-- `result.json` + `snapshots.json`
+- `result.json` + `snapshots.json` (AV3 schema tagged with `schema_version: "av3-002-v1"`)
 
 ## 2) Verify required autonomous signals exist
 
@@ -24,9 +24,15 @@ python scripts/check_release_autonomous.py --artifacts-dir ./artifacts/autonomou
 Required evidence signals (must all be present):
 - **preflight**: `snapshots.state.preflight.status == "passed"`
 - **quality gate**: `snapshots.gate_results.attempts` non-empty
+- **strategy trace**: `snapshots.strategy_trace.attempts` exists (AV3 schema)
 - **stop-guard**: `snapshots.guard.latest.reason_code` present
+- **report**: `snapshots.report` includes run/preflight/guard summary fields (AV3 schema)
 - **summary**: `snapshots.summary_json` includes preflight + gate counts + guard decision
 - **API smoke**: `snapshots.quality_gate_latest` not empty and includes summary guard decision
+
+Schema behavior:
+- Default mode is tolerant for legacy AV2 artifacts (missing `schema_version` emits explicit warnings).
+- Use `python scripts/check_release_autonomous.py --strict-schema ...` to enforce declared AV3 schema on all evidence artifacts.
 
 If check fails, fix the missing evidence and rerun smoke/check before release.
 

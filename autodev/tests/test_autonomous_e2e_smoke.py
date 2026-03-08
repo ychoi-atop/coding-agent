@@ -35,10 +35,14 @@ def test_autonomous_e2e_smoke_script_passes_and_persists_snapshots(tmp_path: Pat
     result = json.loads((latest / "result.json").read_text(encoding="utf-8"))
     snapshots = json.loads((latest / "snapshots.json").read_text(encoding="utf-8"))
 
+    assert result["schema_version"] == "av3-002-v1"
     assert result["ok"] is True
     assert result["guard_reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
 
+    assert snapshots["schema_version"] == "av3-002-v1"
     assert snapshots["state"]["preflight"]["status"] == "passed"
+    assert snapshots["report"]["schema_version"] == "av3-002-v1"
+    assert snapshots["strategy_trace"]["schema_version"] == "av3-002-v1"
     assert snapshots["summary_json"]["preflight_status"] == "passed"
     assert snapshots["summary_json"]["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
 

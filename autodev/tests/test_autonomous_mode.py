@@ -417,10 +417,13 @@ def test_autonomous_quality_gate_results_artifact_persisted(tmp_path, monkeypatc
     gate_artifact = json.loads((run_dir / ".autodev" / "autonomous_gate_results.json").read_text(encoding="utf-8"))
     report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
 
+    assert gate_artifact["schema_version"] == "av3-002-v1"
     assert gate_artifact["policy"]["tests"]["min_pass_rate"] == 0.9
     assert len(gate_artifact["attempts"]) == 1
     assert gate_artifact["attempts"][0]["gate_results"]["passed"] is True
 
+    assert report["schema_version"] == "av3-002-v1"
+    assert report["preflight"]["schema_version"] == "av3-002-v1"
     assert report["gate_results"]["passed"] is True
     assert report["iterations_gate_failed"] == 0
 
@@ -854,6 +857,7 @@ def test_autonomous_stop_guard_repeated_gate_failure_triggers_early_stop_and_per
     assert report["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
     assert report["guard_decisions_total"] == 1
 
+    assert guard_artifact["schema_version"] == "av3-002-v1"
     assert guard_artifact["latest"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
     assert len(guard_artifact["decisions"]) == 1
 
@@ -1016,6 +1020,7 @@ def test_autonomous_strategy_trace_artifact_persisted_and_report_state_include_l
     assert state["attempts"][3]["strategy"]["rotation_applied"] is True
     assert state["attempts"][3]["strategy"]["name"] == "security-focused"
 
+    assert strategy_trace["schema_version"] == "av3-002-v1"
     assert strategy_trace["latest"]["name"] == "security-focused"
     assert len(strategy_trace["attempts"]) == 4
     assert report["latest_strategy"]["name"] == "security-focused"

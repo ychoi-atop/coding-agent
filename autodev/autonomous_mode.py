@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 from uuid import uuid4
 
+from .autonomous_evidence_schema import AUTONOMOUS_EVIDENCE_SCHEMA_VERSION
 from .autonomous_gate_signals import (
     NormalizedValidationSignal,
     make_gate_failure_reason,
@@ -920,6 +921,7 @@ def _write_strategy_trace_artifact(ws: Workspace, attempts: list[dict[str, Any]]
 
     latest = strategy_attempts[-1]["strategy"] if strategy_attempts else None
     payload = {
+        "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "updated_at": _utc_now(),
         "attempts": strategy_attempts,
         "latest": latest,
@@ -1025,6 +1027,7 @@ def _write_guard_decisions_artifact(
             )
 
     payload = {
+        "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "updated_at": _utc_now(),
         "policy": asdict(policy),
         "decisions": decisions,
@@ -1457,6 +1460,7 @@ def _run_autonomous_preflight(
     ]
 
     return {
+        "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "status": "passed" if not diagnostics else "failed",
         "ok": len(diagnostics) == 0,
         "taxonomy_version": _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION,
@@ -1827,6 +1831,7 @@ def _write_gate_results_artifact(
         )
 
     payload = {
+        "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "updated_at": _utc_now(),
         "policy": asdict(policy),
         "attempts": gate_attempts,
@@ -2076,6 +2081,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
     operator_reason_codes = _collect_operator_reason_codes(state, attempts)
     operator_guidance = _build_operator_guidance(operator_reason_codes)
     report = {
+        "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "mode": "autonomous_v1",
         "ok": ok,
         "run_id": state.get("run_id"),
@@ -2982,6 +2988,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         )
 
     return {
+        "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "mode": "autonomous_v1_summary",
         "run_dir": str(run_path),
         "status": status,

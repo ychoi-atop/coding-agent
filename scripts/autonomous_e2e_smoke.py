@@ -21,6 +21,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from autodev.autonomous_evidence_schema import AUTONOMOUS_EVIDENCE_SCHEMA_VERSION
+
 
 class _FakeClient:
     def __init__(self, **kwargs: Any) -> None:
@@ -233,14 +235,20 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
         state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
         gate_results = json.loads((run_dir / ".autodev" / "autonomous_gate_results.json").read_text(encoding="utf-8"))
         guard = json.loads((run_dir / ".autodev" / "autonomous_guard_decisions.json").read_text(encoding="utf-8"))
+        strategy_trace = json.loads((run_dir / ".autodev" / "autonomous_strategy_trace.json").read_text(encoding="utf-8"))
+        report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
 
+        snapshots["schema_version"] = AUTONOMOUS_EVIDENCE_SCHEMA_VERSION
         snapshots["state"] = {
+            "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
             "status": state.get("status"),
             "failure_reason": state.get("failure_reason"),
             "current_iteration": state.get("current_iteration"),
             "preflight": state.get("preflight"),
         }
+        snapshots["report"] = report
         snapshots["gate_results"] = gate_results
+        snapshots["strategy_trace"] = strategy_trace
         snapshots["guard"] = guard
 
         preflight = state.get("preflight") if isinstance(state.get("preflight"), dict) else {}
@@ -255,6 +263,8 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
 
         summary_json_raw = _run_summary_cli(run_dir, fmt="json")
         summary_json = json.loads(summary_json_raw)
+        if isinstance(summary_json, dict):
+            summary_json.setdefault("schema_version", AUTONOMOUS_EVIDENCE_SCHEMA_VERSION)
         snapshots["summary_json"] = summary_json
 
         if summary_json.get("preflight_status") != "passed":
@@ -295,6 +305,11 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
 
             _wait_for_health(base_url)
             api_snapshot = _http_json("GET", f"{base_url}/api/autonomous/quality-gate/latest")
+            if isinstance(api_snapshot, dict):
+                api_snapshot.setdefault("schema_version", AUTONOMOUS_EVIDENCE_SCHEMA_VERSION)
+                api_summary = api_snapshot.get("summary")
+                if isinstance(api_summary, dict):
+                    api_summary.setdefault("schema_version", AUTONOMOUS_EVIDENCE_SCHEMA_VERSION)
             snapshots["quality_gate_latest"] = api_snapshot
 
             latest = api_snapshot.get("latest") if isinstance(api_snapshot.get("latest"), dict) else {}
@@ -315,6 +330,7 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
         _write_json(
             run_artifacts / "result.json",
             {
+                "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
                 "ok": True,
                 "artifacts": str(run_artifacts),
                 "run_dir": str(run_dir),
@@ -330,6 +346,7 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
         _write_json(
             run_artifacts / "result.json",
             {
+                "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
                 "ok": False,
                 "error": str(exc),
                 "artifacts": str(run_artifacts),
