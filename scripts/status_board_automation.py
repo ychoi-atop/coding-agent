@@ -17,15 +17,21 @@ AV4-003 scope:
 AV4-004 scope:
 - expand canonical event registry beyond kickoff with practical lifecycle events
 - keep apply/drift behavior deterministic across event-to-event transitions
+
+AV4-005 scope:
+- append-only status-hook audit log (apply/drift-check/replay)
+- replay prior audit entry safely (dry-run default; opt-in apply)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 
@@ -58,6 +64,7 @@ PLAN_TITLE_PREFIX = "# PLAN — Next Wave ("
 PLAN_AV4_PREFIX = "- AV4 "
 BACKLOG_TITLE_PREFIX = "# BACKLOG — Next Wave ("
 BACKLOG_AV4_PREFIX = "- AV4 "
+DEFAULT_AUDIT_LOG_RELATIVE = "artifacts/status-hooks/status-hook-audit.jsonl"
 
 EXPECTED_DOC_TRANSITIONS = (
     "STATUS_BOARD_CURRENT.md",
@@ -405,6 +412,123 @@ def drift_check_event(event: str, *, docs_root: Path, timestamp: str | None = No
     return drifted
 
 
+def _default_audit_log_path() -> Path:
+    return Path(__file__).resolve().parents[1] / DEFAULT_AUDIT_LOG_RELATIVE
+
+
+def _make_audit_entry(
+    *,
+    hook_event_id: str,
+    mode: str,
+    target_docs: Sequence[Path],
+    outcome: str,
+    diagnostics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "timestamp": _kst_timestamp(),
+        "event_id": f"sha-{uuid4().hex[:12]}",
+        "hook_event_id": hook_event_id,
+        "mode": mode,
+        "target_docs": [str(p) for p in target_docs],
+        "outcome": outcome,
+        "diagnostics": dict(diagnostics or {}),
+    }
+
+
+def _append_audit_entry(audit_log_path: Path, entry: Mapping[str, Any]) -> None:
+    audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with audit_log_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _load_audit_entries(audit_log_path: Path) -> list[dict[str, Any]]:
+    if not audit_log_path.exists():
+        return []
+    parsed: list[dict[str, Any]] = []
+    for line_no, raw in enumerate(audit_log_path.read_text(encoding="utf-8").splitlines(), start=1):
+        row = raw.strip()
+        if not row:
+            continue
+        try:
+            value = json.loads(row)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid audit log JSON at line {line_no}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"invalid audit log entry at line {line_no}: expected JSON object")
+        parsed.append(value)
+    return parsed
+
+
+def _resolve_replay_entry(entries: Sequence[Mapping[str, Any]], selector: str) -> tuple[Mapping[str, Any], int]:
+    if not entries:
+        raise ValueError("status-hook audit trail is empty")
+
+    token = selector.strip()
+    if not token:
+        raise ValueError("replay selector is required (entry id or 1-based index)")
+
+    if token.isdigit():
+        idx = int(token)
+        if idx <= 0:
+            raise ValueError("replay index must be >= 1")
+        if idx > len(entries):
+            raise ValueError(f"replay index out of range: {idx} (entries={len(entries)})")
+        return entries[idx - 1], idx
+
+    for i, entry in enumerate(entries, start=1):
+        if str(entry.get("event_id") or "").strip() == token:
+            return entry, i
+
+    raise ValueError(f"replay entry id not found: {token}")
+
+
+def replay_audit_entry(
+    *,
+    selector: str,
+    docs_root: Path,
+    audit_log_path: Path,
+    apply: bool,
+    timestamp: str | None,
+) -> tuple[str, list[Path], Mapping[str, Any], int]:
+    entries = _load_audit_entries(audit_log_path)
+    selected, selected_index = _resolve_replay_entry(entries, selector)
+
+    hook_event_id = str(selected.get("hook_event_id") or "").strip()
+    if not hook_event_id:
+        raise ValueError("selected audit entry is missing hook_event_id")
+
+    previous_diag = selected.get("diagnostics") if isinstance(selected.get("diagnostics"), Mapping) else {}
+    replay_timestamp = timestamp
+    if replay_timestamp is None:
+        selected_requested_timestamp = previous_diag.get("requested_timestamp") if isinstance(previous_diag, Mapping) else None
+        if isinstance(selected_requested_timestamp, str) and selected_requested_timestamp.strip():
+            replay_timestamp = selected_requested_timestamp
+
+    if apply:
+        changed = apply_event(hook_event_id, docs_root=docs_root, timestamp=replay_timestamp)
+        outcome = "replayed_apply"
+    else:
+        originals, expected = _compute_expected_contents(
+            hook_event_id,
+            docs_root=docs_root,
+            timestamp=replay_timestamp,
+            preserve_existing_timestamp=False,
+        )
+        changed = [path for path, expected_content in expected.items() if expected_content != originals[path]]
+        outcome = "replayed_dry_run"
+
+    diagnostics = {
+        "replay_selector": selector,
+        "replay_source_event_id": selected.get("event_id"),
+        "replay_source_index": selected_index,
+        "replay_source_mode": selected.get("mode"),
+        "requested_timestamp": replay_timestamp,
+        "changed_docs": [str(p) for p in changed],
+        "changed_docs_count": len(changed),
+    }
+    return hook_event_id, changed, diagnostics, selected_index
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("event", nargs="?", help="canonical event key (e.g. av4.kickoff.started)")
@@ -427,6 +551,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--drift-check",
         action="store_true",
         help="no-write mode: fail when docs diverge from canonical event output",
+    )
+    parser.add_argument(
+        "--replay",
+        default=None,
+        help="replay prior audit entry by entry id or 1-based index",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="with --replay, actually apply changes (default is safe dry-run)",
+    )
+    parser.add_argument(
+        "--audit-log",
+        default=str(_default_audit_log_path()),
+        help=f"append-only status-hook audit log path (default: {DEFAULT_AUDIT_LOG_RELATIVE})",
     )
     parser.add_argument(
         "--validate-registry",
@@ -452,22 +591,107 @@ def main() -> int:
         print(f"[PASS] Status-hook event registry valid ({len(EVENT_REGISTRY)} event(s)).")
         return 0
 
-    if not args.event:
-        parser.error("event is required unless --validate-registry is used")
-
     docs_root = Path(args.docs_root).resolve()
     if not docs_root.exists():
         parser.error(f"docs root not found: {docs_root}")
 
+    audit_log_path = Path(args.audit_log).resolve()
+
+    if args.replay:
+        if args.event:
+            parser.error("event positional arg cannot be used with --replay")
+        try:
+            hook_event_id, changed, diagnostics, selected_index = replay_audit_entry(
+                selector=args.replay,
+                docs_root=docs_root,
+                audit_log_path=audit_log_path,
+                apply=args.apply,
+                timestamp=args.timestamp,
+            )
+        except ValueError as exc:
+            print(f"[FAIL] Replay failed: {exc}")
+            return 1
+
+        mode = "replay-apply" if args.apply else "replay-dry-run"
+        entry = _make_audit_entry(
+            hook_event_id=hook_event_id,
+            mode=mode,
+            target_docs=[docs_root / p for p in EXPECTED_DOC_TRANSITIONS],
+            outcome="success",
+            diagnostics=diagnostics,
+        )
+        _append_audit_entry(audit_log_path, entry)
+
+        if args.apply:
+            if changed:
+                print(f"[PASS] Replay apply updated docs from audit entry #{selected_index} ({args.replay}):")
+                for path in changed:
+                    print(f"  - {path}")
+            else:
+                print(f"[PASS] Replay apply found no file changes (entry #{selected_index}: {args.replay}).")
+        else:
+            if changed:
+                print(f"[DRY-RUN] Replay would update docs from audit entry #{selected_index} ({args.replay}):")
+                for path in changed:
+                    print(f"  - {path}")
+            else:
+                print(f"[DRY-RUN] Replay found no file changes (entry #{selected_index}: {args.replay}).")
+        return 0
+
+    if not args.event:
+        parser.error("event is required unless --validate-registry or --replay is used")
+
+    target_docs = [docs_root / p for p in EXPECTED_DOC_TRANSITIONS]
+
     if args.drift_check:
-        drifted = drift_check_event(args.event, docs_root=docs_root, timestamp=args.timestamp)
+        try:
+            drifted = drift_check_event(args.event, docs_root=docs_root, timestamp=args.timestamp)
+        except ValueError as exc:
+            print(f"[FAIL] Status hook drift-check failed: {exc}")
+            _append_audit_entry(
+                audit_log_path,
+                _make_audit_entry(
+                    hook_event_id=args.event,
+                    mode="drift-check",
+                    target_docs=target_docs,
+                    outcome="error",
+                    diagnostics={"error": str(exc), "requested_timestamp": args.timestamp},
+                ),
+            )
+            return 1
+
         if drifted:
             print("[FAIL] Status hook drift detected for canonical event:")
             for path in drifted:
                 print(f"  - {path}")
             print("[HINT] Run status_board_automation.py without --drift-check to reconcile docs.")
+            _append_audit_entry(
+                audit_log_path,
+                _make_audit_entry(
+                    hook_event_id=args.event,
+                    mode="drift-check",
+                    target_docs=target_docs,
+                    outcome="drift_detected",
+                    diagnostics={
+                        "requested_timestamp": args.timestamp,
+                        "drifted_docs": [str(p) for p in drifted],
+                        "drifted_docs_count": len(drifted),
+                    },
+                ),
+            )
             return 1
+
         print("[PASS] Status hook drift check passed (docs already match canonical event output).")
+        _append_audit_entry(
+            audit_log_path,
+            _make_audit_entry(
+                hook_event_id=args.event,
+                mode="drift-check",
+                target_docs=target_docs,
+                outcome="pass",
+                diagnostics={"requested_timestamp": args.timestamp, "drifted_docs": [], "drifted_docs_count": 0},
+            ),
+        )
         return 0
 
     if args.dry_run:
@@ -486,13 +710,43 @@ def main() -> int:
             print("[DRY-RUN] No file changes required (already up to date).")
         return 0
 
-    changed = apply_event(args.event, docs_root=docs_root, timestamp=args.timestamp)
+    try:
+        changed = apply_event(args.event, docs_root=docs_root, timestamp=args.timestamp)
+    except ValueError as exc:
+        print(f"[FAIL] Status hook apply failed: {exc}")
+        _append_audit_entry(
+            audit_log_path,
+            _make_audit_entry(
+                hook_event_id=args.event,
+                mode="apply",
+                target_docs=target_docs,
+                outcome="error",
+                diagnostics={"error": str(exc), "requested_timestamp": args.timestamp},
+            ),
+        )
+        return 1
+
     if changed:
         print("[PASS] Updated status docs from canonical event:")
         for path in changed:
             print(f"  - {path}")
     else:
         print("[PASS] Status docs already matched canonical event (no changes).")
+
+    _append_audit_entry(
+        audit_log_path,
+        _make_audit_entry(
+            hook_event_id=args.event,
+            mode="apply",
+            target_docs=target_docs,
+            outcome="updated" if changed else "noop",
+            diagnostics={
+                "requested_timestamp": args.timestamp,
+                "changed_docs": [str(p) for p in changed],
+                "changed_docs_count": len(changed),
+            },
+        ),
+    )
     return 0
 
 

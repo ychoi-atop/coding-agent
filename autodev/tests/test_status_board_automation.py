@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 
+def _script_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "scripts" / "status_board_automation.py"
+
+
 def _load_module():
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "status_board_automation.py"
+    script_path = _script_path()
     spec = importlib.util.spec_from_file_location("status_board_automation", script_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    cmd = [sys.executable, str(_script_path()), *args]
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 def _seed_docs(docs_root: Path) -> None:
@@ -176,3 +187,155 @@ def test_apply_event_unknown_event_raises_with_known_events(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match=r"unknown event 'av4\.unknown'\. Known events: "):
         mod.apply_event("av4.unknown", docs_root=docs_root)
+
+
+def test_cli_appends_audit_for_apply_and_drift_check(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+
+    apply_result = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--timestamp",
+        "2026-03-09 09:00 KST (Asia/Seoul)",
+        "--audit-log",
+        str(audit_path),
+    )
+    assert apply_result.returncode == 0, apply_result.stderr + apply_result.stdout
+
+    drift_result = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--drift-check",
+        "--audit-log",
+        str(audit_path),
+    )
+    assert drift_result.returncode == 0, drift_result.stderr + drift_result.stdout
+
+    rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 2
+    assert rows[0]["mode"] == "apply"
+    assert rows[0]["hook_event_id"] == "av4.execution.in_progress"
+    assert rows[0]["outcome"] in {"updated", "noop"}
+    assert set(Path(p).name for p in rows[0]["target_docs"]) == {
+        "STATUS_BOARD_CURRENT.md",
+        "PLAN_NEXT_WEEK.md",
+        "BACKLOG_NEXT_WEEK.md",
+    }
+    assert rows[1]["mode"] == "drift-check"
+    assert rows[1]["hook_event_id"] == "av4.execution.in_progress"
+    assert rows[1]["outcome"] == "pass"
+
+
+def test_replay_is_dry_run_by_default(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+
+    first = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--timestamp",
+        "2026-03-09 10:00 KST (Asia/Seoul)",
+        "--audit-log",
+        str(audit_path),
+    )
+    assert first.returncode == 0, first.stderr + first.stdout
+
+    baseline_status = (docs_root / "STATUS_BOARD_CURRENT.md").read_text(encoding="utf-8")
+    replay = _run_cli(
+        "--replay",
+        "1",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+    )
+    assert replay.returncode == 0, replay.stderr + replay.stdout
+    assert "[DRY-RUN] Replay" in replay.stdout
+    assert (docs_root / "STATUS_BOARD_CURRENT.md").read_text(encoding="utf-8") == baseline_status
+
+    rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows[-1]["mode"] == "replay-dry-run"
+    assert rows[-1]["diagnostics"]["replay_source_index"] == 1
+
+
+def test_replay_apply_requires_explicit_flag(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+
+    first = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--timestamp",
+        "2026-03-09 11:00 KST (Asia/Seoul)",
+        "--audit-log",
+        str(audit_path),
+    )
+    assert first.returncode == 0, first.stderr + first.stdout
+
+    # Force drift so replay-apply has concrete work.
+    plan_path = docs_root / "PLAN_NEXT_WEEK.md"
+    plan_path.write_text(
+        plan_path.read_text(encoding="utf-8").replace("AV4 Execution In Progress", "AV4 Drifted"),
+        encoding="utf-8",
+    )
+
+    replay_apply = _run_cli(
+        "--replay",
+        "1",
+        "--apply",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+    )
+    assert replay_apply.returncode == 0, replay_apply.stderr + replay_apply.stdout
+    assert "[PASS] Replay apply" in replay_apply.stdout
+
+    repaired_plan = plan_path.read_text(encoding="utf-8")
+    assert "AV4 Execution In Progress" in repaired_plan
+
+    rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows[-1]["mode"] == "replay-apply"
+
+
+def test_replay_invalid_entry_handling_is_clear(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+
+    missing = _run_cli(
+        "--replay",
+        "missing-entry-id",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+    )
+    assert missing.returncode == 1
+    assert "status-hook audit trail is empty" in missing.stdout
+
+    _run_cli(
+        "av4.kickoff.started",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+    )
+    invalid = _run_cli(
+        "--replay",
+        "999",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+    )
+    assert invalid.returncode == 1
+    assert "replay index out of range" in invalid.stdout
