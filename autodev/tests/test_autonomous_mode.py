@@ -691,6 +691,20 @@ def test_resolve_operator_guidance_entry_exact_and_unknown_fallback() -> None:
     assert unknown["playbook_url"].endswith("#unknown-or-unmapped-codes")
 
 
+def test_resolve_incident_routing_entry_exact_and_unknown_fallback() -> None:
+    mapped = autonomous_mode._resolve_incident_routing_entry("security.max_high_findings_exceeded")
+    assert mapped["source"] == "exact"
+    assert mapped["owner_team"] == "Security Engineering"
+    assert mapped["severity"] == "critical"
+    assert mapped["target_sla"] == "1h"
+    assert mapped["escalation_class"] == "security_incident"
+
+    unknown = autonomous_mode._resolve_incident_routing_entry("custom.operator_code")
+    assert unknown["family"] == "unknown"
+    assert unknown["source"] == "generic_fallback"
+    assert unknown["owner_team"] == "Autonomy On-Call"
+
+
 def test_render_report_includes_operator_guidance_payload_and_markdown_section() -> None:
     state = {
         "run_id": "run-guidance",
@@ -741,6 +755,14 @@ def test_render_report_includes_operator_guidance_payload_and_markdown_section()
         for item in guidance["resolved"]
     )
 
+    routing = report["incident_routing"]
+    assert routing["taxonomy_version"] == "av3-004-v1"
+    assert routing["primary"]["owner_team"] == "Platform Operations"
+    assert any(item["code"] == "tests.min_pass_rate_not_met" for item in routing["resolved"])
+    assert any(item["code"] == "custom.operator_code" and item["source"] == "generic_fallback" for item in routing["resolved"])
+
+    assert "## Incident Routing" in report_md
+    assert "owner/team=" in report_md
     assert "## Operator Guidance" in report_md
     assert "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#gate-failures" in report_md
 
