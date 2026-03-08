@@ -1,9 +1,12 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-release-autonomous check-release-autonomous-strict check-template check-locks check-docs benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve smoke-autonomous-e2e
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-release-autonomous check-release-autonomous-strict check-template check-locks check-docs check-status-hooks benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve smoke-autonomous-e2e
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
+
+# Canonical status-hook event used for docs automation drift checks.
+STATUS_HOOK_EVENT ?= av4.kickoff.started
 
 # Compile project packages to bytecode to catch syntax errors early.
 compile:
@@ -63,14 +66,18 @@ smoke-autonomous-e2e:
 	$(PYTHON) scripts/autonomous_e2e_smoke.py --artifacts-dir ./artifacts/autonomous-e2e-smoke
 
 # Fast local CI-equivalent pass for quick iteration.
-ci-fast: compile check-fast tests-fast
+ci-fast: compile check-fast tests-fast check-status-hooks
 
 # Docs-as-code sanity checks (local markdown links in docs and GitHub templates).
 check-docs:
 	$(PYTHON) scripts/check_markdown_links.py
 
+# Status-hook docs drift gate (AV4-002).
+check-status-hooks:
+	$(PYTHON) scripts/status_board_automation.py $(STATUS_HOOK_EVENT) --drift-check
+
 # Strict local CI-equivalent pass (existing behavior + docs gate).
-ci-strict: compile check-strict tests-strict check-template check-locks check-docs
+ci-strict: compile check-strict tests-strict check-template check-locks check-docs check-status-hooks
 
 # Preserve existing command name for strict lane.
 ci: ci-strict

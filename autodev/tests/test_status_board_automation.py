@@ -79,6 +79,30 @@ def test_apply_event_updates_docs_and_is_idempotent_with_fixed_timestamp(tmp_pat
     assert changed_again == []
 
 
+def test_drift_check_passes_when_docs_match_with_existing_timestamp(tmp_path: Path) -> None:
+    mod = _load_module()
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+
+    # Different timestamp should still pass in drift-check mode when canonical fields match.
+    drifted = mod.drift_check_event("av4.kickoff.started", docs_root=docs_root)
+    assert drifted == []
+
+
+def test_drift_check_fails_and_does_not_write_docs(tmp_path: Path) -> None:
+    mod = _load_module()
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+
+    plan_path = docs_root / "PLAN_NEXT_WEEK.md"
+    original_plan = plan_path.read_text(encoding="utf-8")
+    plan_path.write_text(original_plan.replace("AV4 Kickoff Active", "AV4 Drifted"), encoding="utf-8")
+
+    drifted = mod.drift_check_event("av4.kickoff.started", docs_root=docs_root)
+    assert [p.name for p in drifted] == ["PLAN_NEXT_WEEK.md"]
+    assert plan_path.read_text(encoding="utf-8") == original_plan.replace("AV4 Kickoff Active", "AV4 Drifted")
+
+
 def test_apply_event_unknown_event_raises(tmp_path: Path) -> None:
     mod = _load_module()
     docs_root = tmp_path / "docs"
