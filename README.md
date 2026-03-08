@@ -478,6 +478,7 @@ For commercial-grade autonomous delivery strategy and rollout governance, see `d
 For AV2 completion summary, see `docs/AUTONOMOUS_V2_WAVE_CLOSURE.md`.
 For AV3 wave closure, see `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`.
 For AV3 execution planning history, see `docs/AUTONOMOUS_V3_WAVE_PLAN.md` and `docs/AUTONOMOUS_V3_BACKLOG.md`.
+For active AV4 kickoff planning, see `docs/AUTONOMOUS_V4_WAVE_PLAN.md` and `docs/AUTONOMOUS_V4_BACKLOG.md`.
 
 Update (v1b, 2026-03-07): autonomous commercial rollout references were refreshed across README/onboarding/autonomous-mode docs for easier operator discovery.
 
@@ -570,11 +571,13 @@ Stabilization handoff bundle (active):
 - `docs/DEMO_PLAYBOOK.md`
 
 Next-wave planning/governance docs:
-- `docs/PLAN_NEXT_WEEK.md` (AV3 kickoff status + execution framing)
-- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md` (AV3 completed scope, outcomes, risks, AV4 handoff)
+- `docs/PLAN_NEXT_WEEK.md` (AV4 kickoff active status + execution framing)
+- `docs/AUTONOMOUS_V4_WAVE_PLAN.md` (AV4 goals, milestones, architecture deltas, risks)
+- `docs/AUTONOMOUS_V4_BACKLOG.md` (AV4 prioritized execution backlog with DoD/test/PR splits)
+- `docs/BACKLOG_NEXT_WEEK.md` (AV4 kickoff top queue quick reference)
+- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md` (AV3 completed scope, outcomes, and AV4 handoff baseline)
 - `docs/AUTONOMOUS_V3_WAVE_PLAN.md` (AV3 planning history and closure summary)
 - `docs/AUTONOMOUS_V3_BACKLOG.md` (AV3 final execution ledger)
-- `docs/BACKLOG_NEXT_WEEK.md` (legacy AV3 candidate list/reference)
 - `docs/AUTONOMOUS_V2_WAVE_CLOSURE.md` (AV2 closure baseline)
 - `docs/AUTONOMOUS_COMMERCIAL_PLAN.md` (commercial autonomous rollout strategy)
 

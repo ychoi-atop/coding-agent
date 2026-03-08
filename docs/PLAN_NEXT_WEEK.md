@@ -1,41 +1,41 @@
-# PLAN — Next Wave (AV4 Kickoff)
+# PLAN — Next Wave (AV4 Kickoff Active)
 
 ## Scope
 
-This plan reflects `main` after AV3 closure.
-Primary objective is to execute the AV4 kickoff set with reliability and operator-safety guardrails retained from AV3.
+This plan tracks kickoff execution after AV3 closure.
+Primary objective is to start AV4 delivery with compact PR slices while preserving AV3 reliability safeguards.
 
 ## Current state snapshot
 
 - AV2 wave (`AV2-001` ~ `AV2-014`) is complete and merged.
 - AV3 wave (`AV3-001` ~ `AV3-013`) is complete and merged.
-- AV3 closure summary: `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
+- AV4 kickoff package is now active (`docs/AUTONOMOUS_V4_WAVE_PLAN.md`, `docs/AUTONOMOUS_V4_BACKLOG.md`).
 
 ## AV4 kickoff execution plan
 
-1. **Carryover + hardening:** land AV4 baseline from deferred/next items (`AV3-014` carryover + new AV4 priorities).
-2. **Operational confidence:** keep autonomous evidence, docs checks, and GUI/API operator flows stable.
-3. **Narrow PR slices:** preserve reviewability with compact, dependency-aware patches.
-4. **Risk containment:** keep rollout gated by deterministic checks and playbook-ready recovery paths.
+1. **Close carryover first:** land `AV4-001` (AV3-014 carryover) and baseline retention controls.
+2. **Ship operator signal surfaces:** deliver concise audit summaries across API/GUI/CLI.
+3. **Automate docs lifecycle:** reduce manual wave-boundary drift via rollup automation.
+4. **Hold quality gates:** keep deterministic smoke/release/docs checks continuously green.
 
 ## Workflow confidence checks
 
-- Keep `make smoke-autonomous-e2e` as deterministic gate smoke.
-- Keep `make check-release-autonomous` in release-readiness flow.
-- Keep `make check-docs` mandatory for docs/process updates.
+- `make smoke-autonomous-e2e`
+- `make check-release-autonomous`
+- `make check-docs`
 
 ## Definition of done (AV4 kickoff package)
 
-- AV3 closure is reflected in status/plan/backlog docs.
-- AV4 candidate list is prioritized and actionable.
-- README/docs navigation includes AV3 closure and AV4 planning links.
+- AV4 plan/backlog are the active source of truth.
+- Status/plan/backlog docs explicitly show AV4 kickoff started.
+- README/docs navigation includes AV4 links.
 - Docs validation remains green (`make check-docs`).
 
 ## Related docs
 
-- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
-- `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/AUTONOMOUS_V4_WAVE_PLAN.md`
+- `docs/AUTONOMOUS_V4_BACKLOG.md`
 - `docs/STATUS_BOARD_CURRENT.md`
-- `docs/AUTONOMOUS_MODE.md`
+- `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
 - `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`
-- `docs/ops/AUTONOMOUS_V2_RELEASE_CHECKLIST.md`

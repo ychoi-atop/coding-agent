@@ -1,33 +1,33 @@
-# BACKLOG — Next Wave (AV4 Candidates)
+# BACKLOG — Next Wave (AV4 Kickoff Queue)
 
-This backlog is the execution companion for `docs/PLAN_NEXT_WEEK.md`.
+This queue is the execution companion for `docs/PLAN_NEXT_WEEK.md`.
+Primary AV4 execution backlog: `docs/AUTONOMOUS_V4_BACKLOG.md`.
 
-## Wave closure baseline
+## Wave baseline
 
 - AV2 closure: ✅ `AV2-001` ~ `AV2-014`
 - AV3 closure: ✅ `AV3-001` ~ `AV3-013`
-- AV3 closure summary: `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
+- AV4 kickoff: 🚧 started
 
-## AV4 prioritized candidates
+## AV4 kickoff top queue (execution-first)
 
-| ID | Priority | Effort | Ticket | Notes |
-|---|---|---|---|---|
-| AV4-001 | P0 | S | AV3-014 carryover: status board automation hooks | Carry forward template automation hooks deferred from AV3 |
-| AV4-002 | P0 | M | Autonomous run timeline retention/compaction policy | Prevent artifact growth while preserving operator triage value |
-| AV4-003 | P1 | M | Operator control audit dashboard summary | Improve at-a-glance risk/decision visibility for active runs |
-| AV4-004 | P1 | S | Failure playbook drill scenarios for AV3 controls | Add repeatable incident drills and expected operator actions |
-| AV4-005 | P2 | S | Docs automation for closure/status rollups | Reduce manual drift between wave status docs |
+| ID | Priority | Effort | Ticket |
+|---|---|---|---|
+| AV4-001 | P0 | S | AV3-014 carryover: status board automation hooks |
+| AV4-002 | P0 | M | Timeline retention class policy |
+| AV4-003 | P0 | M | Artifact compaction pipeline |
+| AV4-004 | P0 | S | Retention safety guardrails |
+| AV4-005 | P1 | M | Operator audit summary API |
 
-## Prioritization notes
+## Notes
 
-- Start with **AV4-001** to close AV3 carryover and keep status automation consistent.
-- Keep PR slices narrow and test/doc evidence explicit for each AV4 ticket.
-- Preserve deterministic check lanes before broadening scope.
+- Full ticket-level DoD/test/PR split lives in `docs/AUTONOMOUS_V4_BACKLOG.md`.
+- Keep PR slices narrow and evidence explicit per ticket.
 
 ## Related docs
 
+- `docs/AUTONOMOUS_V4_WAVE_PLAN.md`
+- `docs/AUTONOMOUS_V4_BACKLOG.md`
 - `docs/PLAN_NEXT_WEEK.md`
-- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
 - `docs/STATUS_BOARD_CURRENT.md`
-- `docs/AUTONOMOUS_MODE.md`
-- `README.md`
+- `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
