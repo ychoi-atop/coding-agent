@@ -491,6 +491,18 @@ python scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simpl
 ```
 Smoke artifacts are persisted under `./artifacts/local-simple-e2e-smoke/<timestamp>/` (server stdout/stderr logs + API snapshots) so failures remain debuggable.
 
+Autonomous E2E smoke lane (AV2-013):
+```bash
+# local
+make smoke-autonomous-e2e
+
+# CI-equivalent one-shot
+python scripts/autonomous_e2e_smoke.py --artifacts-dir ./artifacts/autonomous-e2e-smoke
+```
+This deterministic smoke lane validates preflight pass, quality-gate failure evaluation, stop-guard decision persistence,
+`autodev autonomous summary` extraction, and GUI/API parity via `/api/autonomous/quality-gate/latest`.
+Artifacts are persisted under `./artifacts/autonomous-e2e-smoke/<timestamp>/`.
+
 RC dry-run command (no process spawn):
 ```bash
 curl -fsS -X POST http://127.0.0.1:8787/api/runs/start \
