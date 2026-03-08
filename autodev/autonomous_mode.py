@@ -40,6 +40,8 @@ _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
 _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION = "av2-008"
 _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION = "av2-009"
 _AUTONOMOUS_BUDGET_GUARD_DIAGNOSTIC_VERSION = "av2-010"
+_AUTONOMOUS_OPERATOR_GUIDANCE_VERSION = "av2-011"
+_AUTONOMOUS_FAILURE_PLAYBOOK_DOC = "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md"
 
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_GATE_FAILURES = 3
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_NO_IMPROVEMENT = 2
@@ -68,6 +70,174 @@ _AUTONOMOUS_FIX_STRATEGY_HINTS = {
         "Apply a balanced fix pass across tests, security, and performance signals.",
         "Start with highest-confidence blockers while preserving bounded scope.",
     ],
+}
+
+
+_OPERATOR_GUIDANCE_BY_CODE: dict[str, dict[str, Any]] = {
+    "tests.min_pass_rate_not_met": {
+        "family": "gate",
+        "title": "Tests gate failed (pass-rate threshold not met)",
+        "playbook_anchor": "#gate-failures",
+        "actions": [
+            "Inspect the latest pytest failures and isolate deterministic regressions first.",
+            "Rerun targeted tests, then full suite, before resuming autonomous retries.",
+        ],
+    },
+    "security.max_high_findings_exceeded": {
+        "family": "gate",
+        "title": "Security gate failed (high findings threshold exceeded)",
+        "playbook_anchor": "#gate-failures",
+        "actions": [
+            "Review high-severity findings and patch/mitigate unsafe code paths.",
+            "Re-run security checks and confirm the finding count is within policy.",
+        ],
+    },
+    "performance.max_regression_pct_exceeded": {
+        "family": "gate",
+        "title": "Performance gate failed (regression threshold exceeded)",
+        "playbook_anchor": "#gate-failures",
+        "actions": [
+            "Inspect recent hot-path changes and profile likely bottlenecks.",
+            "Verify regression signal with repeatable perf checks before retrying.",
+        ],
+    },
+    "performance.baseline_regression_detected": {
+        "family": "gate",
+        "title": "Performance baseline regression detected",
+        "playbook_anchor": "#gate-failures",
+        "actions": [
+            "Compare latest perf sample against baseline artifact history to identify deltas.",
+            "Apply focused optimization or rollback the regression-inducing change set.",
+        ],
+    },
+    "autonomous_guard.repeated_gate_failure_limit_reached": {
+        "family": "guard",
+        "title": "Stop-guard halted repeated gate failures",
+        "playbook_anchor": "#guard-stops",
+        "actions": [
+            "Pause autonomous retries and run a manual triage on recurring gate failures.",
+            "Consider rollback or narrower scoped fix before resuming autonomous mode.",
+        ],
+    },
+    "autonomous_guard.no_measurable_gate_improvement_limit_reached": {
+        "family": "guard",
+        "title": "Stop-guard halted no-improvement retry pattern",
+        "playbook_anchor": "#guard-stops",
+        "actions": [
+            "Change fix strategy (scope/module/owner) instead of repeating similar retries.",
+            "Resume only after measurable improvement criteria are defined.",
+        ],
+    },
+    "autonomous_preflight.path_not_allowlisted": {
+        "family": "preflight",
+        "title": "Preflight failed: path not allowlisted",
+        "playbook_anchor": "#preflight-failures",
+        "actions": [
+            "Update workspace allowlist to include the intended PRD/config/output paths.",
+            "Re-run preflight to verify path policy before starting unattended loop.",
+        ],
+    },
+    "autonomous_preflight.path_blocked": {
+        "family": "preflight",
+        "title": "Preflight failed: path matched blocked list",
+        "playbook_anchor": "#preflight-failures",
+        "actions": [
+            "Move run inputs/outputs away from blocked paths or adjust blocked policy safely.",
+            "Re-run preflight and confirm no blocked path matches remain.",
+        ],
+    },
+    "autonomous_preflight.required_file_missing": {
+        "family": "preflight",
+        "title": "Preflight failed: required file missing",
+        "playbook_anchor": "#preflight-failures",
+        "actions": [
+            "Restore or point to required artifacts (PRD/config) before retry.",
+            "Confirm file existence from the autonomous run context path.",
+        ],
+    },
+    "autonomous_preflight.required_file_unreadable": {
+        "family": "preflight",
+        "title": "Preflight failed: required file unreadable",
+        "playbook_anchor": "#preflight-failures",
+        "actions": [
+            "Fix file permissions/ownership so autonomous runtime can read prerequisites.",
+            "Re-run preflight after permission correction.",
+        ],
+    },
+    "autonomous_preflight.artifacts_not_writable": {
+        "family": "preflight",
+        "title": "Preflight failed: artifact directory not writable",
+        "playbook_anchor": "#preflight-failures",
+        "actions": [
+            "Ensure `.autodev/` path is writable by the operator/runtime user.",
+            "Re-run with `--preflight-check-artifact-writable` to verify fix.",
+        ],
+    },
+    "autonomous_budget_guard.max_wall_clock_seconds_exceeded": {
+        "family": "budget_guard",
+        "title": "Budget-guard stop: wall-clock limit exceeded",
+        "playbook_anchor": "#budget-guard-stops",
+        "actions": [
+            "Increase time budget only with explicit approval, or split scope into smaller runs.",
+            "Resume from state only after tightening objective scope.",
+        ],
+    },
+    "autonomous_budget_guard.max_autonomous_iterations_reached": {
+        "family": "budget_guard",
+        "title": "Budget-guard stop: max autonomous iterations reached",
+        "playbook_anchor": "#budget-guard-stops",
+        "actions": [
+            "Review failed attempts and remove repeated ineffective retry patterns.",
+            "Increase iteration cap only after strategy change or scope reduction.",
+        ],
+    },
+    "autonomous_budget_guard.estimated_token_budget_not_available": {
+        "family": "budget_guard",
+        "title": "Budget-guard diagnostic: estimated token budget unavailable",
+        "playbook_anchor": "#budget-guard-stops",
+        "actions": [
+            "Treat token budget as advisory until a reliable token signal is integrated.",
+            "Use wall-clock and iteration guards as primary operational controls.",
+        ],
+    },
+}
+
+_OPERATOR_GUIDANCE_FAMILY_FALLBACK: dict[str, dict[str, Any]] = {
+    "gate": {
+        "title": "Quality gate failure requires operator triage",
+        "playbook_anchor": "#gate-failures",
+        "actions": [
+            "Review gate diagnostics and fix the highest-confidence blocker before retrying.",
+        ],
+    },
+    "guard": {
+        "title": "Stop-guard halt requires manual intervention",
+        "playbook_anchor": "#guard-stops",
+        "actions": [
+            "Pause unattended retries and decide whether to rollback, narrow scope, or change strategy.",
+        ],
+    },
+    "preflight": {
+        "title": "Preflight failure blocks unattended start",
+        "playbook_anchor": "#preflight-failures",
+        "actions": [
+            "Resolve path/prerequisite issues and rerun preflight before autonomous start.",
+        ],
+    },
+    "budget_guard": {
+        "title": "Budget-guard threshold reached",
+        "playbook_anchor": "#budget-guard-stops",
+        "actions": [
+            "Re-scope run and adjust budget policy deliberately before continuing.",
+        ],
+    },
+    "unknown": {
+        "title": "Unmapped autonomous failure code",
+        "playbook_anchor": "#unknown-or-unmapped-codes",
+        "actions": [
+            "Capture the typed code and context from artifacts, then escalate for playbook-map update.",
+        ],
+    },
 }
 
 
@@ -1761,6 +1931,132 @@ def _make_budget_guard_snapshot(
     }
 
 
+def _infer_operator_guidance_family(code: str) -> str:
+    normalized = str(code or "").strip()
+    if not normalized:
+        return "unknown"
+    if normalized.startswith("autonomous_preflight."):
+        return "preflight"
+    if normalized.startswith("autonomous_budget_guard."):
+        return "budget_guard"
+    if normalized.startswith("autonomous_guard."):
+        return "guard"
+    head = normalized.split(".", 1)[0].lower()
+    if head in {"tests", "security", "performance"}:
+        return "gate"
+    return "unknown"
+
+
+def _resolve_operator_guidance_entry(code: str) -> dict[str, Any]:
+    normalized = str(code or "").strip()
+    mapped = _OPERATOR_GUIDANCE_BY_CODE.get(normalized)
+    if mapped is not None:
+        family = str(mapped.get("family") or "unknown")
+        title = str(mapped.get("title") or "Operator guidance")
+        playbook_anchor = str(mapped.get("playbook_anchor") or _OPERATOR_GUIDANCE_FAMILY_FALLBACK["unknown"]["playbook_anchor"])
+        actions = [str(item) for item in mapped.get("actions", []) if item]
+        source = "exact"
+    else:
+        family = _infer_operator_guidance_family(normalized)
+        fallback = _OPERATOR_GUIDANCE_FAMILY_FALLBACK.get(family) or _OPERATOR_GUIDANCE_FAMILY_FALLBACK["unknown"]
+        title = str(fallback.get("title") or "Operator guidance")
+        playbook_anchor = str(fallback.get("playbook_anchor") or _OPERATOR_GUIDANCE_FAMILY_FALLBACK["unknown"]["playbook_anchor"])
+        actions = [str(item) for item in fallback.get("actions", []) if item]
+        source = "family_fallback" if family != "unknown" else "generic_fallback"
+
+    return {
+        "code": normalized,
+        "family": family,
+        "source": source,
+        "title": title,
+        "playbook_doc": _AUTONOMOUS_FAILURE_PLAYBOOK_DOC,
+        "playbook_anchor": playbook_anchor,
+        "playbook_url": f"{_AUTONOMOUS_FAILURE_PLAYBOOK_DOC}{playbook_anchor}",
+        "actions": actions,
+    }
+
+
+def _build_operator_guidance(reason_codes: list[str]) -> dict[str, Any]:
+    unique_codes: list[str] = []
+    seen: set[str] = set()
+    for item in reason_codes:
+        code = str(item or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        unique_codes.append(code)
+
+    entries = [_resolve_operator_guidance_entry(code) for code in unique_codes]
+    if not entries:
+        entries = [_resolve_operator_guidance_entry("autonomous.unmapped_or_missing_code")]
+
+    return {
+        "taxonomy_version": _AUTONOMOUS_OPERATOR_GUIDANCE_VERSION,
+        "playbook_doc": _AUTONOMOUS_FAILURE_PLAYBOOK_DOC,
+        "total_codes": len(unique_codes),
+        "resolved": entries,
+        "top": entries[:3],
+    }
+
+
+def _collect_operator_reason_codes(state: dict[str, Any], attempts: list[dict[str, Any]]) -> list[str]:
+    reason_codes: list[str] = []
+
+    preflight = state.get("preflight") if isinstance(state.get("preflight"), dict) else None
+    if isinstance(preflight, dict):
+        preflight_codes = preflight.get("reason_codes")
+        if isinstance(preflight_codes, list):
+            reason_codes.extend([str(code) for code in preflight_codes if code])
+
+    budget_guard = state.get("budget_guard") if isinstance(state.get("budget_guard"), dict) else None
+    if isinstance(budget_guard, dict):
+        decision = budget_guard.get("decision") if isinstance(budget_guard.get("decision"), dict) else None
+        if isinstance(decision, dict) and decision.get("reason_code"):
+            reason_codes.append(str(decision.get("reason_code")))
+        diagnostics = budget_guard.get("diagnostics")
+        if isinstance(diagnostics, list):
+            for item in diagnostics:
+                if isinstance(item, dict) and item.get("reason_code"):
+                    reason_codes.append(str(item.get("reason_code")))
+
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        gate_results = attempt.get("gate_results") if isinstance(attempt.get("gate_results"), dict) else None
+        if isinstance(gate_results, dict):
+            fail_reasons = gate_results.get("fail_reasons")
+            if isinstance(fail_reasons, list):
+                for row in fail_reasons:
+                    if isinstance(row, dict) and row.get("code"):
+                        reason_codes.append(str(row.get("code")))
+        guard_decision = attempt.get("guard_decision") if isinstance(attempt.get("guard_decision"), dict) else None
+        if isinstance(guard_decision, dict) and guard_decision.get("reason_code"):
+            reason_codes.append(str(guard_decision.get("reason_code")))
+
+    return reason_codes
+
+
+def _collect_operator_reason_codes_from_summary(
+    *,
+    preflight_reason_codes: list[str],
+    budget_guard_reason_codes: list[str],
+    dominant_fail_codes: list[dict[str, Any]],
+    guard_decision: dict[str, Any] | None,
+) -> list[str]:
+    reason_codes: list[str] = []
+    reason_codes.extend([str(code) for code in preflight_reason_codes if code])
+    reason_codes.extend([str(code) for code in budget_guard_reason_codes if code])
+
+    for item in dominant_fail_codes:
+        if isinstance(item, dict) and item.get("code"):
+            reason_codes.append(str(item.get("code")))
+
+    if isinstance(guard_decision, dict) and guard_decision.get("reason_code"):
+        reason_codes.append(str(guard_decision.get("reason_code")))
+
+    return reason_codes
+
+
 def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> tuple[dict[str, Any], str]:
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     gate_attempts = [a for a in attempts if isinstance(a, dict) and isinstance(a.get("gate_results"), dict)]
@@ -1777,6 +2073,8 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
     ]
     preflight = state.get("preflight") if isinstance(state.get("preflight"), dict) else None
     budget_guard = state.get("budget_guard") if isinstance(state.get("budget_guard"), dict) else None
+    operator_reason_codes = _collect_operator_reason_codes(state, attempts)
+    operator_guidance = _build_operator_guidance(operator_reason_codes)
     report = {
         "mode": "autonomous_v1",
         "ok": ok,
@@ -1801,6 +2099,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         "latest_strategy": latest_strategy,
         "guard_decision": latest_guard_decision,
         "guard_decisions_total": len(guard_decisions),
+        "operator_guidance": operator_guidance,
         "resume_diagnostics": resume_diagnostics,
         "resume_warning_count": len(resume_diagnostics),
         "last_validation": last_validation,
@@ -1891,6 +2190,23 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         md.append("```json")
         md.append(json_dumps(report["budget_guard"]))
         md.append("```")
+
+    md.append("")
+    md.append("## Operator Guidance")
+    guidance_top = operator_guidance.get("top") if isinstance(operator_guidance.get("top"), list) else []
+    if guidance_top:
+        for entry in guidance_top:
+            if not isinstance(entry, dict):
+                continue
+            actions = entry.get("actions") if isinstance(entry.get("actions"), list) else []
+            action_text = "; ".join([str(item) for item in actions if item]) or "See playbook for operator actions."
+            md.append(
+                f"- `{entry.get('code', '-')}` ({entry.get('family', '-')}, source={entry.get('source', '-')}) — "
+                f"{entry.get('title', '-')}. Actions: {action_text} "
+                f"[playbook]({entry.get('playbook_url', _AUTONOMOUS_FAILURE_PLAYBOOK_DOC)})"
+            )
+    else:
+        md.append(f"- No typed failure codes observed. See `{_AUTONOMOUS_FAILURE_PLAYBOOK_DOC}` for fallback operations.")
 
     if isinstance(preflight, dict):
         preflight_diagnostics = preflight.get("diagnostics") if isinstance(preflight.get("diagnostics"), list) else []
@@ -2652,6 +2968,19 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
                 budget_guard_reason_codes.append(str(item.get("reason_code")))
     budget_guard_reason_codes = sorted(set(budget_guard_reason_codes))
 
+    operator_guidance = None
+    if isinstance(report_payload, dict) and isinstance(report_payload.get("operator_guidance"), dict):
+        operator_guidance = report_payload.get("operator_guidance")
+    if not isinstance(operator_guidance, dict):
+        operator_guidance = _build_operator_guidance(
+            _collect_operator_reason_codes_from_summary(
+                preflight_reason_codes=preflight_reason_codes,
+                budget_guard_reason_codes=budget_guard_reason_codes,
+                dominant_fail_codes=dominant_fail_codes,
+                guard_decision=latest_guard_decision if isinstance(latest_guard_decision, dict) else None,
+            )
+        )
+
     return {
         "mode": "autonomous_v1_summary",
         "run_dir": str(run_path),
@@ -2681,6 +3010,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "guard_decision": latest_guard_decision,
         "guard_decision_source": guard_source,
         "guard_decisions_total": guard_decisions_total,
+        "operator_guidance": operator_guidance,
         "resume_diagnostics": resume_diagnostics,
         "preflight_diagnostics": preflight_diagnostics,
         "warnings": warnings,
@@ -2695,6 +3025,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
     guard_decision = summary.get("guard_decision") if isinstance(summary.get("guard_decision"), dict) else None
     budget_guard_decision = summary.get("budget_guard_decision") if isinstance(summary.get("budget_guard_decision"), dict) else None
     artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), dict) else {}
+    operator_guidance = summary.get("operator_guidance") if isinstance(summary.get("operator_guidance"), dict) else {}
 
     lines = [
         "# Autonomous Run Summary",
@@ -2755,6 +3086,20 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         )
     else:
         lines.append("- budget_guard_decision: -")
+
+    guidance_top = operator_guidance.get("top") if isinstance(operator_guidance.get("top"), list) else []
+    if guidance_top:
+        lines.append("- operator_guidance_top:")
+        for entry in guidance_top:
+            if not isinstance(entry, dict):
+                continue
+            actions = entry.get("actions") if isinstance(entry.get("actions"), list) else []
+            top_action = str(actions[0]) if actions else "See playbook"
+            lines.append(
+                f"  - {entry.get('code', '-')}: {top_action} [{entry.get('playbook_url', _AUTONOMOUS_FAILURE_PLAYBOOK_DOC)}]"
+            )
+    else:
+        lines.append("- operator_guidance_top: -")
 
     lines.append(f"- guard_decisions_total: {summary.get('guard_decisions_total', 0)}")
 

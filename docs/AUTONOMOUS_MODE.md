@@ -15,6 +15,8 @@ For commercial rollout governance (quality/release gates, recovery playbooks, KP
 
 Update (v1b, 2026-03-07): link and rollout-governance references were refreshed to keep autonomous-mode operators aligned with the commercial delivery plan.
 
+Update (v1c, 2026-03-08): autonomous outputs now include operator guidance auto-linking from typed failure codes to the failure playbook (`docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`).
+
 ---
 
 ## Command
@@ -57,7 +59,7 @@ autodev autonomous summary --run-dir ./generated_runs/<run_id> --format text
 
 Default output is machine-readable JSON with latest run status, preflight status/reason codes,
 budget-guard outcome/reason codes, gate pass/fail counts, dominant gate fail codes, latest auto-fix
-strategy, and stop-guard decision fields (with graceful warnings for missing artifacts).
+strategy, stop-guard decision fields, and `operator_guidance` (playbook-linked top actions with graceful fallback for unmapped codes).
 
 ---
 
@@ -111,6 +113,8 @@ Notes:
 - `--resume-state` now performs deterministic state normalization (attempt de-duplication + `current_iteration` alignment) to prevent duplicate/lost attempt indexing across restart boundaries.
 - Resume/recovery paths emit typed `resume_diagnostics` entries in state/report/summary outputs so operators can see when corrupt/partial artifacts were auto-recovered.
 - Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
+- Report/summary artifacts expose `operator_guidance` resolved from typed gate/guard/preflight/budget reason codes with links into `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`.
+- Unknown or newly introduced reason codes still produce graceful fallback guidance (generic/family-level actions + playbook fallback anchor) for backward compatibility.
 
 ---
 
@@ -119,7 +123,7 @@ Notes:
 Each autonomous run writes:
 
 - `.autodev/autonomous_state.json` — live state machine snapshot (phase/status/attempts + `budget_guard` diagnostics/outcome)
-- `.autodev/autonomous_report.json` — machine-readable final report (includes latest `gate_results` when configured, plus `budget_guard` outcome)
+- `.autodev/autonomous_report.json` — machine-readable final report (includes latest `gate_results` when configured, plus `budget_guard` outcome and `operator_guidance`)
 - `.autodev/autonomous_gate_results.json` — per-iteration quality gate evaluation history
 - `.autodev/autonomous_gate_baseline.json` — persistent recent gate observations used for trend-aware regression checks
 - `.autodev/autonomous_strategy_trace.json` — per-iteration strategy routing/rotation trace with latest selected strategy
