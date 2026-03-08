@@ -42,6 +42,7 @@ _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION = "av2-008"
 _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION = "av2-009"
 _AUTONOMOUS_BUDGET_GUARD_DIAGNOSTIC_VERSION = "av2-010"
 _AUTONOMOUS_OPERATOR_GUIDANCE_VERSION = "av2-011"
+_AUTONOMOUS_INCIDENT_ROUTING_VERSION = "av3-004-v1"
 _AUTONOMOUS_FAILURE_PLAYBOOK_DOC = "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md"
 
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_GATE_FAILURES = 3
@@ -238,6 +239,126 @@ _OPERATOR_GUIDANCE_FAMILY_FALLBACK: dict[str, dict[str, Any]] = {
         "actions": [
             "Capture the typed code and context from artifacts, then escalate for playbook-map update.",
         ],
+    },
+}
+
+_INCIDENT_ROUTING_BY_CODE: dict[str, dict[str, str]] = {
+    "tests.min_pass_rate_not_met": {
+        "owner_team": "Feature Engineering",
+        "severity": "high",
+        "target_sla": "4h",
+        "escalation_class": "engineering_hotfix",
+    },
+    "security.max_high_findings_exceeded": {
+        "owner_team": "Security Engineering",
+        "severity": "critical",
+        "target_sla": "1h",
+        "escalation_class": "security_incident",
+    },
+    "performance.max_regression_pct_exceeded": {
+        "owner_team": "Performance Engineering",
+        "severity": "high",
+        "target_sla": "4h",
+        "escalation_class": "performance_regression",
+    },
+    "performance.baseline_regression_detected": {
+        "owner_team": "Performance Engineering",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "performance_regression",
+    },
+    "autonomous_guard.repeated_gate_failure_limit_reached": {
+        "owner_team": "Release Engineering",
+        "severity": "high",
+        "target_sla": "2h",
+        "escalation_class": "autonomy_control",
+    },
+    "autonomous_guard.no_measurable_gate_improvement_limit_reached": {
+        "owner_team": "Release Engineering",
+        "severity": "medium",
+        "target_sla": "4h",
+        "escalation_class": "autonomy_control",
+    },
+    "autonomous_preflight.path_not_allowlisted": {
+        "owner_team": "Platform Operations",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "run_configuration",
+    },
+    "autonomous_preflight.path_blocked": {
+        "owner_team": "Platform Operations",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "run_configuration",
+    },
+    "autonomous_preflight.required_file_missing": {
+        "owner_team": "Platform Operations",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "run_configuration",
+    },
+    "autonomous_preflight.required_file_unreadable": {
+        "owner_team": "Platform Operations",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "run_configuration",
+    },
+    "autonomous_preflight.artifacts_not_writable": {
+        "owner_team": "Platform Operations",
+        "severity": "high",
+        "target_sla": "4h",
+        "escalation_class": "run_configuration",
+    },
+    "autonomous_budget_guard.max_wall_clock_seconds_exceeded": {
+        "owner_team": "Release Engineering",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "budget_control",
+    },
+    "autonomous_budget_guard.max_autonomous_iterations_reached": {
+        "owner_team": "Release Engineering",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "budget_control",
+    },
+    "autonomous_budget_guard.estimated_token_budget_not_available": {
+        "owner_team": "LLM Platform",
+        "severity": "low",
+        "target_sla": "24h",
+        "escalation_class": "telemetry_gap",
+    },
+}
+
+_INCIDENT_ROUTING_FAMILY_FALLBACK: dict[str, dict[str, str]] = {
+    "gate": {
+        "owner_team": "Feature Engineering",
+        "severity": "high",
+        "target_sla": "4h",
+        "escalation_class": "engineering_hotfix",
+    },
+    "guard": {
+        "owner_team": "Release Engineering",
+        "severity": "high",
+        "target_sla": "2h",
+        "escalation_class": "autonomy_control",
+    },
+    "preflight": {
+        "owner_team": "Platform Operations",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "run_configuration",
+    },
+    "budget_guard": {
+        "owner_team": "Release Engineering",
+        "severity": "medium",
+        "target_sla": "8h",
+        "escalation_class": "budget_control",
+    },
+    "unknown": {
+        "owner_team": "Autonomy On-Call",
+        "severity": "medium",
+        "target_sla": "12h",
+        "escalation_class": "manual_triage",
     },
 }
 
@@ -2062,6 +2183,59 @@ def _collect_operator_reason_codes_from_summary(
     return reason_codes
 
 
+def _resolve_incident_routing_entry(code: str) -> dict[str, str]:
+    normalized = str(code or "").strip()
+    family = _infer_operator_guidance_family(normalized)
+    mapped = _INCIDENT_ROUTING_BY_CODE.get(normalized)
+    if mapped is not None:
+        source = "exact"
+        route = mapped
+    else:
+        route = _INCIDENT_ROUTING_FAMILY_FALLBACK.get(family) or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]
+        source = "family_fallback" if family != "unknown" else "generic_fallback"
+
+    return {
+        "code": normalized,
+        "family": family,
+        "source": source,
+        "owner_team": str(route.get("owner_team") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["owner_team"]),
+        "severity": str(route.get("severity") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["severity"]),
+        "target_sla": str(route.get("target_sla") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["target_sla"]),
+        "escalation_class": str(route.get("escalation_class") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["escalation_class"]),
+    }
+
+
+def _build_incident_routing(reason_codes: list[str]) -> dict[str, Any]:
+    unique_codes: list[str] = []
+    seen: set[str] = set()
+    for item in reason_codes:
+        code = str(item or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        unique_codes.append(code)
+
+    resolved = [_resolve_incident_routing_entry(code) for code in unique_codes]
+    if not resolved:
+        resolved = [_resolve_incident_routing_entry("autonomous.unmapped_or_missing_code")]
+
+    top = resolved[:3]
+    primary = top[0] if top else _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]
+
+    return {
+        "taxonomy_version": _AUTONOMOUS_INCIDENT_ROUTING_VERSION,
+        "total_codes": len(unique_codes),
+        "resolved": resolved,
+        "top": top,
+        "primary": {
+            "owner_team": str(primary.get("owner_team") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["owner_team"]),
+            "severity": str(primary.get("severity") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["severity"]),
+            "target_sla": str(primary.get("target_sla") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["target_sla"]),
+            "escalation_class": str(primary.get("escalation_class") or _INCIDENT_ROUTING_FAMILY_FALLBACK["unknown"]["escalation_class"]),
+        },
+    }
+
+
 def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> tuple[dict[str, Any], str]:
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     gate_attempts = [a for a in attempts if isinstance(a, dict) and isinstance(a.get("gate_results"), dict)]
@@ -2080,6 +2254,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
     budget_guard = state.get("budget_guard") if isinstance(state.get("budget_guard"), dict) else None
     operator_reason_codes = _collect_operator_reason_codes(state, attempts)
     operator_guidance = _build_operator_guidance(operator_reason_codes)
+    incident_routing = _build_incident_routing(operator_reason_codes)
     report = {
         "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
         "mode": "autonomous_v1",
@@ -2106,6 +2281,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         "guard_decision": latest_guard_decision,
         "guard_decisions_total": len(guard_decisions),
         "operator_guidance": operator_guidance,
+        "incident_routing": incident_routing,
         "resume_diagnostics": resume_diagnostics,
         "resume_warning_count": len(resume_diagnostics),
         "last_validation": last_validation,
@@ -2196,6 +2372,21 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         md.append("```json")
         md.append(json_dumps(report["budget_guard"]))
         md.append("```")
+
+    md.append("")
+    md.append("## Incident Routing")
+    incident_top = incident_routing.get("top") if isinstance(incident_routing.get("top"), list) else []
+    if incident_top:
+        for entry in incident_top:
+            if not isinstance(entry, dict):
+                continue
+            md.append(
+                f"- `{entry.get('code', '-')}` ({entry.get('family', '-')}, source={entry.get('source', '-')}) → "
+                f"owner/team={entry.get('owner_team', '-')}, severity={entry.get('severity', '-')}, "
+                f"target_sla={entry.get('target_sla', '-')}, escalation_class={entry.get('escalation_class', '-')}"
+            )
+    else:
+        md.append("- No typed failure codes observed. Routed to default manual triage fallback.")
 
     md.append("")
     md.append("## Operator Guidance")
@@ -2974,18 +3165,26 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
                 budget_guard_reason_codes.append(str(item.get("reason_code")))
     budget_guard_reason_codes = sorted(set(budget_guard_reason_codes))
 
+    reason_codes = _collect_operator_reason_codes_from_summary(
+        preflight_reason_codes=preflight_reason_codes,
+        budget_guard_reason_codes=budget_guard_reason_codes,
+        dominant_fail_codes=dominant_fail_codes,
+        guard_decision=latest_guard_decision if isinstance(latest_guard_decision, dict) else None,
+    )
+
     operator_guidance = None
     if isinstance(report_payload, dict) and isinstance(report_payload.get("operator_guidance"), dict):
         operator_guidance = report_payload.get("operator_guidance")
     if not isinstance(operator_guidance, dict):
-        operator_guidance = _build_operator_guidance(
-            _collect_operator_reason_codes_from_summary(
-                preflight_reason_codes=preflight_reason_codes,
-                budget_guard_reason_codes=budget_guard_reason_codes,
-                dominant_fail_codes=dominant_fail_codes,
-                guard_decision=latest_guard_decision if isinstance(latest_guard_decision, dict) else None,
-            )
-        )
+        operator_guidance = _build_operator_guidance(reason_codes)
+
+    incident_routing = None
+    if isinstance(report_payload, dict) and isinstance(report_payload.get("incident_routing"), dict):
+        incident_routing = report_payload.get("incident_routing")
+    if not isinstance(incident_routing, dict):
+        incident_routing = _build_incident_routing(reason_codes)
+
+    primary_routing = incident_routing.get("primary") if isinstance(incident_routing.get("primary"), dict) else {}
 
     return {
         "schema_version": AUTONOMOUS_EVIDENCE_SCHEMA_VERSION,
@@ -3018,6 +3217,11 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "guard_decision_source": guard_source,
         "guard_decisions_total": guard_decisions_total,
         "operator_guidance": operator_guidance,
+        "incident_routing": incident_routing,
+        "incident_owner_team": str(primary_routing.get("owner_team") or "-"),
+        "incident_severity": str(primary_routing.get("severity") or "-"),
+        "incident_target_sla": str(primary_routing.get("target_sla") or "-"),
+        "incident_escalation_class": str(primary_routing.get("escalation_class") or "-"),
         "resume_diagnostics": resume_diagnostics,
         "preflight_diagnostics": preflight_diagnostics,
         "warnings": warnings,
@@ -3040,6 +3244,10 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         f"- status: {summary.get('status')}",
         f"- preflight: {summary.get('preflight_status', 'unknown')}",
         f"- budget_guard: {summary.get('budget_guard_status', 'unknown')}",
+        f"- incident_owner_team: {summary.get('incident_owner_team', '-')}",
+        f"- incident_severity: {summary.get('incident_severity', '-')}",
+        f"- incident_target_sla: {summary.get('incident_target_sla', '-')}",
+        f"- incident_escalation_class: {summary.get('incident_escalation_class', '-')}",
         f"- gate_counts: pass={gate_counts.get('pass', 0)}, fail={gate_counts.get('fail', 0)}, total={gate_counts.get('total', 0)}",
     ]
 
@@ -3107,6 +3315,22 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
             )
     else:
         lines.append("- operator_guidance_top: -")
+
+    incident_routing = summary.get("incident_routing") if isinstance(summary.get("incident_routing"), dict) else {}
+    incident_top = incident_routing.get("top") if isinstance(incident_routing.get("top"), list) else []
+    if incident_top:
+        lines.append("- incident_routing_top:")
+        for entry in incident_top:
+            if not isinstance(entry, dict):
+                continue
+            lines.append(
+                "  - "
+                f"{entry.get('code', '-')}: owner/team={entry.get('owner_team', '-')}, "
+                f"severity={entry.get('severity', '-')}, target_sla={entry.get('target_sla', '-')}, "
+                f"escalation_class={entry.get('escalation_class', '-')}"
+            )
+    else:
+        lines.append("- incident_routing_top: -")
 
     lines.append(f"- guard_decisions_total: {summary.get('guard_decisions_total', 0)}")
 

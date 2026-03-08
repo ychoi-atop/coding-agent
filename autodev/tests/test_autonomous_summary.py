@@ -104,6 +104,10 @@ def test_extract_autonomous_summary_aggregates_gate_and_strategy_artifacts(tmp_p
     assert summary["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
     assert summary["guard_decision_source"] == "guard_decisions"
     assert summary["guard_decisions_total"] == 1
+    assert summary["incident_owner_team"] == "Feature Engineering"
+    assert summary["incident_severity"] == "high"
+    assert summary["incident_target_sla"] == "4h"
+    assert summary["incident_escalation_class"] == "engineering_hotfix"
     assert summary["warnings"] == []
 
 
@@ -129,6 +133,10 @@ def test_extract_autonomous_summary_handles_missing_or_partial_artifacts(tmp_pat
     assert summary["latest_strategy_source"] == "report"
     assert summary["guard_decision"] is None
     assert summary["guard_decision_source"] == "none"
+    assert summary["incident_owner_team"] == "Autonomy On-Call"
+    assert summary["incident_severity"] == "medium"
+    assert summary["incident_target_sla"] == "12h"
+    assert summary["incident_escalation_class"] == "manual_triage"
     assert len(summary["warnings"]) == 3
     assert any("gate_results: missing" in item for item in summary["warnings"])
     assert any("strategy_trace: missing" in item for item in summary["warnings"])
@@ -197,9 +205,12 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     text_out = capsys.readouterr().out
     assert "# Autonomous Run Summary" in text_out
     assert "status: failed" in text_out
+    assert "incident_owner_team: Feature Engineering" in text_out
+    assert "incident_target_sla: 4h" in text_out
     assert "dominant_fail_codes: tests.min_pass_rate_not_met(1)" in text_out
     assert "guard_decision: stop (autonomous_guard.repeated_gate_failure_limit_reached)" in text_out
     assert "operator_guidance_top:" in text_out
+    assert "incident_routing_top:" in text_out
     assert "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md" in text_out
 
 
@@ -242,6 +253,12 @@ def test_extract_autonomous_summary_builds_operator_guidance_with_fallbacks(tmp_
         item["code"] == "custom.operator_code" and item["source"] == "generic_fallback"
         for item in guidance["resolved"]
     )
+
+    routing = summary["incident_routing"]
+    assert routing["taxonomy_version"] == "av3-004-v1"
+    assert any(item["code"] == "autonomous_preflight.path_not_allowlisted" for item in routing["resolved"])
+    assert any(item["code"] == "custom.operator_code" and item["source"] == "generic_fallback" for item in routing["resolved"])
+    assert summary["incident_owner_team"] == "Platform Operations"
 
 
 

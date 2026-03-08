@@ -20,6 +20,8 @@ Update (v1b, 2026-03-07): link and rollout-governance references were refreshed 
 
 Update (v1c, 2026-03-08): autonomous outputs now include operator guidance auto-linking from typed failure codes to the failure playbook (`docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`).
 
+Update (v1d, 2026-03-08): autonomous outputs now expose `incident_routing` (owner/team, severity, target SLA, escalation class) in report/summary/markdown surfaces with unknown-code fallback routing.
+
 ---
 
 ## Command
@@ -149,7 +151,8 @@ Notes:
 - Resume/recovery paths emit typed `resume_diagnostics` entries in state/report/summary outputs so operators can see when corrupt/partial artifacts were auto-recovered.
 - Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
 - Report/summary artifacts expose `operator_guidance` resolved from typed gate/guard/preflight/budget reason codes with links into `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`.
-- Unknown or newly introduced reason codes still produce graceful fallback guidance (generic/family-level actions + playbook fallback anchor) for backward compatibility.
+- Report/summary artifacts also expose `incident_routing` derived from typed reason codes (owner/team, severity, target SLA, escalation class), including summary top fields (`incident_owner_team`, `incident_severity`, `incident_target_sla`, `incident_escalation_class`).
+- Unknown or newly introduced reason codes still produce graceful fallback guidance/routing (generic or family-level actions + routing defaults) for backward compatibility.
 
 ---
 
@@ -158,7 +161,7 @@ Notes:
 Each autonomous run writes:
 
 - `.autodev/autonomous_state.json` — live state machine snapshot (phase/status/attempts + `budget_guard` diagnostics/outcome)
-- `.autodev/autonomous_report.json` — machine-readable final report (includes latest `gate_results` when configured, plus `budget_guard` outcome and `operator_guidance`)
+- `.autodev/autonomous_report.json` — machine-readable final report (includes latest `gate_results` when configured, plus `budget_guard` outcome, `operator_guidance`, and structured `incident_routing`)
 - `.autodev/autonomous_gate_results.json` — per-iteration quality gate evaluation history
 - `.autodev/autonomous_gate_baseline.json` — persistent recent gate observations used for trend-aware regression checks
 - `.autodev/autonomous_strategy_trace.json` — per-iteration strategy routing/rotation trace with latest selected strategy

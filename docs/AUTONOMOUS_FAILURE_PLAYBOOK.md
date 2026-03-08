@@ -4,8 +4,23 @@ Operator-facing quick actions for typed autonomous failure codes.
 
 This document is intentionally concise and linkable from:
 - `AUTONOMOUS_REPORT.md`
-- `.autodev/autonomous_report.json` (`operator_guidance`)
+- `.autodev/autonomous_report.json` (`operator_guidance`, `incident_routing`)
 - `autodev autonomous summary`
+
+## Routing defaults (owner/SLA/escalation)
+
+`incident_routing` resolves typed failure codes to:
+- `owner_team`
+- `severity`
+- `target_sla`
+- `escalation_class`
+
+Family fallback defaults:
+- `tests/security/performance` (gate): Feature/Perf/Security engineering ownership, fast hotfix SLA
+- `autonomous_guard.*`: Release Engineering, autonomy-control escalation
+- `autonomous_preflight.*`: Platform Operations, run-configuration escalation
+- `autonomous_budget_guard.*`: Release Engineering, budget-control escalation
+- unknown/unmapped: Autonomy On-Call manual triage fallback
 
 ## Gate failures
 
