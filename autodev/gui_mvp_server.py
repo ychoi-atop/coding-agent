@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .autonomous_mode import extract_autonomous_summary
 from .gui_api import (
     GuiApiError,
     get_process_detail,
@@ -808,6 +809,63 @@ def _latest_scorecard_summary(runs_root: Path) -> dict[str, Any]:
     }
 
 
+def _latest_quality_gate_snapshot(runs_root: Path) -> dict[str, Any]:
+    if not runs_root.exists() or not runs_root.is_dir():
+        return {
+            "empty": True,
+            "message": "No runs root found.",
+            "latest": None,
+            "summary": None,
+            "snapshot": None,
+            "warnings": [],
+        }
+
+    run_dirs = sorted((p for p in runs_root.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not run_dirs:
+        return {
+            "empty": True,
+            "message": "No runs found in runs root.",
+            "latest": None,
+            "summary": None,
+            "snapshot": None,
+            "warnings": [],
+        }
+
+    run_dir = run_dirs[0]
+    snapshot = extract_autonomous_summary(str(run_dir))
+    latest_run = snapshot.get("latest_run") if isinstance(snapshot.get("latest_run"), dict) else {}
+
+    warnings = snapshot.get("warnings") if isinstance(snapshot.get("warnings"), list) else []
+
+    summary = {
+        "status": snapshot.get("status"),
+        "preflight_status": snapshot.get("preflight_status"),
+        "gate_counts": snapshot.get("gate_counts"),
+        "guard_decision": snapshot.get("guard_decision"),
+        "operator_guidance_top": (
+            snapshot.get("operator_guidance", {}).get("top")
+            if isinstance(snapshot.get("operator_guidance"), dict)
+            else []
+        ),
+    }
+
+    return {
+        "empty": False,
+        "message": "",
+        "latest": {
+            "run_id": str(latest_run.get("run_id") or run_dir.name),
+            "path": str(run_dir),
+            "updated_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+            "profile": latest_run.get("profile"),
+            "request_id": latest_run.get("request_id"),
+            "completed_at": latest_run.get("completed_at"),
+        },
+        "summary": summary,
+        "snapshot": snapshot,
+        "warnings": [str(item) for item in warnings if item],
+    }
+
+
 def _quality_trends(runs_root: Path, window: int, *, allow_partial: bool = False) -> dict[str, Any]:
     trend_window = max(1, min(int(window), MAX_TREND_WINDOW))
     if not runs_root.exists():
@@ -1028,6 +1086,7 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
                         "run_controls": ["start", "resume", "stop", "retry"],
                         "trends": True,
                         "scorecard": True,
+                        "autonomous_quality_gate_snapshot": True,
                     },
                 }
             )
@@ -1069,6 +1128,10 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/scorecard/latest":
             self._json_response(_latest_scorecard_summary(self.config.runs_root))
+            return
+
+        if path == "/api/autonomous/quality-gate/latest":
+            self._json_response(_latest_quality_gate_snapshot(self.config.runs_root))
             return
 
         if path == "/api/runs":
