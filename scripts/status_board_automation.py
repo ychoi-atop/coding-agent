@@ -13,6 +13,10 @@ AV4-003 scope:
 - introduce explicit status-hook event registry metadata
 - schema-validate registry entries with fail-fast diagnostics
 - enforce registry validation in runtime and CI paths
+
+AV4-004 scope:
+- expand canonical event registry beyond kickoff with practical lifecycle events
+- keep apply/drift behavior deterministic across event-to-event transitions
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 
@@ -46,6 +50,15 @@ class EventRegistryEntry:
 
 
 STATUS_TIMESTAMP_PREFIX = "Status timestamp: "
+STATUS_MODE_PREFIX = "- **Mode:** "
+STATUS_SCOPE_PREFIX = "- **Scope:** "
+STATUS_STATE_PREFIX = "- **State:** "
+STATUS_AV4_PREFIX = "- **AV4:** "
+PLAN_TITLE_PREFIX = "# PLAN — Next Wave ("
+PLAN_AV4_PREFIX = "- AV4 "
+BACKLOG_TITLE_PREFIX = "# BACKLOG — Next Wave ("
+BACKLOG_AV4_PREFIX = "- AV4 "
+
 EXPECTED_DOC_TRANSITIONS = (
     "STATUS_BOARD_CURRENT.md",
     "PLAN_NEXT_WEEK.md",
@@ -67,6 +80,51 @@ EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
             plan_av4_snapshot="- AV4 kickoff package is now active (`docs/AUTONOMOUS_V4_WAVE_PLAN.md`, `docs/AUTONOMOUS_V4_BACKLOG.md`).",
             backlog_title="# BACKLOG — Next Wave (AV4 Kickoff Queue)",
             backlog_av4_snapshot="- AV4 kickoff: 🚧 started",
+        ),
+    ),
+    EventRegistryEntry(
+        event_id="av4.execution.in_progress",
+        description="Reflect active AV4 implementation and validation in status/plan/backlog docs.",
+        expected_doc_transitions=EXPECTED_DOC_TRANSITIONS,
+        spec=CanonicalEventSpec(
+            mode="AV4 Execution",
+            scope="AV4 delivery in progress across prioritized ticket slices",
+            state="AV4 kickoff completed; active implementation and validation underway",
+            av4_snapshot="🏗️ Execution in progress (P0 slices actively shipping)",
+            plan_title="# PLAN — Next Wave (AV4 Execution In Progress)",
+            plan_av4_snapshot="- AV4 execution is in progress (P0 tickets moving through implementation + validation).",
+            backlog_title="# BACKLOG — Next Wave (AV4 Active Delivery Queue)",
+            backlog_av4_snapshot="- AV4 execution: 🏗️ in progress",
+        ),
+    ),
+    EventRegistryEntry(
+        event_id="av4.stabilization.started",
+        description="Mark AV4 as feature-complete and shift tracking to stabilization evidence.",
+        expected_doc_transitions=EXPECTED_DOC_TRANSITIONS,
+        spec=CanonicalEventSpec(
+            mode="AV4 Stabilization",
+            scope="AV4 feature-complete freeze and stabilization checks",
+            state="AV4 implementation complete; stabilization and release verification running",
+            av4_snapshot="🧪 Stabilization started (smoke + release gates in focus)",
+            plan_title="# PLAN — Next Wave (AV4 Stabilization Active)",
+            plan_av4_snapshot="- AV4 stabilization is active (feature-complete; focus shifted to reliability evidence).",
+            backlog_title="# BACKLOG — Next Wave (AV4 Stabilization Queue)",
+            backlog_av4_snapshot="- AV4 stabilization: 🧪 started",
+        ),
+    ),
+    EventRegistryEntry(
+        event_id="av4.closed",
+        description="Close AV4 wave tracking and transition docs to post-wave planning mode.",
+        expected_doc_transitions=EXPECTED_DOC_TRANSITIONS,
+        spec=CanonicalEventSpec(
+            mode="AV4 Closed",
+            scope="AV4 wave closure and handoff to next wave planning",
+            state="AV4 delivery closed on `main`; next-wave kickoff prep open",
+            av4_snapshot="✅ Closed (execution + stabilization complete)",
+            plan_title="# PLAN — Next Wave (Post-AV4 Planning)",
+            plan_av4_snapshot="- AV4 is closed on `main`; planning focus shifts to the next wave package.",
+            backlog_title="# BACKLOG — Next Wave (Post-AV4 Intake Queue)",
+            backlog_av4_snapshot="- AV4 closure: ✅ complete",
         ),
     ),
 )
@@ -93,12 +151,6 @@ def _build_event_map_from_registry(registry: Sequence[EventRegistryEntry | Mappi
     return event_map
 
 
-@dataclass(frozen=True)
-class DocTransformation:
-    rel_path: str
-    render: Callable[[str, CanonicalEventSpec], str]
-
-
 def _kst_timestamp() -> str:
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     return now.strftime("%Y-%m-%d %H:%M KST (Asia/Seoul)")
@@ -110,6 +162,19 @@ def _replace_once(content: str, old: str, new: str, *, file_path: Path) -> str:
     return content.replace(old, new, 1)
 
 
+def _replace_line_by_prefix(content: str, prefix: str, replacement: str, *, file_path: Path) -> str:
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = replacement
+            break
+    else:
+        raise ValueError(f"expected line prefix not found in {file_path}: {prefix}")
+
+    trailing_newline = "\n" if content.endswith("\n") else ""
+    return "\n".join(lines) + trailing_newline
+
+
 def _extract_status_timestamp(content: str) -> str | None:
     for line in content.splitlines():
         if line.startswith(STATUS_TIMESTAMP_PREFIX):
@@ -119,30 +184,10 @@ def _extract_status_timestamp(content: str) -> str | None:
 
 def _render_status_board(content: str, spec: CanonicalEventSpec, *, file_path: Path, timestamp: str) -> str:
     updated = content
-    updated = _replace_once(
-        updated,
-        "- **Mode:** AV4 Kickoff",
-        f"- **Mode:** {spec.mode}",
-        file_path=file_path,
-    )
-    updated = _replace_once(
-        updated,
-        "- **Scope:** AV4 wave planning + kickoff execution start",
-        f"- **Scope:** {spec.scope}",
-        file_path=file_path,
-    )
-    updated = _replace_once(
-        updated,
-        "- **State:** AV3 closed on `main`; AV4 kickoff package started",
-        f"- **State:** {spec.state}",
-        file_path=file_path,
-    )
-    updated = _replace_once(
-        updated,
-        "- **AV4:** 🚧 Kickoff started (plan + backlog published)",
-        f"- **AV4:** {spec.av4_snapshot}",
-        file_path=file_path,
-    )
+    updated = _replace_line_by_prefix(updated, STATUS_MODE_PREFIX, f"{STATUS_MODE_PREFIX}{spec.mode}", file_path=file_path)
+    updated = _replace_line_by_prefix(updated, STATUS_SCOPE_PREFIX, f"{STATUS_SCOPE_PREFIX}{spec.scope}", file_path=file_path)
+    updated = _replace_line_by_prefix(updated, STATUS_STATE_PREFIX, f"{STATUS_STATE_PREFIX}{spec.state}", file_path=file_path)
+    updated = _replace_line_by_prefix(updated, STATUS_AV4_PREFIX, f"{STATUS_AV4_PREFIX}{spec.av4_snapshot}", file_path=file_path)
 
     for line in updated.splitlines():
         if line.startswith(STATUS_TIMESTAMP_PREFIX):
@@ -158,34 +203,14 @@ def _render_status_board(content: str, spec: CanonicalEventSpec, *, file_path: P
 
 
 def _render_plan(content: str, spec: CanonicalEventSpec, *, file_path: Path) -> str:
-    updated = _replace_once(
-        content,
-        "# PLAN — Next Wave (AV4 Kickoff Active)",
-        spec.plan_title,
-        file_path=file_path,
-    )
-    updated = _replace_once(
-        updated,
-        "- AV4 kickoff package is now active (`docs/AUTONOMOUS_V4_WAVE_PLAN.md`, `docs/AUTONOMOUS_V4_BACKLOG.md`).",
-        spec.plan_av4_snapshot,
-        file_path=file_path,
-    )
+    updated = _replace_line_by_prefix(content, PLAN_TITLE_PREFIX, spec.plan_title, file_path=file_path)
+    updated = _replace_line_by_prefix(updated, PLAN_AV4_PREFIX, spec.plan_av4_snapshot, file_path=file_path)
     return updated
 
 
 def _render_backlog(content: str, spec: CanonicalEventSpec, *, file_path: Path) -> str:
-    updated = _replace_once(
-        content,
-        "# BACKLOG — Next Wave (AV4 Kickoff Queue)",
-        spec.backlog_title,
-        file_path=file_path,
-    )
-    updated = _replace_once(
-        updated,
-        "- AV4 kickoff: 🚧 started",
-        spec.backlog_av4_snapshot,
-        file_path=file_path,
-    )
+    updated = _replace_line_by_prefix(content, BACKLOG_TITLE_PREFIX, spec.backlog_title, file_path=file_path)
+    updated = _replace_line_by_prefix(updated, BACKLOG_AV4_PREFIX, spec.backlog_av4_snapshot, file_path=file_path)
     return updated
 
 

@@ -32,6 +32,8 @@ Status timestamp: 2026-01-01 00:00 KST (Asia/Seoul)
 
 ## Wave status snapshot
 
+- **AV2:** ✅ Closed (`AV2-001` ~ `AV2-014`)
+- **AV3:** ✅ Closed (`AV3-001` ~ `AV3-013`)
 - **AV4:** 🚧 Kickoff started (plan + backlog published)
 """,
         encoding="utf-8",
@@ -57,7 +59,14 @@ Status timestamp: 2026-01-01 00:00 KST (Asia/Seoul)
 def test_event_registry_valid_default_passes_schema_validation() -> None:
     mod = _load_module()
     assert mod.validate_event_registry(mod.EVENT_REGISTRY) == []
-    assert "av4.kickoff.started" in mod.CANONICAL_EVENT_MAP
+
+    expected_events = {
+        "av4.kickoff.started",
+        "av4.execution.in_progress",
+        "av4.stabilization.started",
+        "av4.closed",
+    }
+    assert set(mod.CANONICAL_EVENT_MAP) == expected_events
 
 
 def test_apply_event_updates_docs_and_is_idempotent_with_fixed_timestamp(tmp_path: Path) -> None:
@@ -76,6 +85,40 @@ def test_apply_event_updates_docs_and_is_idempotent_with_fixed_timestamp(tmp_pat
         "av4.kickoff.started",
         docs_root=docs_root,
         timestamp="2026-03-08 23:30 KST (Asia/Seoul)",
+    )
+    assert changed_again == []
+
+
+def test_apply_and_drift_check_support_non_kickoff_event(tmp_path: Path) -> None:
+    mod = _load_module()
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+
+    changed = mod.apply_event(
+        "av4.execution.in_progress",
+        docs_root=docs_root,
+        timestamp="2026-03-09 00:01 KST (Asia/Seoul)",
+    )
+    assert {p.name for p in changed} == {
+        "STATUS_BOARD_CURRENT.md",
+        "PLAN_NEXT_WEEK.md",
+        "BACKLOG_NEXT_WEEK.md",
+    }
+
+    status_text = (docs_root / "STATUS_BOARD_CURRENT.md").read_text(encoding="utf-8")
+    plan_text = (docs_root / "PLAN_NEXT_WEEK.md").read_text(encoding="utf-8")
+    backlog_text = (docs_root / "BACKLOG_NEXT_WEEK.md").read_text(encoding="utf-8")
+
+    assert "- **Mode:** AV4 Execution" in status_text
+    assert "# PLAN — Next Wave (AV4 Execution In Progress)" in plan_text
+    assert "- AV4 execution: 🏗️ in progress" in backlog_text
+
+    assert mod.drift_check_event("av4.execution.in_progress", docs_root=docs_root) == []
+
+    changed_again = mod.apply_event(
+        "av4.execution.in_progress",
+        docs_root=docs_root,
+        timestamp="2026-03-09 00:01 KST (Asia/Seoul)",
     )
     assert changed_again == []
 
@@ -131,5 +174,5 @@ def test_apply_event_unknown_event_raises_with_known_events(tmp_path: Path) -> N
     docs_root = tmp_path / "docs"
     _seed_docs(docs_root)
 
-    with pytest.raises(ValueError, match="unknown event 'av4.unknown'.*Known events: av4.kickoff.started"):
+    with pytest.raises(ValueError, match=r"unknown event 'av4\.unknown'\. Known events: "):
         mod.apply_event("av4.unknown", docs_root=docs_root)

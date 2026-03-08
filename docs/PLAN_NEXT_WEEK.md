@@ -25,9 +25,10 @@ Primary objective is to start AV4 delivery with compact PR slices while preservi
 - `make check-docs`
 - `make check-status-hooks` (canonical status-hook drift gate)
 
-Manual fallback for AV4-001 hook:
-- If event integration is unavailable, run `python3 scripts/status_board_automation.py av4.kickoff.started` to sync status/plan/backlog docs from the canonical event map.
-- CI drift check equivalent: `python3 scripts/status_board_automation.py av4.kickoff.started --drift-check`.
+Manual fallback for AV4 status hooks:
+- If event integration is unavailable, run `python3 scripts/status_board_automation.py <event_id>` to sync status/plan/backlog docs from the canonical event map.
+- CI drift check equivalent: `python3 scripts/status_board_automation.py <event_id> --drift-check`.
+- Event-to-transition reference: `docs/STATUS_HOOK_TRANSITION_MATRIX.md`.
 
 ## Definition of done (AV4 kickoff package)
 
@@ -42,5 +43,6 @@ Manual fallback for AV4-001 hook:
 - `docs/AUTONOMOUS_V4_BACKLOG.md`
 - `docs/STATUS_BOARD_CURRENT.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
+- `docs/STATUS_HOOK_TRANSITION_MATRIX.md`
 - `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`
 - `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`
