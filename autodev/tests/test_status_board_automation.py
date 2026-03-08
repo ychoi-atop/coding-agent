@@ -54,8 +54,9 @@ Status timestamp: 2026-01-01 00:00 KST (Asia/Seoul)
     )
 
 
-def test_event_mapping_contains_av4_kickoff_started() -> None:
+def test_event_registry_valid_default_passes_schema_validation() -> None:
     mod = _load_module()
+    assert mod.validate_event_registry(mod.EVENT_REGISTRY) == []
     assert "av4.kickoff.started" in mod.CANONICAL_EVENT_MAP
 
 
@@ -103,10 +104,32 @@ def test_drift_check_fails_and_does_not_write_docs(tmp_path: Path) -> None:
     assert plan_path.read_text(encoding="utf-8") == original_plan.replace("AV4 Kickoff Active", "AV4 Drifted")
 
 
-def test_apply_event_unknown_event_raises(tmp_path: Path) -> None:
+def test_invalid_registry_fails_with_actionable_diagnostics() -> None:
+    mod = _load_module()
+
+    invalid_registry = [
+        {
+            "event_id": "",
+            "description": "",
+            "expected_doc_transitions": ["STATUS_BOARD_CURRENT.md"],
+            "spec": {},
+        }
+    ]
+
+    errors = mod.validate_event_registry(invalid_registry)
+    assert any("event_id must be a non-empty string" in err for err in errors)
+    assert any("description must be a non-empty string" in err for err in errors)
+    assert any("expected_doc_transitions must exactly match" in err for err in errors)
+    assert any("spec.mode must be a non-empty string" in err for err in errors)
+
+    with pytest.raises(ValueError, match="invalid status-hook event registry"):
+        mod._build_event_map_from_registry(invalid_registry)
+
+
+def test_apply_event_unknown_event_raises_with_known_events(tmp_path: Path) -> None:
     mod = _load_module()
     docs_root = tmp_path / "docs"
     _seed_docs(docs_root)
 
-    with pytest.raises(ValueError, match="unknown event"):
+    with pytest.raises(ValueError, match="unknown event 'av4.unknown'.*Known events: av4.kickoff.started"):
         mod.apply_event("av4.unknown", docs_root=docs_root)

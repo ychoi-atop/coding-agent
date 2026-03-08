@@ -72,8 +72,9 @@ ci-fast: compile check-fast tests-fast check-status-hooks
 check-docs:
 	$(PYTHON) scripts/check_markdown_links.py
 
-# Status-hook docs drift gate (AV4-002).
+# Status-hook docs drift gate (AV4-002/AV4-003).
 check-status-hooks:
+	$(PYTHON) scripts/status_board_automation.py --validate-registry
 	$(PYTHON) scripts/status_board_automation.py $(STATUS_HOOK_EVENT) --drift-check
 
 # Strict local CI-equivalent pass (existing behavior + docs gate).

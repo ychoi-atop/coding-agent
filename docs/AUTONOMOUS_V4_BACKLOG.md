@@ -7,7 +7,7 @@ Companion plan: `docs/AUTONOMOUS_V4_WAVE_PLAN.md`
 |---|---|---:|---|---|---|---|
 | AV4-001 | P0 | S | AV3-014 carryover: status board automation hooks | status transitions auto-updated from canonical events; manual fallback documented | unit for hook mapping + docs check | 1 PR |
 | AV4-002 | P0 | M | Timeline retention classes (hot/warm/archive) | retention classes configurable + default policy documented | policy parser/unit + sample retention smoke | 1 PR |
-| AV4-003 | P0 | M | Artifact compaction pipeline for timeline/audit logs | compaction job preserves replay-critical fields + index integrity | golden snapshot diff + replay smoke | 2 PRs (core + smoke/docs) |
+| AV4-003 | P0 | S | Status hook event registry + schema validation | explicit status-hook event registry (id/description/doc transitions) + fail-fast schema diagnostics wired to runtime and `make check-status-hooks` | focused unit tests (valid/invalid/unknown event) + `make check-status-hooks` | 1 PR |
 | AV4-004 | P0 | S | Retention safety guardrails in preflight | dangerous retention config blocked with actionable error | config validation tests | 1 PR |
 | AV4-005 | P1 | M | Operator audit summary API | API returns concise state/risk/action summary with typed schema | API contract tests + fixture snapshots | 1 PR |
 | AV4-006 | P1 | M | GUI audit summary panel | panel renders API summary with empty/error/loading states | UI component tests + manual smoke checklist | 1 PR |
