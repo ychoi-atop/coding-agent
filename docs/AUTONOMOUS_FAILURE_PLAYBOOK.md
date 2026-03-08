@@ -8,6 +8,9 @@ This document is intentionally concise and linkable from:
 - `.autodev/autonomous_incident_packet.json` (`failure_codes`, `reproduction`, `operator_guidance.top_actions`)
 - `autodev autonomous summary`
 
+Deterministic drill scenarios for these code paths are tracked in
+`docs/AUTONOMOUS_FAILURE_DRILL_PACK.md`.
+
 ## Routing defaults (owner/SLA/escalation)
 
 `incident_routing` resolves typed failure codes to:
