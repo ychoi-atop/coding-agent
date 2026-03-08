@@ -85,9 +85,10 @@ pointer to `autodev autonomous summary`.
 ```bash
 autodev autonomous incident-send --run-dir ./generated_runs/<run_id>
 autodev autonomous incident-send --run-dir ./generated_runs/<run_id> --target stdout --target log:markdown --dry-run false
+autodev autonomous incident-send --run-dir ./generated_runs/<run_id> --target webhook:markdown --dry-run false
 ```
 
-Sends a failed-run incident packet through pluggable targets (`stdout`, `log`) and persists send attempts in
+Sends a failed-run incident packet through pluggable targets (`stdout`, `log`, `webhook`) and persists send attempts in
 `.autodev/autonomous_incident_send.json`. Defaults are safe: `--dry-run true` and no automatic send unless enabled
 via autonomous policy.
 
@@ -161,6 +162,17 @@ run:
       dry_run: true
       targets:
         - stdout
+      webhook:
+        # Optional when using webhook target (or set AUTODEV_INCIDENT_WEBHOOK_URL)
+        url: "https://example.internal/hooks/autodev"
+        # Secret can be inline or env-indirected (preferred)
+        signature_secret_env: "AUTODEV_INCIDENT_WEBHOOK_SECRET"
+        signature_header: "X-Autodev-Signature"
+        timeout_sec: 10
+        max_attempts: 3
+        backoff_initial_sec: 0.5
+        backoff_multiplier: 2
+        backoff_max_sec: 5
 ```
 
 Notes:
@@ -184,6 +196,7 @@ Notes:
 - Report/summary artifacts also expose `incident_routing` derived from typed reason codes (owner/team, severity, target SLA, escalation class), including summary top fields (`incident_owner_team`, `incident_severity`, `incident_target_sla`, `incident_escalation_class`).
 - Failed outcomes now emit `.autodev/autonomous_incident_packet.json` with structured run summary, typed/root-cause codes, routing, reproduction pointers, and top operator actions. Successful outcomes keep no-op behavior (incident packet is not generated).
 - Optional incident-send hooks can be enabled via `run.autonomous.incident_send.enabled`; default remains disabled with `dry_run=true` for side-effect-safe behavior.
+- `webhook` target supports HMAC signing (`sha256=<digest>`) and bounded retry/backoff for transient failures (network/429/5xx); permanent 4xx failures are not retried.
 - Send attempts persist in `.autodev/autonomous_incident_send.json` and are exposed through report/summary surfaces.
 - Unknown or newly introduced reason codes still produce graceful fallback guidance/routing (generic or family-level actions + routing defaults) for backward compatibility.
 

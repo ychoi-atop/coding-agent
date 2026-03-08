@@ -430,6 +430,7 @@ class AutonomousIncidentSendPolicy:
     enabled: bool = False
     dry_run: bool = True
     targets: list[str] | None = None
+    webhook: dict[str, Any] | None = None
 
 
 def _as_float(value: Any) -> float | None:
@@ -1430,6 +1431,7 @@ def _resolve_autonomous_incident_send_policy(
     enabled_raw = send_cfg.get("enabled", False)
     dry_run_raw = send_cfg.get("dry_run", True)
     targets_raw = send_cfg.get("targets", ["stdout"])
+    webhook_raw = send_cfg.get("webhook")
 
     if not isinstance(enabled_raw, bool):
         raise SystemExit("config.run.autonomous.incident_send.enabled must be a boolean.")
@@ -1437,6 +1439,8 @@ def _resolve_autonomous_incident_send_policy(
         raise SystemExit("config.run.autonomous.incident_send.dry_run must be a boolean.")
     if not isinstance(targets_raw, list):
         raise SystemExit("config.run.autonomous.incident_send.targets must be a list.")
+    if webhook_raw is not None and not isinstance(webhook_raw, dict):
+        raise SystemExit("config.run.autonomous.incident_send.webhook must be an object when set.")
 
     targets = [str(item).strip() for item in targets_raw if str(item).strip()]
     if not targets:
@@ -1450,6 +1454,7 @@ def _resolve_autonomous_incident_send_policy(
         enabled=enabled,
         dry_run=dry_run_raw,
         targets=targets,
+        webhook=dict(webhook_raw) if isinstance(webhook_raw, dict) else None,
     )
 
 
@@ -1868,14 +1873,14 @@ def _persist_incident_send_attempt(
     existing = _safe_json_read(ws, AUTONOMOUS_INCIDENT_SEND_JSON)
     if not isinstance(existing, dict):
         existing = {
-            "schema_version": send_result.get("schema_version") or "av3-007-v1",
+            "schema_version": send_result.get("schema_version") or "av3-008-v1",
             "attempts": [],
         }
 
     attempts = existing.get("attempts") if isinstance(existing.get("attempts"), list) else []
     attempts.append(send_result)
     payload = {
-        "schema_version": existing.get("schema_version") or send_result.get("schema_version") or "av3-007-v1",
+        "schema_version": existing.get("schema_version") or send_result.get("schema_version") or "av3-008-v1",
         "updated_at": _utc_now(),
         "latest": send_result,
         "attempts": attempts,
@@ -1899,6 +1904,7 @@ def _maybe_send_incident_packet(
         targets=list(policy.targets or ["stdout"]),
         dry_run=bool(policy.dry_run),
         trigger=trigger,
+        target_configs={"webhook": dict(policy.webhook or {})},
     )
     persisted = _persist_incident_send_attempt(ws, send_result=result)
     latest = persisted.get("latest")
