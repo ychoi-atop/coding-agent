@@ -25,6 +25,10 @@ from .autonomous_incident_export import (
     load_incident_packet,
     render_incident_export,
 )
+from .autonomous_incident_send import (
+    AUTONOMOUS_INCIDENT_SEND_JSON,
+    send_incident_packet,
+)
 from .cli_progress import make_cli_progress_callback
 from .config import load_config
 from .json_utils import json_dumps
@@ -419,6 +423,13 @@ class AutonomousBudgetGuardPolicy:
     max_wall_clock_seconds: int
     max_autonomous_iterations: int
     max_estimated_token_budget: int | None = None
+
+
+@dataclass(frozen=True)
+class AutonomousIncidentSendPolicy:
+    enabled: bool = False
+    dry_run: bool = True
+    targets: list[str] | None = None
 
 
 def _as_float(value: Any) -> float | None:
@@ -1401,6 +1412,47 @@ def _resolve_autonomous_budget_guard_policy(
     )
 
 
+def _resolve_autonomous_incident_send_policy(
+    args: argparse.Namespace,
+    run_cfg: dict[str, Any],
+) -> AutonomousIncidentSendPolicy:
+    auto_cfg = run_cfg.get("autonomous")
+    if auto_cfg is not None and not isinstance(auto_cfg, dict):
+        raise SystemExit("config.run.autonomous must be an object when set.")
+    auto_cfg = auto_cfg or {}
+
+    send_cfg = auto_cfg.get("incident_send")
+    if send_cfg is None:
+        send_cfg = {}
+    if not isinstance(send_cfg, dict):
+        raise SystemExit("config.run.autonomous.incident_send must be an object when set.")
+
+    enabled_raw = send_cfg.get("enabled", False)
+    dry_run_raw = send_cfg.get("dry_run", True)
+    targets_raw = send_cfg.get("targets", ["stdout"])
+
+    if not isinstance(enabled_raw, bool):
+        raise SystemExit("config.run.autonomous.incident_send.enabled must be a boolean.")
+    if not isinstance(dry_run_raw, bool):
+        raise SystemExit("config.run.autonomous.incident_send.dry_run must be a boolean.")
+    if not isinstance(targets_raw, list):
+        raise SystemExit("config.run.autonomous.incident_send.targets must be a list.")
+
+    targets = [str(item).strip() for item in targets_raw if str(item).strip()]
+    if not targets:
+        targets = ["stdout"]
+
+    enabled = enabled_raw
+    if getattr(args, "incident_send_enabled", None) is not None:
+        enabled = bool(args.incident_send_enabled)
+
+    return AutonomousIncidentSendPolicy(
+        enabled=enabled,
+        dry_run=dry_run_raw,
+        targets=targets,
+    )
+
+
 def _coerce_role_temperatures(value: Any) -> Dict[str, float]:
     if value is None:
         return {}
@@ -1609,6 +1661,15 @@ def _read_text_file(path: str, label: str) -> str:
         raise SystemExit(f"Unable to read {label}: {path} ({e})") from e
 
 
+def _parse_cli_bool(value: str) -> bool:
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"invalid boolean value: {value!r} (expected true|false)")
+
+
 def _resolve_autonomous_policy(args: argparse.Namespace, run_cfg: dict[str, Any]) -> AutonomousPolicy:
     auto_cfg = run_cfg.get("autonomous")
     if auto_cfg is not None and not isinstance(auto_cfg, dict):
@@ -1674,6 +1735,7 @@ def _new_state(
     quality_gate_policy: AutonomousQualityGatePolicy | None,
     stop_guard_policy: AutonomousStopGuardPolicy,
     budget_guard_policy: AutonomousBudgetGuardPolicy,
+    incident_send_policy: AutonomousIncidentSendPolicy,
     prd_path: str,
     config_path: str,
 ) -> dict[str, Any]:
@@ -1690,6 +1752,7 @@ def _new_state(
         policy_payload["quality_gate_policy"] = asdict(quality_gate_policy)
     policy_payload["stop_guard_policy"] = asdict(stop_guard_policy)
     policy_payload["budget_guard_policy"] = asdict(budget_guard_policy)
+    policy_payload["incident_send_policy"] = asdict(incident_send_policy)
 
     return {
         "version": 1,
@@ -1795,6 +1858,51 @@ def _safe_json_read(ws: Workspace, rel_path: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
+
+def _persist_incident_send_attempt(
+    ws: Workspace,
+    *,
+    send_result: dict[str, Any],
+) -> dict[str, Any]:
+    existing = _safe_json_read(ws, AUTONOMOUS_INCIDENT_SEND_JSON)
+    if not isinstance(existing, dict):
+        existing = {
+            "schema_version": send_result.get("schema_version") or "av3-007-v1",
+            "attempts": [],
+        }
+
+    attempts = existing.get("attempts") if isinstance(existing.get("attempts"), list) else []
+    attempts.append(send_result)
+    payload = {
+        "schema_version": existing.get("schema_version") or send_result.get("schema_version") or "av3-007-v1",
+        "updated_at": _utc_now(),
+        "latest": send_result,
+        "attempts": attempts,
+    }
+    ws.write_text(AUTONOMOUS_INCIDENT_SEND_JSON, json_dumps(payload))
+    return payload
+
+
+def _maybe_send_incident_packet(
+    *,
+    ws: Workspace,
+    policy: AutonomousIncidentSendPolicy,
+    run_dir: str,
+    trigger: str,
+) -> dict[str, Any] | None:
+    if not policy.enabled:
+        return None
+
+    result = send_incident_packet(
+        run_dir=run_dir,
+        targets=list(policy.targets or ["stdout"]),
+        dry_run=bool(policy.dry_run),
+        trigger=trigger,
+    )
+    persisted = _persist_incident_send_attempt(ws, send_result=result)
+    latest = persisted.get("latest")
+    return latest if isinstance(latest, dict) else result
 
 
 def _recover_attempts_from_artifacts(ws: Workspace) -> list[dict[str, Any]]:
@@ -2362,7 +2470,13 @@ def _build_autonomous_incident_packet(
     }
 
 
-def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> tuple[dict[str, Any], str]:
+def _render_report(
+    state: dict[str, Any],
+    *,
+    ok: bool,
+    last_validation: Any,
+    incident_send: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     gate_attempts = [a for a in attempts if isinstance(a, dict) and isinstance(a.get("gate_results"), dict)]
     latest_gate_results = gate_attempts[-1].get("gate_results") if gate_attempts else None
@@ -2410,6 +2524,9 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         "incident_routing": incident_routing,
         "incident_packet_path": AUTONOMOUS_INCIDENT_PACKET_JSON,
         "incident_packet_generated": not ok,
+        "incident_send_path": AUTONOMOUS_INCIDENT_SEND_JSON,
+        "incident_send": incident_send,
+        "incident_send_attempted": isinstance(incident_send, dict),
         "resume_diagnostics": resume_diagnostics,
         "resume_warning_count": len(resume_diagnostics),
         "last_validation": last_validation,
@@ -2541,6 +2658,22 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         md.append(f"- Artifact: `{AUTONOMOUS_INCIDENT_PACKET_JSON}`")
         md.append("- Includes run summary, typed failure/root-cause codes, incident routing, reproduction pointers, and top operator actions.")
 
+    md.append("")
+    md.append("## Incident Send")
+    if isinstance(incident_send, dict):
+        target_list = incident_send.get("targets") if isinstance(incident_send.get("targets"), list) else []
+        target_text = ", ".join([str(item) for item in target_list if item]) or "-"
+        md.append(
+            f"- Attempted: yes (trigger={incident_send.get('trigger', '-')}, dry_run={incident_send.get('dry_run')}, targets={target_text})"
+        )
+        md.append(
+            f"- Result: {'OK' if incident_send.get('ok') else 'FAILED'} "
+            f"(success={incident_send.get('success_count', 0)}, failure={incident_send.get('failure_count', 0)})"
+        )
+        md.append(f"- Artifact: `{AUTONOMOUS_INCIDENT_SEND_JSON}`")
+    else:
+        md.append("- Attempted: no")
+
     if isinstance(preflight, dict):
         preflight_diagnostics = preflight.get("diagnostics") if isinstance(preflight.get("diagnostics"), list) else []
         if preflight_diagnostics:
@@ -2600,6 +2733,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     start.add_argument("--allow-docker-build", action="store_true", default=None)
     start.add_argument("--allow-external-side-effects", action="store_true", default=None)
     start.add_argument(
+        "--incident-send-enabled",
+        default=None,
+        type=_parse_cli_bool,
+        help="Override config.run.autonomous.incident_send.enabled (true|false).",
+    )
+    start.add_argument(
         "--preflight-check-artifact-writable",
         action="store_true",
         default=None,
@@ -2616,6 +2755,11 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     incident_export = sub.add_parser("incident-export", help="export autonomous incident packet for operator channels")
     incident_export.add_argument("--run-dir", required=True)
     incident_export.add_argument("--format", choices=list(SUPPORTED_EXPORT_FORMATS), required=True)
+
+    incident_send = sub.add_parser("incident-send", help="send autonomous incident packet via pluggable targets")
+    incident_send.add_argument("--run-dir", required=True)
+    incident_send.add_argument("--target", action="append", default=None, help="Target spec, e.g. stdout or log:markdown")
+    incident_send.add_argument("--dry-run", default="true", type=_parse_cli_bool)
 
     return ap
 
@@ -2648,6 +2792,7 @@ def _start(argv: list[str]) -> None:
     quality_gate_policy = _resolve_autonomous_quality_gate_policy(run_cfg)
     stop_guard_policy = _resolve_autonomous_stop_guard_policy(run_cfg)
     budget_guard_policy = _resolve_autonomous_budget_guard_policy(args, run_cfg, policy)
+    incident_send_policy = _resolve_autonomous_incident_send_policy(args, run_cfg)
 
     run_out = str(Path(args.run_dir).expanduser().resolve()) if args.run_dir else _resolve_output_dir(args.prd, args.out)
     ws = Workspace(run_out)
@@ -2670,6 +2815,7 @@ def _start(argv: list[str]) -> None:
                 quality_gate_policy=quality_gate_policy,
                 stop_guard_policy=stop_guard_policy,
                 budget_guard_policy=budget_guard_policy,
+                incident_send_policy=incident_send_policy,
                 prd_path=args.prd,
                 config_path=args.config,
             )
@@ -2715,6 +2861,7 @@ def _start(argv: list[str]) -> None:
             quality_gate_policy=quality_gate_policy,
             stop_guard_policy=stop_guard_policy,
             budget_guard_policy=budget_guard_policy,
+            incident_send_policy=incident_send_policy,
             prd_path=args.prd,
             config_path=args.config,
         )
@@ -2735,12 +2882,26 @@ def _start(argv: list[str]) -> None:
         state["failure_reason"] = "preflight_failed"
         _write_state(ws, state)
 
-        report_json, report_md = _render_report(state, ok=False, last_validation=[])
-        _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
-        _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
+        report_json, _ = _render_report(state, ok=False, last_validation=[])
         incident_packet = _build_autonomous_incident_packet(state=state, report=report_json, ok=False)
+        incident_send_result = None
         if isinstance(incident_packet, dict):
             _write_json_if_changed(ws, AUTONOMOUS_INCIDENT_PACKET_JSON, incident_packet, ignore_keys=("generated_at",))
+            incident_send_result = _maybe_send_incident_packet(
+                ws=ws,
+                policy=incident_send_policy,
+                run_dir=run_out,
+                trigger="autonomous.preflight_failed",
+            )
+
+        report_json, report_md = _render_report(
+            state,
+            ok=False,
+            last_validation=[],
+            incident_send=incident_send_result,
+        )
+        _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
+        _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
 
         failure_metadata = {
             "run_id": run_id,
@@ -2758,9 +2919,11 @@ def _start(argv: list[str]) -> None:
                 "allow_external_side_effects": policy.allow_external_side_effects,
                 "preflight_policy": asdict(preflight_policy),
                 "budget_guard_policy": asdict(budget_guard_policy),
+                "incident_send_policy": asdict(incident_send_policy),
             },
             "autonomous_preflight": preflight,
             "autonomous_budget_guard": state.get("budget_guard"),
+            "autonomous_incident_send": incident_send_result,
         }
         _write_json_if_changed(ws, ".autodev/run_metadata.json", failure_metadata, ignore_keys=("run_completed_at",))
 
@@ -2857,6 +3020,7 @@ def _start(argv: list[str]) -> None:
             "allow_docker_build": policy.allow_docker_build,
             "allow_external_side_effects": policy.allow_external_side_effects,
             "preflight_policy": asdict(preflight_policy),
+            "incident_send_policy": asdict(incident_send_policy),
         },
         "quality_profile": quality_profile,
         "template_candidates": template_candidates,
@@ -2882,6 +3046,7 @@ def _start(argv: list[str]) -> None:
         run_metadata["autonomous_quality_gate_policy"] = asdict(quality_gate_policy)
     run_metadata["autonomous_stop_guard_policy"] = asdict(stop_guard_policy)
     run_metadata["autonomous_budget_guard_policy"] = asdict(budget_guard_policy)
+    run_metadata["autonomous_incident_send_policy"] = asdict(incident_send_policy)
     run_metadata["autonomous_preflight"] = preflight
     _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata)
     state["budget_guard"] = _make_budget_guard_snapshot(
@@ -3119,12 +3284,29 @@ def _start(argv: list[str]) -> None:
     attempts_for_artifact = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     _write_guard_decisions_artifact(ws, policy=stop_guard_policy, attempts=attempts_for_artifact)
 
-    report_json, report_md = _render_report(state, ok=ok, last_validation=last_validation)
-    _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
-    _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
+    report_json, _ = _render_report(state, ok=ok, last_validation=last_validation)
     incident_packet = _build_autonomous_incident_packet(state=state, report=report_json, ok=ok)
+    incident_send_result = None
     if isinstance(incident_packet, dict):
         _write_json_if_changed(ws, AUTONOMOUS_INCIDENT_PACKET_JSON, incident_packet, ignore_keys=("generated_at",))
+        incident_send_result = _maybe_send_incident_packet(
+            ws=ws,
+            policy=incident_send_policy,
+            run_dir=run_out,
+            trigger="autonomous.run_failed",
+        )
+
+    report_json, report_md = _render_report(
+        state,
+        ok=ok,
+        last_validation=last_validation,
+        incident_send=incident_send_result,
+    )
+    _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
+    _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
+
+    run_metadata["autonomous_incident_send"] = incident_send_result
+    _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata, ignore_keys=("run_completed_at",))
 
     write_report(ws.root, prd_struct, plan, last_validation, ok)
     _log_event(
@@ -3172,12 +3354,14 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     strategy_path = artifacts_dir / "autonomous_strategy_trace.json"
     guard_path = artifacts_dir / "autonomous_guard_decisions.json"
     incident_packet_path = artifacts_dir / "autonomous_incident_packet.json"
+    incident_send_path = artifacts_dir / "autonomous_incident_send.json"
 
     report_payload, report_error = _safe_load_json(report_path)
     gate_payload, gate_error = _safe_load_json(gate_path)
     strategy_payload, strategy_error = _safe_load_json(strategy_path)
     guard_payload, guard_error = _safe_load_json(guard_path)
     incident_packet_payload, incident_packet_error = _safe_load_json(incident_packet_path)
+    incident_send_payload, incident_send_error = _safe_load_json(incident_send_path)
 
     warnings: list[str] = []
     diagnostics: list[dict[str, Any]] = []
@@ -3187,6 +3371,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "strategy_trace": {"path": str(strategy_path), "status": "ok" if strategy_error is None else strategy_error},
         "guard_decisions": {"path": str(guard_path), "status": "ok" if guard_error is None else guard_error},
         "incident_packet": {"path": str(incident_packet_path), "status": "ok" if incident_packet_error is None else incident_packet_error},
+        "incident_send": {"path": str(incident_send_path), "status": "ok" if incident_send_error is None else incident_send_error},
     }
 
     for name, err in (
@@ -3230,6 +3415,24 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
                 "message": f"incident_packet: {incident_packet_error}",
             }
         )
+
+    incident_send_attempted = bool(report_payload.get("incident_send_attempted")) if isinstance(report_payload, dict) else False
+    incident_send_status = "ok" if incident_send_error is None else incident_send_error
+    if incident_send_error == "missing" and not incident_send_attempted:
+        incident_send_status = "not_attempted"
+    if incident_send_attempted and incident_send_error is not None:
+        warnings.append(f"incident_send: {incident_send_error}")
+        diagnostics.append(
+            {
+                "type": "autonomous_summary_warning",
+                "taxonomy_version": _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION,
+                "code": "summary.artifact_unavailable",
+                "artifact": "incident_send",
+                "severity": "warning",
+                "message": f"incident_send: {incident_send_error}",
+            }
+        )
+    artifact_status["incident_send"]["status"] = incident_send_status
 
     preflight = report_payload.get("preflight") if isinstance(report_payload, dict) and isinstance(report_payload.get("preflight"), dict) else None
     preflight_status = str(preflight.get("status") or "unknown") if isinstance(preflight, dict) else "unknown"
@@ -3394,6 +3597,12 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             "payload": incident_packet_payload,
         },
         "incident_packet_status": incident_packet_status,
+        "incident_send": {
+            "path": str(incident_send_path),
+            "status": incident_send_status,
+            "payload": incident_send_payload,
+        },
+        "incident_send_status": incident_send_status,
         "resume_diagnostics": resume_diagnostics,
         "preflight_diagnostics": preflight_diagnostics,
         "warnings": warnings,
@@ -3411,6 +3620,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
     operator_guidance = summary.get("operator_guidance") if isinstance(summary.get("operator_guidance"), dict) else {}
 
     incident_packet = summary.get("incident_packet") if isinstance(summary.get("incident_packet"), dict) else {}
+    incident_send = summary.get("incident_send") if isinstance(summary.get("incident_send"), dict) else {}
 
     lines = [
         "# Autonomous Run Summary",
@@ -3423,6 +3633,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         f"- incident_target_sla: {summary.get('incident_target_sla', '-')}",
         f"- incident_escalation_class: {summary.get('incident_escalation_class', '-')}",
         f"- incident_packet: {incident_packet.get('status', '-') } ({incident_packet.get('path', '-')})",
+        f"- incident_send: {incident_send.get('status', '-') } ({incident_send.get('path', '-')})",
         f"- gate_counts: pass={gate_counts.get('pass', 0)}, fail={gate_counts.get('fail', 0)}, total={gate_counts.get('total', 0)}",
     ]
 
@@ -3511,7 +3722,7 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("Artifacts:")
-    for name in ("report", "gate_results", "strategy_trace", "guard_decisions", "incident_packet"):
+    for name in ("report", "gate_results", "strategy_trace", "guard_decisions", "incident_packet", "incident_send"):
         item = artifacts.get(name) if isinstance(artifacts.get(name), dict) else {}
         lines.append(f"- {name}: {item.get('status', 'missing')} ({item.get('path', '-')})")
 
@@ -3581,9 +3792,28 @@ def _incident_export(argv: list[str]) -> None:
     print(render_incident_export(packet, args.format))
 
 
+def _incident_send(argv: list[str]) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(["incident-send", *argv])
+    ws = Workspace(str(Path(args.run_dir).expanduser().resolve()))
+    try:
+        send_result = send_incident_packet(
+            run_dir=args.run_dir,
+            targets=args.target,
+            dry_run=bool(args.dry_run),
+            trigger="autonomous.cli.incident_send",
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
+    payload = _persist_incident_send_attempt(ws, send_result=send_result)
+    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else send_result
+    print(json_dumps(latest))
+
+
 def cli(argv: list[str]) -> None:
     if not argv:
-        raise SystemExit("Usage: autodev autonomous <start|status|summary|incident-export> ...")
+        raise SystemExit("Usage: autodev autonomous <start|status|summary|incident-export|incident-send> ...")
     action = argv[0]
     if action == "start":
         _start(argv[1:])
@@ -3596,5 +3826,8 @@ def cli(argv: list[str]) -> None:
         return
     if action == "incident-export":
         _incident_export(argv[1:])
+        return
+    if action == "incident-send":
+        _incident_send(argv[1:])
         return
     raise SystemExit(f"Unknown autonomous subcommand: {action}")

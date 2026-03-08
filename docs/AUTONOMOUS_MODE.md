@@ -22,6 +22,8 @@ Update (v1c, 2026-03-08): autonomous outputs now include operator guidance auto-
 
 Update (v1d, 2026-03-08): autonomous outputs now expose `incident_routing` (owner/team, severity, target SLA, escalation class) in report/summary/markdown surfaces with unknown-code fallback routing.
 
+Update (v1e, 2026-03-08): autonomous incident packet delivery now supports pluggable send hooks (`incident-send`) with default safe posture (`enabled=false`, `dry_run=true`) and persisted send-attempt artifacts.
+
 ---
 
 ## Command
@@ -77,6 +79,17 @@ autodev autonomous incident-export --run-dir ./generated_runs/<run_id> --format 
 Exports `.autodev/autonomous_incident_packet.json` into operator-ready channel formats. If the incident
 packet is missing (for example, successful/non-incident runs), CLI exits with a clear diagnostic and a
 pointer to `autodev autonomous summary`.
+
+### Incident send helper (AV3-007)
+
+```bash
+autodev autonomous incident-send --run-dir ./generated_runs/<run_id>
+autodev autonomous incident-send --run-dir ./generated_runs/<run_id> --target stdout --target log:markdown --dry-run false
+```
+
+Sends a failed-run incident packet through pluggable targets (`stdout`, `log`) and persists send attempts in
+`.autodev/autonomous_incident_send.json`. Defaults are safe: `--dry-run true` and no automatic send unless enabled
+via autonomous policy.
 
 GUI/API parity: `GET /api/autonomous/quality-gate/latest` returns the latest run's autonomous summary snapshot
 (including gate/guard/preflight/operator guidance) and degrades gracefully when some artifacts are missing.
@@ -143,6 +156,11 @@ run:
       rollback_recommendation_enabled: true
     budget_guard_policy:
       max_estimated_token_budget: 120000
+    incident_send:
+      enabled: false
+      dry_run: true
+      targets:
+        - stdout
 ```
 
 Notes:
@@ -165,6 +183,8 @@ Notes:
 - Report/summary artifacts expose `operator_guidance` resolved from typed gate/guard/preflight/budget reason codes with links into `docs/AUTONOMOUS_FAILURE_PLAYBOOK.md`.
 - Report/summary artifacts also expose `incident_routing` derived from typed reason codes (owner/team, severity, target SLA, escalation class), including summary top fields (`incident_owner_team`, `incident_severity`, `incident_target_sla`, `incident_escalation_class`).
 - Failed outcomes now emit `.autodev/autonomous_incident_packet.json` with structured run summary, typed/root-cause codes, routing, reproduction pointers, and top operator actions. Successful outcomes keep no-op behavior (incident packet is not generated).
+- Optional incident-send hooks can be enabled via `run.autonomous.incident_send.enabled`; default remains disabled with `dry_run=true` for side-effect-safe behavior.
+- Send attempts persist in `.autodev/autonomous_incident_send.json` and are exposed through report/summary surfaces.
 - Unknown or newly introduced reason codes still produce graceful fallback guidance/routing (generic or family-level actions + routing defaults) for backward compatibility.
 
 ---
@@ -180,7 +200,8 @@ Each autonomous run writes:
 - `.autodev/autonomous_strategy_trace.json` — per-iteration strategy routing/rotation trace with latest selected strategy
 - `.autodev/autonomous_guard_decisions.json` — stop-guard decision history with typed reason codes and rollback recommendation markers
 - `.autodev/autonomous_incident_packet.json` — structured incident packet emitted for failed outcomes
-- `AUTONOMOUS_REPORT.md` — quick human summary (includes incident packet section/reference)
+- `.autodev/autonomous_incident_send.json` — incident send-attempt history (`latest` + attempt records per target)
+- `AUTONOMOUS_REPORT.md` — quick human summary (includes incident packet/send sections)
 - existing run artifacts (`report.json`, quality artifacts, checkpoints) are preserved
 
 Terminal conditions:

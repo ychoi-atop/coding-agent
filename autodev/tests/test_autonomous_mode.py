@@ -1267,6 +1267,7 @@ def test_autonomous_resume_state_deduplicates_attempt_indices_before_retry(tmp_p
             max_autonomous_iterations=3,
             max_estimated_token_budget=None,
         ),
+        incident_send_policy=autonomous_mode.AutonomousIncidentSendPolicy(),
         prd_path=str(prd),
         config_path=str(cfg),
     )
