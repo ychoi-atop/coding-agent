@@ -26,6 +26,7 @@ def _write_cfg(
     *,
     include_quality_gate_policy: bool = False,
     stop_guard_policy_yaml: str = "",
+    preflight_yaml: str = "",
 ) -> Path:
     gate_policy = """
     quality_gate_policy:
@@ -40,6 +41,10 @@ def _write_cfg(
     stop_guard_policy = ""
     if stop_guard_policy_yaml.strip():
         stop_guard_policy = f"\n    stop_guard_policy:\n{stop_guard_policy_yaml.rstrip()}"
+
+    preflight_policy = ""
+    if preflight_yaml.strip():
+        preflight_policy = f"\n    preflight:\n{preflight_yaml.rstrip()}"
 
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
@@ -58,7 +63,7 @@ profiles:
 run:
   autonomous:
     max_iterations: 3
-    time_budget_sec: 600{gate_policy}{stop_guard_policy}
+    time_budget_sec: 600{gate_policy}{stop_guard_policy}{preflight_policy}
 """,
         encoding="utf-8",
     )
@@ -117,11 +122,108 @@ def test_autonomous_start_retries_until_success(tmp_path, monkeypatch):
     assert state["phase"] == "completed"
     assert state["current_iteration"] == 2
     assert len(state["attempts"]) == 2
+    assert state["preflight"]["status"] == "passed"
+    assert state["preflight"]["reason_codes"] == []
     assert calls == [False, True]
 
     report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
     assert report["ok"] is True
     assert report["iterations_total"] == 2
+    assert report["preflight"]["status"] == "passed"
+
+
+def test_autonomous_start_preflight_fails_early_on_blocked_path(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path)
+    prd = _write_prd(tmp_path)
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    calls = 0
+
+    async def _fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return True, {"project": {}}, {"tasks": []}, []
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    with pytest.raises(SystemExit) as exc:
+        autonomous_mode.cli(
+            [
+                "start",
+                "--prd",
+                str(prd),
+                "--out",
+                str(out_root),
+                "--config",
+                str(cfg),
+                "--profile",
+                "minimal",
+                "--workspace-allowlist",
+                str(tmp_path),
+                "--blocked-paths",
+                str(tmp_path),
+            ]
+        )
+
+    assert exc.value.code == 1
+    assert calls == 0
+
+    run_dir = sorted(out_root.iterdir())[0]
+    state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / ".autodev" / "autonomous_report.json").read_text(encoding="utf-8"))
+
+    assert state["status"] == "failed"
+    assert state["failure_reason"] == "preflight_failed"
+    assert state["preflight"]["status"] == "failed"
+    assert "autonomous_preflight.path_blocked" in state["preflight"]["reason_codes"]
+    assert report["preflight"]["status"] == "failed"
+
+
+def test_autonomous_start_preflight_fails_early_on_missing_prd(tmp_path, monkeypatch):
+    cfg = _write_cfg(tmp_path)
+    missing_prd = tmp_path / "missing-prd.md"
+    out_root = tmp_path / "runs"
+
+    monkeypatch.setattr(autonomous_mode, "LLMClient", _FakeClient)
+
+    calls = 0
+
+    async def _fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return True, {"project": {}}, {"tasks": []}, []
+
+    monkeypatch.setattr(autonomous_mode, "run_autodev_enterprise", _fake_run)
+
+    with pytest.raises(SystemExit) as exc:
+        autonomous_mode.cli(
+            [
+                "start",
+                "--prd",
+                str(missing_prd),
+                "--out",
+                str(out_root),
+                "--config",
+                str(cfg),
+                "--profile",
+                "minimal",
+                "--workspace-allowlist",
+                str(tmp_path),
+            ]
+        )
+
+    assert exc.value.code == 1
+    assert calls == 0
+
+    run_dir = sorted(out_root.iterdir())[0]
+    state = json.loads((run_dir / ".autodev" / "autonomous_state.json").read_text(encoding="utf-8"))
+
+    assert state["status"] == "failed"
+    assert state["failure_reason"] == "preflight_failed"
+    assert state["preflight"]["status"] == "failed"
+    assert "autonomous_preflight.required_file_missing" in state["preflight"]["reason_codes"]
 
 
 def test_autonomous_start_records_quality_gate_policy_in_metadata_and_state(tmp_path, monkeypatch):
@@ -891,6 +993,7 @@ def test_autonomous_resume_state_deduplicates_attempt_indices_before_retry(tmp_p
             allow_docker_build=False,
             allow_external_side_effects=False,
         ),
+        preflight_policy=autonomous_mode.AutonomousPreflightPolicy(),
         quality_gate_policy=None,
         stop_guard_policy=autonomous_mode.AutonomousStopGuardPolicy(),
         prd_path=str(prd),

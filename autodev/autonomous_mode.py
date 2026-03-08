@@ -38,6 +38,7 @@ AUTONOMOUS_STRATEGY_TRACE_JSON = ".autodev/autonomous_strategy_trace.json"
 AUTONOMOUS_GUARD_DECISIONS_JSON = ".autodev/autonomous_guard_decisions.json"
 _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
 _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION = "av2-008"
+_AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION = "av2-009"
 
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_GATE_FAILURES = 3
 _AUTONOMOUS_STOP_GUARD_DEFAULT_MAX_CONSECUTIVE_NO_IMPROVEMENT = 2
@@ -77,6 +78,11 @@ class AutonomousPolicy:
     blocked_paths: list[str]
     allow_docker_build: bool
     allow_external_side_effects: bool
+
+
+@dataclass(frozen=True)
+class AutonomousPreflightPolicy:
+    check_artifact_writable: bool = False
 
 
 @dataclass(frozen=True)
@@ -1103,9 +1109,62 @@ def _is_under(path: str, root: str) -> bool:
         return False
 
 
-def _enforce_path_boundaries(policy: AutonomousPolicy, *, prd: str, config: str, out_root: str, run_out: str) -> None:
+def _make_preflight_diagnostic(
+    code: str,
+    message: str,
+    *,
+    reason_code: str,
+    severity: str = "error",
+    retryable: bool = False,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "autonomous_preflight_failure",
+        "taxonomy_version": _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION,
+        "code": code,
+        "reason_code": reason_code,
+        "message": message,
+        "severity": severity,
+        "retryable": retryable,
+        "at": _utc_now(),
+    }
+    if isinstance(details, dict) and details:
+        payload["details"] = details
+    return payload
+
+
+def _resolve_autonomous_preflight_policy(args: argparse.Namespace, run_cfg: dict[str, Any]) -> AutonomousPreflightPolicy:
+    auto_cfg = run_cfg.get("autonomous")
+    if auto_cfg is not None and not isinstance(auto_cfg, dict):
+        raise SystemExit("config.run.autonomous must be an object when set.")
+    auto_cfg = auto_cfg or {}
+
+    preflight_cfg = auto_cfg.get("preflight")
+    if preflight_cfg is not None and not isinstance(preflight_cfg, dict):
+        raise SystemExit("config.run.autonomous.preflight must be an object when set.")
+    preflight_cfg = preflight_cfg or {}
+
+    check_artifact_writable = (
+        bool(args.preflight_check_artifact_writable)
+        if args.preflight_check_artifact_writable is not None
+        else bool(preflight_cfg.get("check_artifact_writable", False))
+    )
+    return AutonomousPreflightPolicy(check_artifact_writable=check_artifact_writable)
+
+
+def _run_autonomous_preflight(
+    *,
+    ws: Workspace,
+    policy: AutonomousPolicy,
+    preflight_policy: AutonomousPreflightPolicy,
+    prd: str,
+    config: str,
+    out_root: str,
+    run_out: str,
+) -> dict[str, Any]:
     allowlist = [_normalize_path(x) for x in policy.workspace_allowlist]
     blocked = [_normalize_path(x) for x in policy.blocked_paths]
+
     targets = {
         "prd": _normalize_path(prd),
         "config": _normalize_path(config),
@@ -1113,17 +1172,88 @@ def _enforce_path_boundaries(policy: AutonomousPolicy, *, prd: str, config: str,
         "run_out": _normalize_path(run_out),
     }
 
+    diagnostics: list[dict[str, Any]] = []
+
     for label, target in targets.items():
         if not any(_is_under(target, root) for root in allowlist):
-            raise SystemExit(
-                f"Autonomous policy blocked path '{label}': {target}. "
-                f"Not under workspace_allowlist={allowlist}."
+            diagnostics.append(
+                _make_preflight_diagnostic(
+                    "preflight.path.not_in_workspace_allowlist",
+                    f"path '{label}' is outside workspace_allowlist",
+                    reason_code="autonomous_preflight.path_not_allowlisted",
+                    details={"label": label, "path": target, "workspace_allowlist": allowlist},
+                )
             )
         if any(_is_under(target, blocked_root) for blocked_root in blocked):
-            raise SystemExit(
-                f"Autonomous policy blocked path '{label}': {target}. "
-                f"Matches blocked_paths={blocked}."
+            diagnostics.append(
+                _make_preflight_diagnostic(
+                    "preflight.path.matches_blocked_path",
+                    f"path '{label}' matches a blocked path",
+                    reason_code="autonomous_preflight.path_blocked",
+                    details={"label": label, "path": target, "blocked_paths": blocked},
+                )
             )
+
+    def _check_readable_file(path: str, label: str) -> None:
+        if not os.path.isfile(path):
+            diagnostics.append(
+                _make_preflight_diagnostic(
+                    "preflight.prerequisite.missing_file",
+                    f"required file '{label}' is missing",
+                    reason_code="autonomous_preflight.required_file_missing",
+                    retryable=False,
+                    details={"label": label, "path": path},
+                )
+            )
+            return
+        if not os.access(path, os.R_OK):
+            diagnostics.append(
+                _make_preflight_diagnostic(
+                    "preflight.prerequisite.unreadable_file",
+                    f"required file '{label}' is not readable",
+                    reason_code="autonomous_preflight.required_file_unreadable",
+                    retryable=False,
+                    details={"label": label, "path": path},
+                )
+            )
+
+    _check_readable_file(targets["prd"], "prd")
+    _check_readable_file(targets["config"], "config")
+
+    if preflight_policy.check_artifact_writable:
+        probe_rel_path = ".autodev/.preflight_write_probe"
+        probe_payload = f"autonomous-preflight {uuid4().hex}\n"
+        try:
+            ws.write_text(probe_rel_path, probe_payload)
+            probe_abs = Path(ws.root) / probe_rel_path
+            if probe_abs.exists():
+                probe_abs.unlink()
+        except OSError as e:
+            diagnostics.append(
+                _make_preflight_diagnostic(
+                    "preflight.artifacts.not_writable",
+                    "artifact directory is not writable",
+                    reason_code="autonomous_preflight.artifacts_not_writable",
+                    retryable=True,
+                    details={"run_out": targets["run_out"], "error": str(e)},
+                )
+            )
+
+    reason_codes = [
+        str(item.get("reason_code"))
+        for item in diagnostics
+        if isinstance(item, dict) and item.get("reason_code")
+    ]
+
+    return {
+        "status": "passed" if not diagnostics else "failed",
+        "ok": len(diagnostics) == 0,
+        "taxonomy_version": _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION,
+        "reason_codes": sorted(set(reason_codes)),
+        "diagnostics": diagnostics,
+        "artifact_writability_check_enabled": preflight_policy.check_artifact_writable,
+        "checked_at": _utc_now(),
+    }
 
 
 def _read_text_file(path: str, label: str) -> str:
@@ -1197,6 +1327,7 @@ def _new_state(
     run_out: str,
     profile: str,
     policy: AutonomousPolicy,
+    preflight_policy: AutonomousPreflightPolicy,
     quality_gate_policy: AutonomousQualityGatePolicy | None,
     stop_guard_policy: AutonomousStopGuardPolicy,
     prd_path: str,
@@ -1210,6 +1341,7 @@ def _new_state(
         "allow_docker_build": policy.allow_docker_build,
         "allow_external_side_effects": policy.allow_external_side_effects,
     }
+    policy_payload["preflight_policy"] = asdict(preflight_policy)
     if quality_gate_policy is not None:
         policy_payload["quality_gate_policy"] = asdict(quality_gate_policy)
     policy_payload["stop_guard_policy"] = asdict(stop_guard_policy)
@@ -1230,6 +1362,7 @@ def _new_state(
         "attempts": [],
         "resume_diagnostics": [],
         "last_strategy": None,
+        "preflight": {"status": "pending", "ok": None, "reason_codes": [], "diagnostics": []},
         "started_at": _utc_now(),
         "updated_at": _utc_now(),
     }
@@ -1497,6 +1630,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
     resume_diagnostics = [
         d for d in (state.get("resume_diagnostics") or []) if isinstance(d, dict)
     ]
+    preflight = state.get("preflight") if isinstance(state.get("preflight"), dict) else None
     report = {
         "mode": "autonomous_v1",
         "ok": ok,
@@ -1515,6 +1649,7 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
             and a["gate_results"].get("passed") is False
         ]),
         "policy": state.get("policy"),
+        "preflight": preflight,
         "gate_results": latest_gate_results,
         "latest_strategy": latest_strategy,
         "guard_decision": latest_guard_decision,
@@ -1534,9 +1669,19 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         f"- Run directory: `{state.get('run_out', '')}`",
         f"- Profile: `{state.get('profile', '')}`",
         f"- Iterations: `{len(attempts)}`",
+    ]
+    if preflight is not None:
+        preflight_codes = preflight.get("reason_codes") if isinstance(preflight.get("reason_codes"), list) else []
+        codes_text = ",".join([str(code) for code in preflight_codes if code]) or "-"
+        md.append(
+            f"- Preflight: `{str(preflight.get('status') or 'unknown').upper()}` "
+            f"(codes={codes_text})"
+        )
+
+    md.extend([
         "",
         "## Attempts",
-    ]
+    ])
     for item in attempts:
         if not isinstance(item, dict):
             continue
@@ -1588,6 +1733,19 @@ def _render_report(state: dict[str, Any], *, ok: bool, last_validation: Any) -> 
         md.append(json_dumps(report["guard_decision"]))
         md.append("```")
 
+    if isinstance(preflight, dict):
+        preflight_diagnostics = preflight.get("diagnostics") if isinstance(preflight.get("diagnostics"), list) else []
+        if preflight_diagnostics:
+            md.append("")
+            md.append("## Preflight Diagnostics")
+            for item in preflight_diagnostics:
+                if not isinstance(item, dict):
+                    continue
+                md.append(
+                    f"- {item.get('reason_code', '-')}: {item.get('message', '-')} "
+                    f"(code={item.get('code', '-')}, severity={item.get('severity', '-')}, retryable={item.get('retryable')})"
+                )
+
     if resume_diagnostics:
         md.append("")
         md.append("## Resume Diagnostics")
@@ -1632,6 +1790,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     start.add_argument("--blocked-paths", action="append", default=None)
     start.add_argument("--allow-docker-build", action="store_true", default=None)
     start.add_argument("--allow-external-side-effects", action="store_true", default=None)
+    start.add_argument(
+        "--preflight-check-artifact-writable",
+        action="store_true",
+        default=None,
+        help="Enable optional preflight artifact-directory writability check.",
+    )
 
     status = sub.add_parser("status", help="print autonomous state for a run")
     status.add_argument("--run-dir", required=True)
@@ -1667,6 +1831,7 @@ def _start(argv: list[str]) -> None:
         raise SystemExit("Invalid config: run.budget must be an object.")
 
     policy = _resolve_autonomous_policy(args, run_cfg)
+    preflight_policy = _resolve_autonomous_preflight_policy(args, run_cfg)
     quality_gate_policy = _resolve_autonomous_quality_gate_policy(run_cfg)
     stop_guard_policy = _resolve_autonomous_stop_guard_policy(run_cfg)
 
@@ -1687,6 +1852,7 @@ def _start(argv: list[str]) -> None:
                 run_out=run_out,
                 profile=profile_name,
                 policy=policy,
+                preflight_policy=preflight_policy,
                 quality_gate_policy=quality_gate_policy,
                 stop_guard_policy=stop_guard_policy,
                 prd_path=args.prd,
@@ -1730,13 +1896,66 @@ def _start(argv: list[str]) -> None:
             run_out=run_out,
             profile=profile_name,
             policy=policy,
+            preflight_policy=preflight_policy,
             quality_gate_policy=quality_gate_policy,
             stop_guard_policy=stop_guard_policy,
             prd_path=args.prd,
             config_path=args.config,
         )
 
-    _enforce_path_boundaries(policy, prd=args.prd, config=args.config, out_root=args.out, run_out=run_out)
+    preflight = _run_autonomous_preflight(
+        ws=ws,
+        policy=policy,
+        preflight_policy=preflight_policy,
+        prd=args.prd,
+        config=args.config,
+        out_root=args.out,
+        run_out=run_out,
+    )
+    state["preflight"] = preflight
+    if preflight.get("ok") is not True:
+        state["status"] = "failed"
+        state["phase"] = "failed"
+        state["failure_reason"] = "preflight_failed"
+        _write_state(ws, state)
+
+        report_json, report_md = _render_report(state, ok=False, last_validation=[])
+        _write_json_if_changed(ws, AUTONOMOUS_REPORT_JSON, report_json, ignore_keys=("completed_at",))
+        _write_text_if_changed(ws, AUTONOMOUS_REPORT_MD, report_md)
+
+        failure_metadata = {
+            "run_id": run_id,
+            "request_id": request_id,
+            "requested_profile": profile_name,
+            "autonomous_mode": True,
+            "result_ok": False,
+            "run_completed_at": _utc_now(),
+            "autonomous_policy": {
+                "max_iterations": policy.max_iterations,
+                "time_budget_sec": policy.time_budget_sec,
+                "workspace_allowlist": [_normalize_path(x) for x in policy.workspace_allowlist],
+                "blocked_paths": [_normalize_path(x) for x in policy.blocked_paths],
+                "allow_docker_build": policy.allow_docker_build,
+                "allow_external_side_effects": policy.allow_external_side_effects,
+                "preflight_policy": asdict(preflight_policy),
+            },
+            "autonomous_preflight": preflight,
+        }
+        _write_json_if_changed(ws, ".autodev/run_metadata.json", failure_metadata, ignore_keys=("run_completed_at",))
+
+        print(
+            {
+                "ok": False,
+                "out": os.path.abspath(run_out),
+                "iterations": state.get("current_iteration"),
+                "max_iterations": policy.max_iterations,
+                "preflight": {
+                    "status": preflight.get("status"),
+                    "reason_codes": preflight.get("reason_codes", []),
+                },
+            }
+        )
+        raise SystemExit(1)
 
     template_candidates = prof["template_candidates"]
     validators_enabled = prof["validators"]
@@ -1816,6 +2035,7 @@ def _start(argv: list[str]) -> None:
             "blocked_paths": [_normalize_path(x) for x in policy.blocked_paths],
             "allow_docker_build": policy.allow_docker_build,
             "allow_external_side_effects": policy.allow_external_side_effects,
+            "preflight_policy": asdict(preflight_policy),
         },
         "quality_profile": quality_profile,
         "template_candidates": template_candidates,
@@ -1840,6 +2060,7 @@ def _start(argv: list[str]) -> None:
     if quality_gate_policy is not None:
         run_metadata["autonomous_quality_gate_policy"] = asdict(quality_gate_policy)
     run_metadata["autonomous_stop_guard_policy"] = asdict(stop_guard_policy)
+    run_metadata["autonomous_preflight"] = preflight
     _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata)
     _write_state(ws, state)
 
@@ -2108,6 +2329,14 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             status = "completed" if report_payload["ok"] else "failed"
         status = str(report_payload.get("status") or status)
 
+    preflight = report_payload.get("preflight") if isinstance(report_payload, dict) and isinstance(report_payload.get("preflight"), dict) else None
+    preflight_status = str(preflight.get("status") or "unknown") if isinstance(preflight, dict) else "unknown"
+    preflight_reason_codes = (
+        [str(code) for code in preflight.get("reason_codes", []) if code]
+        if isinstance(preflight, dict) and isinstance(preflight.get("reason_codes"), list)
+        else []
+    )
+
     gate_attempts = gate_payload.get("attempts") if isinstance(gate_payload, dict) else None
     if not isinstance(gate_attempts, list):
         attempts_from_report = report_payload.get("attempts") if isinstance(report_payload, dict) else None
@@ -2180,6 +2409,11 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         ]
         diagnostics.extend(resume_diagnostics)
 
+    preflight_diagnostics = []
+    if isinstance(preflight, dict) and isinstance(preflight.get("diagnostics"), list):
+        preflight_diagnostics = [item for item in preflight.get("diagnostics", []) if isinstance(item, dict)]
+        diagnostics.extend(preflight_diagnostics)
+
     return {
         "mode": "autonomous_v1_summary",
         "run_dir": str(run_path),
@@ -2191,6 +2425,9 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
             "profile": report_payload.get("profile") if isinstance(report_payload, dict) else None,
             "completed_at": report_payload.get("completed_at") if isinstance(report_payload, dict) else None,
         },
+        "preflight": preflight,
+        "preflight_status": preflight_status,
+        "preflight_reason_codes": preflight_reason_codes,
         "gate_counts": {
             "pass": pass_count,
             "fail": fail_count,
@@ -2203,6 +2440,7 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "guard_decision_source": guard_source,
         "guard_decisions_total": guard_decisions_total,
         "resume_diagnostics": resume_diagnostics,
+        "preflight_diagnostics": preflight_diagnostics,
         "warnings": warnings,
         "diagnostics": diagnostics,
     }
@@ -2219,8 +2457,19 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         "# Autonomous Run Summary",
         f"- run_dir: {summary.get('run_dir')}",
         f"- status: {summary.get('status')}",
+        f"- preflight: {summary.get('preflight_status', 'unknown')}",
         f"- gate_counts: pass={gate_counts.get('pass', 0)}, fail={gate_counts.get('fail', 0)}, total={gate_counts.get('total', 0)}",
     ]
+
+    preflight_reason_codes = (
+        summary.get("preflight_reason_codes")
+        if isinstance(summary.get("preflight_reason_codes"), list)
+        else []
+    )
+    if preflight_reason_codes:
+        lines.append(f"- preflight_reason_codes: {','.join(str(code) for code in preflight_reason_codes)}")
+    else:
+        lines.append("- preflight_reason_codes: -")
 
     if dominant_codes:
         codes_text = ", ".join(
@@ -2257,6 +2506,18 @@ def _render_autonomous_summary_text(summary: dict[str, Any]) -> str:
         lines.append("Warnings:")
         for warning in warnings:
             lines.append(f"- {warning}")
+
+    preflight_diagnostics = summary.get("preflight_diagnostics")
+    if isinstance(preflight_diagnostics, list) and preflight_diagnostics:
+        lines.append("")
+        lines.append("Preflight diagnostics:")
+        for item in preflight_diagnostics:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('reason_code', '-')}: {item.get('message', '-')} "
+                f"(code={item.get('code', '-')}, severity={item.get('severity', '-')}, retryable={item.get('retryable')})"
+            )
 
     resume_diagnostics = summary.get("resume_diagnostics")
     if isinstance(resume_diagnostics, list) and resume_diagnostics:

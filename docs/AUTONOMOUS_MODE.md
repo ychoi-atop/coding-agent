@@ -34,6 +34,7 @@ autodev autonomous start \
 - `--blocked-paths <path>` (repeatable): hard-deny roots
 - `--allow-docker-build`: opt-in docker build execution (default: blocked)
 - `--allow-external-side-effects`: explicit flag for future higher-risk external actions (default: false)
+- `--preflight-check-artifact-writable`: opt-in preflight probe to verify `.autodev/` artifact path is writable
 - `--resume`: first attempt starts with normal run checkpoint resume behavior
 - `--resume-state --run-dir <existing_run>`: continue a prior autonomous session from saved state (with deterministic recovery for partial/corrupt state artifacts)
 
@@ -53,9 +54,9 @@ autodev autonomous summary --run-dir ./generated_runs/<run_id>
 autodev autonomous summary --run-dir ./generated_runs/<run_id> --format text
 ```
 
-Default output is machine-readable JSON with latest run status, gate pass/fail counts,
-dominant gate fail codes, latest auto-fix strategy, and stop-guard decision fields
-(with graceful warnings for missing artifacts).
+Default output is machine-readable JSON with latest run status, preflight status/reason codes,
+gate pass/fail counts, dominant gate fail codes, latest auto-fix strategy, and stop-guard
+decision fields (with graceful warnings for missing artifacts).
 
 ---
 
@@ -82,6 +83,8 @@ run:
         max_high_findings: 0
       performance:
         max_regression_pct: 5
+    preflight:
+      check_artifact_writable: false
     stop_guard_policy:
       max_consecutive_gate_failures: 3
       max_consecutive_no_improvement: 2
@@ -99,6 +102,8 @@ Notes:
 - Strategy selection uses a bounded no-improvement heuristic to avoid repeating identical strategies when the prior same-strategy retry did not measurably reduce gate failures.
 - Stop-guard policy (`stop_guard_policy`) adds deterministic early-stop decisions before exhausting wasteful retries when (a) gate failures repeat consecutively or (b) consecutive gate-failed attempts show no measurable improvement.
 - Guard decisions persist typed reason codes (for example `autonomous_guard.repeated_gate_failure_limit_reached`) and optional rollback recommendation markers across state/report/summary artifacts.
+- Autonomous mode now runs a preflight safety gate before the unattended loop starts (path allowlist/blocked checks + required readable file checks, with optional artifact writability probe).
+- Preflight failures stop early with typed reason codes (for example `autonomous_preflight.path_blocked`) and persist diagnostics in state/report/summary artifacts.
 - `--resume-state` now performs deterministic state normalization (attempt de-duplication + `current_iteration` alignment) to prevent duplicate/lost attempt indexing across restart boundaries.
 - Resume/recovery paths emit typed `resume_diagnostics` entries in state/report/summary outputs so operators can see when corrupt/partial artifacts were auto-recovered.
 - Gate fail reasons include a normalized taxonomy payload (`taxonomy_version`, `category`, `severity`, `retryable`, `signal_source`) and explicit baseline regression codes (e.g. `performance.baseline_regression_detected`) so downstream report/triage logic can branch deterministically.
@@ -120,7 +125,7 @@ Each autonomous run writes:
 
 Terminal conditions:
 - `completed`
-- `failed` (`max_iterations_exceeded` or `time_budget_exceeded`)
+- `failed` (`preflight_failed`, `max_iterations_exceeded`, or `time_budget_exceeded`)
 
 ---
 

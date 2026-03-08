@@ -200,6 +200,49 @@ def test_autonomous_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) ->
     assert "guard_decision: stop (autonomous_guard.repeated_gate_failure_limit_reached)" in text_out
 
 
+def test_extract_autonomous_summary_exposes_preflight_status_and_reason_codes(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-preflight"
+    artifacts = run_dir / ".autodev"
+
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-preflight",
+            "preflight": {
+                "status": "failed",
+                "ok": False,
+                "reason_codes": [
+                    "autonomous_preflight.path_blocked",
+                    "autonomous_preflight.required_file_missing",
+                ],
+                "diagnostics": [
+                    {
+                        "code": "preflight.path.matches_blocked_path",
+                        "reason_code": "autonomous_preflight.path_blocked",
+                        "message": "path 'prd' matches a blocked path",
+                        "severity": "error",
+                        "retryable": False,
+                    }
+                ],
+            },
+        },
+    )
+
+    summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
+
+    assert summary["preflight_status"] == "failed"
+    assert "autonomous_preflight.path_blocked" in summary["preflight_reason_codes"]
+    assert any(
+        isinstance(item, dict) and item.get("reason_code") == "autonomous_preflight.path_blocked"
+        for item in summary["diagnostics"]
+    )
+
+    rendered = autonomous_mode._render_autonomous_summary_text(summary)
+    assert "preflight: failed" in rendered
+    assert "preflight_reason_codes: autonomous_preflight.path_blocked,autonomous_preflight.required_file_missing" in rendered
+
+
 def test_extract_autonomous_summary_exposes_typed_resume_diagnostics(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-resume-diag"
     artifacts = run_dir / ".autodev"
