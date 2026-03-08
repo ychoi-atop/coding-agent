@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -339,3 +340,154 @@ def test_replay_invalid_entry_handling_is_clear(tmp_path: Path) -> None:
     )
     assert invalid.returncode == 1
     assert "replay index out of range" in invalid.stdout
+
+
+def test_apply_acquires_and_releases_write_lock(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+    lock_path = tmp_path / "status-hook.lock"
+
+    result = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+        "--lock-file",
+        str(lock_path),
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "[LOCK] Acquired" in result.stdout
+    assert "[LOCK] Released" in result.stdout
+    assert not lock_path.exists()
+
+    rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    last = rows[-1]
+    assert last["mode"] == "apply"
+    assert last["outcome"] in {"updated", "noop"}
+    assert last["diagnostics"]["lock"]["acquire"]["status"] == "acquired"
+    assert last["diagnostics"]["lock"]["release"]["status"] in {"released", "already_missing"}
+
+
+def test_second_concurrent_invocation_is_blocked(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+    lock_path = tmp_path / "status-hook.lock"
+
+    lock_path.write_text(
+        json.dumps(
+            {
+                "lock_token": "existing",
+                "pid": 99999,
+                "acquired_at_epoch": time.time(),
+                "acquired_at_kst": "2026-03-09 00:00 KST (Asia/Seoul)",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli(
+        "av4.kickoff.started",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+        "--lock-file",
+        str(lock_path),
+        "--lock-stale-seconds",
+        "600",
+    )
+    assert result.returncode == 1
+    assert "blocked by write lock" in result.stdout
+
+    rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    last = rows[-1]
+    assert last["outcome"] == "blocked_by_lock"
+    assert last["diagnostics"]["lock"]["status"] == "blocked"
+
+
+def test_stale_lock_requires_force_override(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+    lock_path = tmp_path / "status-hook.lock"
+
+    lock_path.write_text(
+        json.dumps(
+            {
+                "lock_token": "stale-existing",
+                "pid": 777,
+                "acquired_at_epoch": time.time() - 3600,
+                "acquired_at_kst": "2026-03-08 20:00 KST (Asia/Seoul)",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    blocked = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+        "--lock-file",
+        str(lock_path),
+        "--lock-stale-seconds",
+        "5",
+    )
+    assert blocked.returncode == 1
+    assert "appears stale" in blocked.stdout
+
+    forced = _run_cli(
+        "av4.execution.in_progress",
+        "--docs-root",
+        str(docs_root),
+        "--audit-log",
+        str(audit_path),
+        "--lock-file",
+        str(lock_path),
+        "--lock-stale-seconds",
+        "5",
+        "--force-lock",
+    )
+    assert forced.returncode == 0, forced.stderr + forced.stdout
+    assert "[LOCK] Acquired" in forced.stdout
+    assert "[LOCK] Released" in forced.stdout
+
+    rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows[-2]["outcome"] == "blocked_by_lock"
+    assert rows[-1]["diagnostics"]["lock"]["acquire"]["stale_override"] is True
+
+
+def test_drift_check_mode_is_read_only_and_ignores_write_lock(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+    audit_path = tmp_path / "status-hook-audit.jsonl"
+    lock_path = tmp_path / "status-hook.lock"
+
+    # Simulate another writer holding the lock; drift-check should still run read-only.
+    original_lock = {
+        "lock_token": "held-by-writer",
+        "pid": 4242,
+        "acquired_at_epoch": time.time(),
+        "acquired_at_kst": "2026-03-09 01:00 KST (Asia/Seoul)",
+    }
+    lock_path.write_text(json.dumps(original_lock), encoding="utf-8")
+
+    result = _run_cli(
+        "av4.kickoff.started",
+        "--docs-root",
+        str(docs_root),
+        "--drift-check",
+        "--audit-log",
+        str(audit_path),
+        "--lock-file",
+        str(lock_path),
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "[PASS] Status hook drift check passed" in result.stdout
+    assert "[LOCK]" not in result.stdout
+
+    assert json.loads(lock_path.read_text(encoding="utf-8")) == original_lock

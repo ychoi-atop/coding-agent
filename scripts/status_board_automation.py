@@ -21,12 +21,19 @@ AV4-004 scope:
 AV4-005 scope:
 - append-only status-hook audit log (apply/drift-check/replay)
 - replay prior audit entry safely (dry-run default; opt-in apply)
+
+AV4-006 scope:
+- write lockfile/concurrency guard for apply + replay --apply
+- stale lock policy with explicit force override + lock diagnostics in audit trail
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +72,8 @@ PLAN_AV4_PREFIX = "- AV4 "
 BACKLOG_TITLE_PREFIX = "# BACKLOG — Next Wave ("
 BACKLOG_AV4_PREFIX = "- AV4 "
 DEFAULT_AUDIT_LOG_RELATIVE = "artifacts/status-hooks/status-hook-audit.jsonl"
+DEFAULT_LOCKFILE_RELATIVE = "artifacts/status-hooks/status-hook-write.lock"
+DEFAULT_LOCK_STALE_SECONDS = 900
 
 EXPECTED_DOC_TRANSITIONS = (
     "STATUS_BOARD_CURRENT.md",
@@ -416,6 +425,179 @@ def _default_audit_log_path() -> Path:
     return Path(__file__).resolve().parents[1] / DEFAULT_AUDIT_LOG_RELATIVE
 
 
+def _default_lockfile_path() -> Path:
+    return Path(__file__).resolve().parents[1] / DEFAULT_LOCKFILE_RELATIVE
+
+
+class StatusHookLockError(RuntimeError):
+    def __init__(self, message: str, diagnostics: Mapping[str, Any]):
+        super().__init__(message)
+        self.diagnostics = dict(diagnostics)
+
+
+@dataclass(frozen=True)
+class WriteLockHandle:
+    path: Path
+    token: str
+
+
+def _read_lock_metadata(lockfile_path: Path) -> dict[str, Any]:
+    try:
+        raw = lockfile_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw.strip()}
+
+    if isinstance(value, dict):
+        return value
+    return {"value": value}
+
+
+def _acquire_write_lock(
+    *,
+    lockfile_path: Path,
+    stale_after_seconds: int,
+    force_override: bool,
+) -> tuple[WriteLockHandle, Mapping[str, Any]]:
+    if stale_after_seconds < 1:
+        raise ValueError("--lock-stale-seconds must be >= 1")
+
+    lockfile_path.parent.mkdir(parents=True, exist_ok=True)
+
+    token = uuid4().hex
+    now_epoch = time.time()
+    payload = {
+        "lock_token": token,
+        "pid": os.getpid(),
+        "acquired_at_epoch": now_epoch,
+        "acquired_at_kst": _kst_timestamp(),
+        "argv": sys.argv,
+    }
+
+    def _try_create() -> bool:
+        try:
+            fd = os.open(str(lockfile_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return True
+
+    if not _try_create():
+        existing = _read_lock_metadata(lockfile_path)
+        acquired_at_epoch = existing.get("acquired_at_epoch") if isinstance(existing, Mapping) else None
+        try:
+            acquired_epoch_value = float(acquired_at_epoch)
+        except (TypeError, ValueError):
+            acquired_epoch_value = None
+
+        if acquired_epoch_value is None:
+            try:
+                acquired_epoch_value = lockfile_path.stat().st_mtime
+            except OSError:
+                acquired_epoch_value = now_epoch
+
+        age_seconds = max(0.0, now_epoch - acquired_epoch_value)
+        stale = age_seconds >= stale_after_seconds
+        base_diag = {
+            "status": "blocked",
+            "lock_file": str(lockfile_path),
+            "stale": stale,
+            "age_seconds": round(age_seconds, 3),
+            "stale_after_seconds": stale_after_seconds,
+            "force_override": force_override,
+            "existing_lock": dict(existing) if isinstance(existing, Mapping) else {},
+        }
+
+        if not stale:
+            raise StatusHookLockError(
+                f"status-hook write lock is already held: {lockfile_path}",
+                diagnostics=base_diag,
+            )
+
+        if not force_override:
+            raise StatusHookLockError(
+                (
+                    f"status-hook write lock appears stale (age={int(age_seconds)}s >= {stale_after_seconds}s): "
+                    f"{lockfile_path}. Re-run with --force-lock to override."
+                ),
+                diagnostics=base_diag,
+            )
+
+        try:
+            lockfile_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            base_diag = dict(base_diag)
+            base_diag["override_error"] = str(exc)
+            raise StatusHookLockError(
+                f"failed to override stale status-hook lock: {exc}",
+                diagnostics=base_diag,
+            ) from exc
+
+        if not _try_create():
+            race_diag = dict(base_diag)
+            race_diag["status"] = "blocked_after_stale_override_race"
+            race_diag["stale_override_attempted"] = True
+            race_diag["existing_lock"] = _read_lock_metadata(lockfile_path)
+            raise StatusHookLockError(
+                f"status-hook write lock was acquired by another process during stale override: {lockfile_path}",
+                diagnostics=race_diag,
+            )
+
+        acquired_diag = {
+            "status": "acquired",
+            "lock_file": str(lockfile_path),
+            "token": token,
+            "stale_override": True,
+            "stale_after_seconds": stale_after_seconds,
+            "replaced_lock": dict(existing) if isinstance(existing, Mapping) else {},
+        }
+        return WriteLockHandle(path=lockfile_path, token=token), acquired_diag
+
+    acquired_diag = {
+        "status": "acquired",
+        "lock_file": str(lockfile_path),
+        "token": token,
+        "stale_override": False,
+        "stale_after_seconds": stale_after_seconds,
+    }
+    return WriteLockHandle(path=lockfile_path, token=token), acquired_diag
+
+
+def _release_write_lock(handle: WriteLockHandle) -> Mapping[str, Any]:
+    diag: dict[str, Any] = {
+        "status": "released",
+        "lock_file": str(handle.path),
+        "token": handle.token,
+    }
+
+    if not handle.path.exists():
+        diag["status"] = "already_missing"
+        return diag
+
+    current = _read_lock_metadata(handle.path)
+    current_token = current.get("lock_token") if isinstance(current, Mapping) else None
+    if current_token and current_token != handle.token:
+        diag["status"] = "not_owner"
+        diag["current_lock"] = dict(current) if isinstance(current, Mapping) else {}
+        return diag
+
+    try:
+        handle.path.unlink()
+    except FileNotFoundError:
+        diag["status"] = "already_missing"
+    except OSError as exc:
+        diag["status"] = "release_error"
+        diag["error"] = str(exc)
+    return diag
+
+
 def _make_audit_entry(
     *,
     hook_event_id: str,
@@ -568,6 +750,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"append-only status-hook audit log path (default: {DEFAULT_AUDIT_LOG_RELATIVE})",
     )
     parser.add_argument(
+        "--lock-file",
+        default=str(_default_lockfile_path()),
+        help=f"write lock path used for apply/replay --apply (default: {DEFAULT_LOCKFILE_RELATIVE})",
+    )
+    parser.add_argument(
+        "--lock-stale-seconds",
+        type=int,
+        default=DEFAULT_LOCK_STALE_SECONDS,
+        help=f"consider lock stale after N seconds (default: {DEFAULT_LOCK_STALE_SECONDS})",
+    )
+    parser.add_argument(
+        "--force-lock",
+        action="store_true",
+        help="override stale write lock for apply/replay --apply",
+    )
+    parser.add_argument(
         "--validate-registry",
         action="store_true",
         help="validate status-hook event registry schema and exit",
@@ -596,11 +794,29 @@ def main() -> int:
         parser.error(f"docs root not found: {docs_root}")
 
     audit_log_path = Path(args.audit_log).resolve()
+    lockfile_path = Path(args.lock_file).resolve()
 
     if args.replay:
         if args.event:
             parser.error("event positional arg cannot be used with --replay")
+
+        mode = "replay-apply" if args.apply else "replay-dry-run"
+        target_docs = [docs_root / p for p in EXPECTED_DOC_TRANSITIONS]
+
+        lock_handle: WriteLockHandle | None = None
+        lock_acquire_diag: Mapping[str, Any] | None = None
+        entry: dict[str, Any] | None = None
+        exit_code = 0
+
         try:
+            if args.apply:
+                lock_handle, lock_acquire_diag = _acquire_write_lock(
+                    lockfile_path=lockfile_path,
+                    stale_after_seconds=args.lock_stale_seconds,
+                    force_override=args.force_lock,
+                )
+                print(f"[LOCK] Acquired status-hook write lock: {lockfile_path}")
+
             hook_event_id, changed, diagnostics, selected_index = replay_audit_entry(
                 selector=args.replay,
                 docs_root=docs_root,
@@ -608,35 +824,77 @@ def main() -> int:
                 apply=args.apply,
                 timestamp=args.timestamp,
             )
+
+            if args.apply:
+                diagnostics = dict(diagnostics)
+                diagnostics["lock"] = {
+                    "acquire": dict(lock_acquire_diag or {}),
+                    "release": None,
+                }
+
+            entry = _make_audit_entry(
+                hook_event_id=hook_event_id,
+                mode=mode,
+                target_docs=target_docs,
+                outcome="success",
+                diagnostics=diagnostics,
+            )
+
+            if args.apply:
+                if changed:
+                    print(f"[PASS] Replay apply updated docs from audit entry #{selected_index} ({args.replay}):")
+                    for path in changed:
+                        print(f"  - {path}")
+                else:
+                    print(f"[PASS] Replay apply found no file changes (entry #{selected_index}: {args.replay}).")
+            else:
+                if changed:
+                    print(f"[DRY-RUN] Replay would update docs from audit entry #{selected_index} ({args.replay}):")
+                    for path in changed:
+                        print(f"  - {path}")
+                else:
+                    print(f"[DRY-RUN] Replay found no file changes (entry #{selected_index}: {args.replay}).")
+
+        except StatusHookLockError as exc:
+            print(f"[FAIL] Replay blocked by status-hook write lock: {exc}")
+            entry = _make_audit_entry(
+                hook_event_id=f"replay:{args.replay}",
+                mode=mode,
+                target_docs=target_docs,
+                outcome="blocked_by_lock",
+                diagnostics={"replay_selector": args.replay, "lock": dict(exc.diagnostics)},
+            )
+            exit_code = 1
         except ValueError as exc:
             print(f"[FAIL] Replay failed: {exc}")
-            return 1
+            diagnostics: dict[str, Any] = {"replay_selector": args.replay, "error": str(exc)}
+            if lock_acquire_diag is not None:
+                diagnostics["lock"] = {"acquire": dict(lock_acquire_diag), "release": None}
+            entry = _make_audit_entry(
+                hook_event_id=f"replay:{args.replay}",
+                mode=mode,
+                target_docs=target_docs,
+                outcome="error",
+                diagnostics=diagnostics,
+            )
+            exit_code = 1
+        finally:
+            if lock_handle is not None:
+                release_diag = _release_write_lock(lock_handle)
+                print(f"[LOCK] Released status-hook write lock: {lockfile_path} ({release_diag.get('status')})")
+                if entry is not None:
+                    diagnostics = dict(entry.get("diagnostics") or {})
+                    lock_diag = diagnostics.get("lock") if isinstance(diagnostics.get("lock"), Mapping) else {}
+                    lock_diag = dict(lock_diag)
+                    if lock_acquire_diag is not None and "acquire" not in lock_diag:
+                        lock_diag["acquire"] = dict(lock_acquire_diag)
+                    lock_diag["release"] = dict(release_diag)
+                    diagnostics["lock"] = lock_diag
+                    entry["diagnostics"] = diagnostics
 
-        mode = "replay-apply" if args.apply else "replay-dry-run"
-        entry = _make_audit_entry(
-            hook_event_id=hook_event_id,
-            mode=mode,
-            target_docs=[docs_root / p for p in EXPECTED_DOC_TRANSITIONS],
-            outcome="success",
-            diagnostics=diagnostics,
-        )
-        _append_audit_entry(audit_log_path, entry)
-
-        if args.apply:
-            if changed:
-                print(f"[PASS] Replay apply updated docs from audit entry #{selected_index} ({args.replay}):")
-                for path in changed:
-                    print(f"  - {path}")
-            else:
-                print(f"[PASS] Replay apply found no file changes (entry #{selected_index}: {args.replay}).")
-        else:
-            if changed:
-                print(f"[DRY-RUN] Replay would update docs from audit entry #{selected_index} ({args.replay}):")
-                for path in changed:
-                    print(f"  - {path}")
-            else:
-                print(f"[DRY-RUN] Replay found no file changes (entry #{selected_index}: {args.replay}).")
-        return 0
+        if entry is not None:
+            _append_audit_entry(audit_log_path, entry)
+        return exit_code
 
     if not args.event:
         parser.error("event is required unless --validate-registry or --replay is used")
@@ -710,8 +968,53 @@ def main() -> int:
             print("[DRY-RUN] No file changes required (already up to date).")
         return 0
 
+    lock_handle: WriteLockHandle | None = None
+    lock_acquire_diag: Mapping[str, Any] | None = None
+    entry: dict[str, Any] | None = None
+
     try:
+        lock_handle, lock_acquire_diag = _acquire_write_lock(
+            lockfile_path=lockfile_path,
+            stale_after_seconds=args.lock_stale_seconds,
+            force_override=args.force_lock,
+        )
+        print(f"[LOCK] Acquired status-hook write lock: {lockfile_path}")
+
         changed = apply_event(args.event, docs_root=docs_root, timestamp=args.timestamp)
+
+        if changed:
+            print("[PASS] Updated status docs from canonical event:")
+            for path in changed:
+                print(f"  - {path}")
+        else:
+            print("[PASS] Status docs already matched canonical event (no changes).")
+
+        entry = _make_audit_entry(
+            hook_event_id=args.event,
+            mode="apply",
+            target_docs=target_docs,
+            outcome="updated" if changed else "noop",
+            diagnostics={
+                "requested_timestamp": args.timestamp,
+                "changed_docs": [str(p) for p in changed],
+                "changed_docs_count": len(changed),
+                "lock": {"acquire": dict(lock_acquire_diag or {}), "release": None},
+            },
+        )
+
+    except StatusHookLockError as exc:
+        print(f"[FAIL] Status hook apply blocked by write lock: {exc}")
+        _append_audit_entry(
+            audit_log_path,
+            _make_audit_entry(
+                hook_event_id=args.event,
+                mode="apply",
+                target_docs=target_docs,
+                outcome="blocked_by_lock",
+                diagnostics={"requested_timestamp": args.timestamp, "lock": dict(exc.diagnostics)},
+            ),
+        )
+        return 1
     except ValueError as exc:
         print(f"[FAIL] Status hook apply failed: {exc}")
         _append_audit_entry(
@@ -721,32 +1024,30 @@ def main() -> int:
                 mode="apply",
                 target_docs=target_docs,
                 outcome="error",
-                diagnostics={"error": str(exc), "requested_timestamp": args.timestamp},
+                diagnostics={
+                    "error": str(exc),
+                    "requested_timestamp": args.timestamp,
+                    "lock": {"acquire": dict(lock_acquire_diag or {}), "release": None} if lock_acquire_diag else None,
+                },
             ),
         )
         return 1
+    finally:
+        if lock_handle is not None:
+            release_diag = _release_write_lock(lock_handle)
+            print(f"[LOCK] Released status-hook write lock: {lockfile_path} ({release_diag.get('status')})")
+            if entry is not None:
+                diagnostics = dict(entry.get("diagnostics") or {})
+                lock_diag = diagnostics.get("lock") if isinstance(diagnostics.get("lock"), Mapping) else {}
+                lock_diag = dict(lock_diag)
+                lock_diag["release"] = dict(release_diag)
+                diagnostics["lock"] = lock_diag
+                entry["diagnostics"] = diagnostics
 
-    if changed:
-        print("[PASS] Updated status docs from canonical event:")
-        for path in changed:
-            print(f"  - {path}")
-    else:
-        print("[PASS] Status docs already matched canonical event (no changes).")
+    if entry is None:
+        return 1
 
-    _append_audit_entry(
-        audit_log_path,
-        _make_audit_entry(
-            hook_event_id=args.event,
-            mode="apply",
-            target_docs=target_docs,
-            outcome="updated" if changed else "noop",
-            diagnostics={
-                "requested_timestamp": args.timestamp,
-                "changed_docs": [str(p) for p in changed],
-                "changed_docs_count": len(changed),
-            },
-        ),
-    )
+    _append_audit_entry(audit_log_path, entry)
     return 0
 
 

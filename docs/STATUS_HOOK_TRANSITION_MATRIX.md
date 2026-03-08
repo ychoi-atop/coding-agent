@@ -17,5 +17,7 @@ Canonical status-hook events drive deterministic updates for:
 - Use `python3 scripts/status_board_automation.py --validate-registry` to verify schema/registry integrity.
 - Use `python3 scripts/status_board_automation.py <event> --drift-check` to enforce no-doc-drift in CI.
 - Apply/drift-check/replay append audit entries to `artifacts/status-hooks/status-hook-audit.jsonl` (override with `--audit-log`).
+- Apply + replay `--apply` acquire a write lock (`artifacts/status-hooks/status-hook-write.lock` by default) to prevent concurrent doc writes.
+- Stale lock policy defaults to 900s (`--lock-stale-seconds`), and stale override is explicit via `--force-lock`.
 - Replay prior entries by id/index: `python3 scripts/status_board_automation.py --replay <entry_id|index>` (safe dry-run by default).
 - Use `--apply` with replay only when explicit write-back is intended.
