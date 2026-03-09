@@ -75,6 +75,7 @@ ci-fast: compile check-fast tests-fast check-status-hooks
 check-docs:
 	$(PYTHON) scripts/check_markdown_links.py
 	$(PYTHON) scripts/check_av4_backlog_schema.py
+	$(PYTHON) scripts/check_stage_boundary_contract.py
 
 # Status-hook docs drift gate (AV4-002/AV4-003).
 check-status-hooks:

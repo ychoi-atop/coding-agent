@@ -1,0 +1,50 @@
+{
+  "contract_id": "autonomous.stage-boundary.v1",
+  "version": "v1",
+  "stages": [
+    {
+      "name": "ingest",
+      "required_inputs": ["run_context", "operator_intent", "source_locator"],
+      "required_outputs": ["ingest_snapshot_id", "normalized_inputs", "ingest_summary"],
+      "failure_semantics": {
+        "retry_class": "retryable",
+        "stop_condition": "Source/auth/config validation fails repeatedly.",
+        "escalate_condition": "Retry budget exhausted or source contract mismatch detected.",
+        "evidence_required": ["ingest_error_digest", "source_ref"]
+      }
+    },
+    {
+      "name": "plan",
+      "required_inputs": ["normalized_inputs", "policy_bundle", "execution_constraints"],
+      "required_outputs": ["plan_id", "action_graph", "risk_register", "approval_packet"],
+      "failure_semantics": {
+        "retry_class": "conditional",
+        "stop_condition": "Plan cannot satisfy policy/constraint invariants.",
+        "escalate_condition": "Planning dead-end repeats or policy conflict remains unresolved.",
+        "evidence_required": ["plan_validation_report", "constraint_diff"]
+      }
+    },
+    {
+      "name": "execute",
+      "required_inputs": ["plan_id", "action_graph", "approval_token"],
+      "required_outputs": ["execution_log", "artifact_manifest", "result_snapshot"],
+      "failure_semantics": {
+        "retry_class": "conditional",
+        "stop_condition": "Non-retryable tool/runtime failure class is triggered.",
+        "escalate_condition": "Partial side-effects require operator remediation.",
+        "evidence_required": ["failure_class", "step_trace", "artifact_refs"]
+      }
+    },
+    {
+      "name": "verify",
+      "required_inputs": ["result_snapshot", "artifact_manifest", "acceptance_criteria"],
+      "required_outputs": ["verification_report", "decision", "operator_summary"],
+      "failure_semantics": {
+        "retry_class": "non_retryable",
+        "stop_condition": "Verification evidence is incomplete or criteria mismatch persists.",
+        "escalate_condition": "Acceptance cannot be proven after bounded replay.",
+        "evidence_required": ["assertion_results", "decision_rationale"]
+      }
+    }
+  ]
+}
