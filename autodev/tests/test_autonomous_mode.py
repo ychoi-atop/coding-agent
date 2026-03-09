@@ -821,7 +821,7 @@ def test_build_autonomous_incident_packet_includes_expected_sections() -> None:
     packet = autonomous_mode._build_autonomous_incident_packet(state=state, report=report, ok=False)
 
     assert packet is not None
-    assert packet["schema_version"] == "av3-005-v1"
+    assert packet["schema_version"] == "av5-005-v2"
     assert packet["run_summary"]["run_id"] == "run-incident"
     assert "tests.min_pass_rate_not_met" in packet["failure_codes"]["typed_codes"]
     assert packet["failure_codes"]["root_cause_codes"][0] == "tests.min_pass_rate_not_met"

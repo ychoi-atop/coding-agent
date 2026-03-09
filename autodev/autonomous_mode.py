@@ -65,7 +65,7 @@ _AUTONOMOUS_PREFLIGHT_DIAGNOSTIC_VERSION = "av2-009"
 _AUTONOMOUS_BUDGET_GUARD_DIAGNOSTIC_VERSION = "av2-010"
 _AUTONOMOUS_OPERATOR_GUIDANCE_VERSION = "av2-011"
 _AUTONOMOUS_INCIDENT_ROUTING_VERSION = "av3-004-v1"
-_AUTONOMOUS_INCIDENT_PACKET_VERSION = "av3-005-v1"
+_AUTONOMOUS_INCIDENT_PACKET_VERSION = "av5-005-v2"
 _AUTONOMOUS_INCIDENT_RETENTION_VERSION = "av4-009-v1"
 _AUTONOMOUS_FAILURE_PLAYBOOK_DOC = "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md"
 _AUTONOMOUS_RETENTION_POLICY_DOC = "docs/AUTONOMOUS_V4_WAVE_PLAN.md#risks"
@@ -2774,17 +2774,9 @@ def _build_autonomous_incident_packet(
         deduped_reason_codes.append(code)
 
     fail_code_counter: Counter[str] = Counter()
-    first_attempt_started_at: str | None = None
-    last_attempt_ended_at: str | None = None
     for attempt in attempts:
         if not isinstance(attempt, dict):
             continue
-        started_at = attempt.get("started_at")
-        ended_at = attempt.get("ended_at")
-        if first_attempt_started_at is None and started_at:
-            first_attempt_started_at = str(started_at)
-        if ended_at:
-            last_attempt_ended_at = str(ended_at)
         gate_results = attempt.get("gate_results") if isinstance(attempt.get("gate_results"), dict) else None
         if not isinstance(gate_results, dict):
             continue
@@ -2843,7 +2835,6 @@ def _build_autonomous_incident_packet(
         "failure_codes": {
             "typed_codes": deduped_reason_codes,
             "root_cause_codes": root_cause_codes,
-            "dominant_fail_codes": dominant_fail_codes,
         },
         "incident_routing": incident_routing,
         "reproduction": {
@@ -2853,15 +2844,7 @@ def _build_autonomous_incident_packet(
                 "state": AUTONOMOUS_STATE_FILE,
                 "report_json": AUTONOMOUS_REPORT_JSON,
                 "report_md": AUTONOMOUS_REPORT_MD,
-                "gate_results": AUTONOMOUS_GATE_RESULTS_JSON,
-                "strategy_trace": AUTONOMOUS_STRATEGY_TRACE_JSON,
-                "guard_decisions": AUTONOMOUS_GUARD_DECISIONS_JSON,
                 "incident_packet": AUTONOMOUS_INCIDENT_PACKET_JSON,
-            },
-            "key_timestamps": {
-                "first_attempt_started_at": first_attempt_started_at,
-                "last_attempt_ended_at": last_attempt_ended_at,
-                "run_completed_at": report.get("completed_at"),
             },
         },
         "operator_guidance": {

@@ -21,7 +21,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _sample_packet() -> dict:
     return {
-        "schema_version": "av3-005-v1",
+        "schema_version": "av5-005-v2",
         "status": "failed",
         "run_summary": {
             "run_id": "run-123",

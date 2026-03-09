@@ -1,0 +1,62 @@
+{
+  "required_paths": [
+    "schema_version",
+    "status",
+    "run_summary.run_id",
+    "run_summary.request_id",
+    "run_summary.failure_reason",
+    "run_summary.completed_at",
+    "failure_codes.typed_codes",
+    "failure_codes.root_cause_codes",
+    "incident_routing.primary.owner_team",
+    "incident_routing.primary.severity",
+    "incident_routing.primary.target_sla",
+    "incident_routing.primary.escalation_class",
+    "operator_guidance.playbook",
+    "operator_guidance.top_actions",
+    "reproduction.run_dir",
+    "reproduction.artifact_paths.report_json",
+    "reproduction.artifact_paths.incident_packet"
+  ],
+  "expected_projection": {
+    "schema_version": "av5-005-v2",
+    "status": "failed",
+    "run_summary": {
+      "run_id": "run-contract-v2",
+      "request_id": "req-contract-v2",
+      "failure_reason": "autonomous_guard_stop",
+      "completed_at": "2026-03-09T02:24:00Z"
+    },
+    "failure_codes": {
+      "typed_codes": [
+        "tests.min_pass_rate_not_met"
+      ],
+      "root_cause_codes": [
+        "tests.min_pass_rate_not_met"
+      ]
+    },
+    "incident_routing": {
+      "primary": {
+        "owner_team": "Feature Engineering",
+        "severity": "high",
+        "target_sla": "4h",
+        "escalation_class": "engineering_hotfix"
+      }
+    },
+    "operator_guidance": {
+      "playbook": "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md",
+      "top_action": {
+        "code": "tests.min_pass_rate_not_met",
+        "action": "Inspect the latest pytest failures and isolate deterministic regressions first.",
+        "playbook_url": "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#gate-failures"
+      }
+    },
+    "reproduction": {
+      "run_dir": "/tmp/run-contract-v2",
+      "artifact_paths": {
+        "report_json": ".autodev/autonomous_report.json",
+        "incident_packet": ".autodev/autonomous_incident_packet.json"
+      }
+    }
+  }
+}
