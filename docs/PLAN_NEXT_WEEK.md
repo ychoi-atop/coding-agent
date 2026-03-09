@@ -26,7 +26,7 @@ Primary objective is to start AV4 delivery with compact PR slices while preservi
 - `make check-status-hooks` (canonical status-hook drift gate)
 
 Manual fallback for AV4 status hooks:
-- If event integration is unavailable, run `python3 scripts/status_board_automation.py <event_id>` to sync status/plan/backlog docs from the canonical event map.
+- If event integration is unavailable, run `python3 scripts/status_board_automation.py <event_id>` to sync status/plan/backlog/closure docs from the canonical event map.
 - CI drift check equivalent: `python3 scripts/status_board_automation.py <event_id> --drift-check`.
 - Event-to-transition reference: `docs/STATUS_HOOK_TRANSITION_MATRIX.md`.
 
@@ -41,6 +41,7 @@ Manual fallback for AV4 status hooks:
 
 - `docs/AUTONOMOUS_V4_WAVE_PLAN.md`
 - `docs/AUTONOMOUS_V4_BACKLOG.md`
+- `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md`
 - `docs/STATUS_BOARD_CURRENT.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/STATUS_HOOK_TRANSITION_MATRIX.md`

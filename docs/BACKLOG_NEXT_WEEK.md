@@ -28,6 +28,7 @@ Primary AV4 execution backlog: `docs/AUTONOMOUS_V4_BACKLOG.md`.
 
 - `docs/AUTONOMOUS_V4_WAVE_PLAN.md`
 - `docs/AUTONOMOUS_V4_BACKLOG.md`
+- `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md`
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/STATUS_BOARD_CURRENT.md`
 - `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md`

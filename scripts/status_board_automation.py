@@ -25,6 +25,10 @@ AV4-005 scope:
 AV4-006 scope:
 - write lockfile/concurrency guard for apply + replay --apply
 - stale lock policy with explicit force override + lock diagnostics in audit trail
+
+AV4-010 scope:
+- extend rollup flow to include AV4 closure ledger status line
+- allow one scripted event flow to sync status/plan/backlog/closure docs
 """
 
 from __future__ import annotations
@@ -52,6 +56,7 @@ class CanonicalEventSpec:
     plan_av4_snapshot: str
     backlog_title: str
     backlog_av4_snapshot: str
+    closure_status: str
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,7 @@ PLAN_TITLE_PREFIX = "# PLAN — Next Wave ("
 PLAN_AV4_PREFIX = "- AV4 "
 BACKLOG_TITLE_PREFIX = "# BACKLOG — Next Wave ("
 BACKLOG_AV4_PREFIX = "- AV4 "
+CLOSURE_STATUS_PREFIX = "Status: "
 DEFAULT_AUDIT_LOG_RELATIVE = "artifacts/status-hooks/status-hook-audit.jsonl"
 DEFAULT_LOCKFILE_RELATIVE = "artifacts/status-hooks/status-hook-write.lock"
 DEFAULT_LOCK_STALE_SECONDS = 900
@@ -79,13 +85,14 @@ EXPECTED_DOC_TRANSITIONS = (
     "STATUS_BOARD_CURRENT.md",
     "PLAN_NEXT_WEEK.md",
     "BACKLOG_NEXT_WEEK.md",
+    "AUTONOMOUS_V4_WAVE_CLOSURE.md",
 )
 
 
 EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
     EventRegistryEntry(
         event_id="av4.kickoff.started",
-        description="Initialize AV4 kickoff docs baseline across status/plan/backlog.",
+        description="Initialize AV4 kickoff docs baseline across status/plan/backlog/closure.",
         expected_doc_transitions=EXPECTED_DOC_TRANSITIONS,
         spec=CanonicalEventSpec(
             mode="AV4 Kickoff",
@@ -96,11 +103,12 @@ EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
             plan_av4_snapshot="- AV4 kickoff package is now active (`docs/AUTONOMOUS_V4_WAVE_PLAN.md`, `docs/AUTONOMOUS_V4_BACKLOG.md`).",
             backlog_title="# BACKLOG — Next Wave (AV4 Kickoff Queue)",
             backlog_av4_snapshot="- AV4 kickoff: 🚧 started",
+            closure_status="🚧 Open (kickoff active; closure pending)",
         ),
     ),
     EventRegistryEntry(
         event_id="av4.execution.in_progress",
-        description="Reflect active AV4 implementation and validation in status/plan/backlog docs.",
+        description="Reflect active AV4 implementation and validation in status/plan/backlog/closure docs.",
         expected_doc_transitions=EXPECTED_DOC_TRANSITIONS,
         spec=CanonicalEventSpec(
             mode="AV4 Execution",
@@ -111,6 +119,7 @@ EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
             plan_av4_snapshot="- AV4 execution is in progress (P0 tickets moving through implementation + validation).",
             backlog_title="# BACKLOG — Next Wave (AV4 Active Delivery Queue)",
             backlog_av4_snapshot="- AV4 execution: 🏗️ in progress",
+            closure_status="🏗️ Open (execution in progress)",
         ),
     ),
     EventRegistryEntry(
@@ -126,6 +135,7 @@ EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
             plan_av4_snapshot="- AV4 stabilization is active (feature-complete; focus shifted to reliability evidence).",
             backlog_title="# BACKLOG — Next Wave (AV4 Stabilization Queue)",
             backlog_av4_snapshot="- AV4 stabilization: 🧪 started",
+            closure_status="🧪 Open (stabilization active)",
         ),
     ),
     EventRegistryEntry(
@@ -141,6 +151,7 @@ EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
             plan_av4_snapshot="- AV4 is closed on `main`; planning focus shifts to the next wave package.",
             backlog_title="# BACKLOG — Next Wave (Post-AV4 Intake Queue)",
             backlog_av4_snapshot="- AV4 closure: ✅ complete",
+            closure_status="✅ Closed on `main`",
         ),
     ),
 )
@@ -230,6 +241,10 @@ def _render_backlog(content: str, spec: CanonicalEventSpec, *, file_path: Path) 
     return updated
 
 
+def _render_closure(content: str, spec: CanonicalEventSpec, *, file_path: Path) -> str:
+    return _replace_line_by_prefix(content, CLOSURE_STATUS_PREFIX, f"{CLOSURE_STATUS_PREFIX}{spec.closure_status}", file_path=file_path)
+
+
 def _entry_to_mapping(entry: EventRegistryEntry | Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(entry, EventRegistryEntry):
         return {
@@ -258,6 +273,7 @@ def _validate_spec(spec: Any, *, label: str) -> list[str]:
         "plan_av4_snapshot",
         "backlog_title",
         "backlog_av4_snapshot",
+        "closure_status",
     )
     for field_name in required_fields:
         value = spec.get(field_name)
@@ -337,11 +353,13 @@ def _compute_expected_contents(
     status_path = docs_root / "STATUS_BOARD_CURRENT.md"
     plan_path = docs_root / "PLAN_NEXT_WEEK.md"
     backlog_path = docs_root / "BACKLOG_NEXT_WEEK.md"
+    closure_path = docs_root / "AUTONOMOUS_V4_WAVE_CLOSURE.md"
 
     originals = {
         status_path: status_path.read_text(encoding="utf-8"),
         plan_path: plan_path.read_text(encoding="utf-8"),
         backlog_path: backlog_path.read_text(encoding="utf-8"),
+        closure_path: closure_path.read_text(encoding="utf-8"),
     }
 
     if timestamp is not None:
@@ -355,6 +373,7 @@ def _compute_expected_contents(
         status_path: _render_status_board(originals[status_path], spec, file_path=status_path, timestamp=resolved_timestamp),
         plan_path: _render_plan(originals[plan_path], spec, file_path=plan_path),
         backlog_path: _render_backlog(originals[backlog_path], spec, file_path=backlog_path),
+        closure_path: _render_closure(originals[closure_path], spec, file_path=closure_path),
     }
     return originals, expected
 
@@ -381,11 +400,13 @@ def drift_check_event(event: str, *, docs_root: Path, timestamp: str | None = No
     status_path = docs_root / "STATUS_BOARD_CURRENT.md"
     plan_path = docs_root / "PLAN_NEXT_WEEK.md"
     backlog_path = docs_root / "BACKLOG_NEXT_WEEK.md"
+    closure_path = docs_root / "AUTONOMOUS_V4_WAVE_CLOSURE.md"
 
     originals = {
         status_path: status_path.read_text(encoding="utf-8"),
         plan_path: plan_path.read_text(encoding="utf-8"),
         backlog_path: backlog_path.read_text(encoding="utf-8"),
+        closure_path: closure_path.read_text(encoding="utf-8"),
     }
 
     resolved_timestamp = timestamp or _extract_status_timestamp(originals[status_path]) or _kst_timestamp()
@@ -417,6 +438,13 @@ def drift_check_event(event: str, *, docs_root: Path, timestamp: str | None = No
             drifted.append(backlog_path)
     except ValueError:
         drifted.append(backlog_path)
+
+    try:
+        closure_expected = _render_closure(originals[closure_path], spec, file_path=closure_path)
+        if closure_expected != originals[closure_path]:
+            drifted.append(closure_path)
+    except ValueError:
+        drifted.append(closure_path)
 
     return drifted
 
