@@ -307,7 +307,7 @@ class _FakeLLM(LLMClient):
         self.responses = responses
         self.calls = 0
 
-    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: str | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: Optional[str] = None) -> str:
         # Auto-respond for new roles not covered by legacy test fixtures.
         if role_hint in _AUTO_ROLE_RESPONSES:
             return json.dumps(_AUTO_ROLE_RESPONSES[role_hint])
@@ -326,7 +326,7 @@ class _ScriptedLLM(LLMClient):
         self.responses = list(responses)
         self.calls = 0
 
-    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: str | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: Optional[str] = None) -> str:
         if role_hint in _AUTO_ROLE_RESPONSES:
             return json.dumps(_AUTO_ROLE_RESPONSES[role_hint])
         if self.calls >= len(self.responses):
@@ -346,7 +346,7 @@ class _TempRecordingLLM(LLMClient):
         self.calls = 0
         self.temperatures: list[float] = []
 
-    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: str | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], temperature: float = 0.2, *, role_hint: Optional[str] = None) -> str:
         if role_hint in _AUTO_ROLE_RESPONSES:
             return json.dumps(_AUTO_ROLE_RESPONSES[role_hint])
         self.temperatures.append(float(temperature))
@@ -2382,7 +2382,7 @@ def test_run_loop_reuses_cached_plan_between_runs(tmp_path, monkeypatch):
 class _FakeTaskSpecificValidators:
     """Fails validation for task-id 'task-fail', passes everything else."""
 
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, Optional[str]]] = []
 
     def __init__(self, *args, **kwargs):
         pass
