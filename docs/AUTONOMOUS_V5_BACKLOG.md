@@ -5,7 +5,7 @@ Companion plan: `docs/AUTONOMOUS_V5_WAVE_PLAN.md`
 
 | ID | Priority | Effort | Ticket | Definition of Done (DoD) | Test plan | PR split |
 |---|---|---:|---|---|---|---|
-| AV5-001 | P0 | S | AV5 kickoff packet publish (plan/backlog/status sync) | AV5 plan/backlog exist and status/plan/backlog docs all reference kickoff started state | `make check-docs` + link/path verification | 1 PR |
+| AV5-001 | P0 | S | AV5 kickoff packet publish (plan/backlog/status sync) | AV5 plan/backlog exist and status/plan/backlog/README docs all reference kickoff started state | `make check-docs` + link/path verification | 1 PR |
 | AV5-002 | P0 | S | AV5 status-hook transition design draft | AV5 kickoff/execution/stabilization/closure transition map documented with event IDs and expected doc deltas | docs diff review + `make check-status-hooks` (no regression) | 1 PR |
 | AV5-003 | P0 | M | Stage-boundary contract spec (ingest/plan/execute/verify) | each stage has required inputs/outputs/failure semantics documented in canonical schema/spec docs | schema/examples validation + docs check | 1 PR |
 | AV5-004 | P0 | M | Retry strategy semantics v2 (deterministic replay policy) | retry classes and stop/escalate thresholds defined with deterministic examples | policy unit tests + replay smoke scenario | 1 PR |

@@ -572,6 +572,7 @@ Stabilization handoff bundle (active):
 
 Next-wave planning/governance docs:
 - `docs/PLAN_NEXT_WEEK.md` (AV5 kickoff active status + execution framing)
+- AV5 kickoff state is started (`av5.kickoff.started`); canonical status board: `docs/STATUS_BOARD_CURRENT.md`
 - `docs/AUTONOMOUS_V5_WAVE_PLAN.md` (AV5 goals, milestones, architecture deltas, risks)
 - `docs/AUTONOMOUS_V5_BACKLOG.md` (AV5 prioritized execution backlog with DoD/test/PR splits)
 - `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md` (AV4 closure ledger managed by status-hook rollup)
