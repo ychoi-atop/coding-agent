@@ -1,31 +1,36 @@
-# BACKLOG — Next Wave (Post-AV4 Intake Queue)
+# BACKLOG — Next Wave (AV5 Kickoff Queue)
 
 This queue is the execution companion for `docs/PLAN_NEXT_WEEK.md`.
-Current mode is AV4 closed with AV5 intake preparation.
+Current mode is AV5 kickoff active with AV4 closure preserved.
 
 ## Wave baseline
 
 - AV2 closure: ✅ `AV2-001` ~ `AV2-014`
 - AV3 closure: ✅ `AV3-001` ~ `AV3-013`
 - AV4 closure: ✅ complete (`AV4-001` ~ `AV4-014`)
-- Active status-hook event/state: `av4.closed`
+- AV5 kickoff: 🚧 started (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_BACKLOG.md`)
+- Active status-hook event/state: `av5.kickoff.started`
 
-## AV5 intake top queue (planning-first)
+## AV5 kickoff top queue
 
 | ID | Priority | Effort | Ticket |
 |---|---|---|---|
-| AV5-I01 | P0 | S | Define AV5 kickoff scope + first PR slice boundaries |
-| AV5-I02 | P0 | S | Confirm AV5 evidence lanes (tests/docs/status hooks) |
-| AV5-I03 | P1 | M | Draft AV5 ticket map with DoD and owner lanes |
-| AV5-I04 | P1 | S | Publish AV5 kickoff checklist and rollout order |
+| AV5-001 | P0 | S | Publish AV5 kickoff packet across status/plan/backlog/README |
+| AV5-002 | P0 | S | Draft AV5 status-hook transition map (kickoff→execution→stabilization→closure) |
+| AV5-003 | P0 | M | Define deterministic stage-boundary contracts |
+| AV5-004 | P0 | M | Finalize retry semantics v2 with explicit stop/escalate lanes |
+| AV5-005 | P1 | S | Normalize incident packet minimal fields for operator action |
+| AV5-006 | P1 | M | Lock CLI/API/GUI summary parity map |
 
 ## Notes
 
-- AV4 backlog execution is complete; remaining work is next-wave intake.
+- AV5 full ticket ledger is managed in `docs/AUTONOMOUS_V5_BACKLOG.md`.
 - Keep PR slices narrow and evidence explicit per ticket.
 
 ## Related docs
 
+- `docs/AUTONOMOUS_V5_WAVE_PLAN.md`
+- `docs/AUTONOMOUS_V5_BACKLOG.md`
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/STATUS_BOARD_CURRENT.md`
 - `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md`
