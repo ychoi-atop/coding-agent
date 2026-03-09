@@ -66,6 +66,17 @@ Status timestamp: 2026-01-01 00:00 KST (Asia/Seoul)
 """,
         encoding="utf-8",
     )
+    (docs_root / "AUTONOMOUS_V4_WAVE_CLOSURE.md").write_text(
+        """# Autonomous v4 Wave Closure
+
+Status: 🚧 Open (kickoff active; closure pending)
+
+## Completed tickets (`AV4-001` ~ `AV4-014`)
+
+- TODO
+""",
+        encoding="utf-8",
+    )
 
 
 def test_event_registry_valid_default_passes_schema_validation() -> None:
@@ -115,15 +126,18 @@ def test_apply_and_drift_check_support_non_kickoff_event(tmp_path: Path) -> None
         "STATUS_BOARD_CURRENT.md",
         "PLAN_NEXT_WEEK.md",
         "BACKLOG_NEXT_WEEK.md",
+        "AUTONOMOUS_V4_WAVE_CLOSURE.md",
     }
 
     status_text = (docs_root / "STATUS_BOARD_CURRENT.md").read_text(encoding="utf-8")
     plan_text = (docs_root / "PLAN_NEXT_WEEK.md").read_text(encoding="utf-8")
     backlog_text = (docs_root / "BACKLOG_NEXT_WEEK.md").read_text(encoding="utf-8")
+    closure_text = (docs_root / "AUTONOMOUS_V4_WAVE_CLOSURE.md").read_text(encoding="utf-8")
 
     assert "- **Mode:** AV4 Execution" in status_text
     assert "# PLAN — Next Wave (AV4 Execution In Progress)" in plan_text
     assert "- AV4 execution: 🏗️ in progress" in backlog_text
+    assert "Status: 🏗️ Open (execution in progress)" in closure_text
 
     assert mod.drift_check_event("av4.execution.in_progress", docs_root=docs_root) == []
 
@@ -225,6 +239,7 @@ def test_cli_appends_audit_for_apply_and_drift_check(tmp_path: Path) -> None:
         "STATUS_BOARD_CURRENT.md",
         "PLAN_NEXT_WEEK.md",
         "BACKLOG_NEXT_WEEK.md",
+        "AUTONOMOUS_V4_WAVE_CLOSURE.md",
     }
     assert rows[1]["mode"] == "drift-check"
     assert rows[1]["hook_event_id"] == "av4.execution.in_progress"

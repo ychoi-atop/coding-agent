@@ -574,6 +574,7 @@ Next-wave planning/governance docs:
 - `docs/PLAN_NEXT_WEEK.md` (AV4 kickoff active status + execution framing)
 - `docs/AUTONOMOUS_V4_WAVE_PLAN.md` (AV4 goals, milestones, architecture deltas, risks)
 - `docs/AUTONOMOUS_V4_BACKLOG.md` (AV4 prioritized execution backlog with DoD/test/PR splits)
+- `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md` (AV4 closure ledger managed by status-hook rollup)
 - `docs/BACKLOG_NEXT_WEEK.md` (AV4 kickoff top queue quick reference)
 - `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md` (AV3 completed scope, outcomes, and AV4 handoff baseline)
 - `docs/AUTONOMOUS_V3_WAVE_PLAN.md` (AV3 planning history and closure summary)
