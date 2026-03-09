@@ -50,4 +50,5 @@ Status: 🚧 Kickoff started (2026-03-09)
 - `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md`
 - `docs/STATUS_HOOK_TRANSITION_MATRIX.md`
 - `docs/AUTONOMOUS_STAGE_BOUNDARY_CONTRACT.md`
+- `docs/templates/AV5_CLOSURE_EVIDENCE_CHECKLIST.md.tmpl`
 - `docs/templates/AV5_RESIDUAL_RISK_LOG.md.tmpl`

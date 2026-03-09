@@ -1,0 +1,95 @@
+{
+  "policy_id": "autonomous.failure-taxonomy.v2",
+  "version": "v1",
+  "failure_classes": [
+    {
+      "id": "quality_gate_transient",
+      "retryability": "retryable",
+      "remediation_lane": "auto_fix",
+      "code_families": [
+        "tests.*",
+        "performance.baseline_regression_detected"
+      ],
+      "owner_team": "Feature Engineering",
+      "rationale": "Transient gate regressions can run through bounded auto-remediation and deterministic replay checks."
+    },
+    {
+      "id": "quality_gate_deterministic",
+      "retryability": "non_retryable",
+      "remediation_lane": "manual",
+      "code_families": [
+        "security.*",
+        "tests.contract_breaking_change"
+      ],
+      "owner_team": "Quality Engineering",
+      "rationale": "Deterministic gate failures require a targeted patch before retries are safe."
+    },
+    {
+      "id": "preflight_policy_violation",
+      "retryability": "non_retryable",
+      "remediation_lane": "manual",
+      "code_families": [
+        "autonomous_preflight.*"
+      ],
+      "owner_team": "Platform Operations",
+      "rationale": "Policy and environment blockers must be resolved by an operator before autonomous execution resumes."
+    },
+    {
+      "id": "guard_control_stop",
+      "retryability": "non_retryable",
+      "remediation_lane": "escalate",
+      "code_families": [
+        "autonomous_guard.*"
+      ],
+      "owner_team": "Release Engineering",
+      "rationale": "Guard stops are hard intervention boundaries and require escalation before continuing."
+    },
+    {
+      "id": "budget_guard_stop",
+      "retryability": "non_retryable",
+      "remediation_lane": "escalate",
+      "code_families": [
+        "autonomous_budget_guard.*"
+      ],
+      "owner_team": "Release Engineering",
+      "rationale": "Budget guard trips require explicit scope/budget approval instead of automatic replay."
+    },
+    {
+      "id": "tooling_runtime_flake",
+      "retryability": "retryable",
+      "remediation_lane": "auto_fix",
+      "code_families": [
+        "runtime.*",
+        "tooling.*"
+      ],
+      "owner_team": "Developer Experience",
+      "rationale": "Known transient runtime/tooling flakes are suitable for bounded automatic retry + capture."
+    }
+  ],
+  "drill_examples": [
+    {
+      "id": "TX-01",
+      "failure_class": "quality_gate_transient",
+      "typed_code": "tests.min_pass_rate_not_met",
+      "expected_lane": "auto_fix"
+    },
+    {
+      "id": "TX-02",
+      "failure_class": "preflight_policy_violation",
+      "typed_code": "autonomous_preflight.path_blocked",
+      "expected_lane": "manual"
+    },
+    {
+      "id": "TX-03",
+      "failure_class": "guard_control_stop",
+      "typed_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+      "expected_lane": "escalate"
+    },
+    {
+      "id": "TX-04",
+      "failure_class": "budget_guard_stop",
+      "typed_code": "autonomous_budget_guard.max_autonomous_iterations_reached",
+      "expected_lane": "escalate"
+    }
+  ]
+}

@@ -14,6 +14,9 @@ Deterministic drill scenarios for these code paths are tracked in
 Operator summary parity reference (CLI/API/GUI canonical fields + degraded behavior):
 - `docs/AUTONOMOUS_OPERATOR_SUMMARY_PARITY_MAP.md`
 
+Failure taxonomy refresh reference (retryability split + remediation lanes):
+- `docs/AUTONOMOUS_FAILURE_TAXONOMY_V2.md`
+
 ## Routing defaults (owner/SLA/escalation)
 
 `incident_routing` resolves typed failure codes to:

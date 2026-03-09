@@ -1,0 +1,56 @@
+# AV5 Closure Evidence Checklist
+
+Status: {{closure_status}}
+Wave scope: `{{wave_scope}}`
+Closed at (KST): {{closed_at_kst}}
+
+## 1) Closure gates
+
+| Gate | Status | Evidence artifact pointer |
+| --- | --- | --- |
+| Docs integrity (`make check-docs`) | {{docs_gate_status}} | {{docs_gate_artifact_path}} |
+| Status-hook transition (`av5.closed`) | {{status_hook_gate_status}} | {{status_hook_artifact_path}} |
+| Focused AV5 regression lane (`pytest`) | {{tests_gate_status}} | {{tests_gate_artifact_path}} |
+| Release smoke / dry-run checks | {{smoke_gate_status}} | {{smoke_gate_artifact_path}} |
+
+## 2) Evidence artifact pointers (required)
+
+| Evidence class | Required pointer |
+| --- | --- |
+| Closure summary doc | `docs/AUTONOMOUS_V5_WAVE_CLOSURE.md` |
+| Backlog source of truth (`AV5-001` ~ `AV5-014`) | `docs/AUTONOMOUS_V5_BACKLOG.md` |
+| Active status snapshot | `docs/STATUS_BOARD_CURRENT.md` |
+| Plan/backlog rollup snapshot | `docs/PLAN_NEXT_WEEK.md`, `docs/BACKLOG_NEXT_WEEK.md` |
+| Status transition semantics | `docs/STATUS_HOOK_TRANSITION_MATRIX.md` |
+| Gate command transcript bundle | `.autodev/evidence/av5/{{evidence_bundle_id}}/commands.md` |
+| Test/smoke output bundle | `.autodev/evidence/av5/{{evidence_bundle_id}}/tests-and-smoke.md` |
+| Risk + carryover note | `.autodev/evidence/av5/{{evidence_bundle_id}}/risk-and-carryover.md` |
+
+## 3) Closure checklist
+
+- [ ] `docs/AUTONOMOUS_V5_WAVE_CLOSURE.md` updated with completion ledger and closed outcomes.
+- [ ] `docs/STATUS_BOARD_CURRENT.md`, `docs/PLAN_NEXT_WEEK.md`, `docs/BACKLOG_NEXT_WEEK.md` synchronized for `av5.closed`.
+- [ ] `docs/STATUS_HOOK_TRANSITION_MATRIX.md` reflects closure transition semantics used in the release.
+- [ ] `make check-docs` command output attached under the evidence bundle.
+- [ ] Focused AV5 regression test output attached under the evidence bundle.
+- [ ] Release smoke/dry-run output attached under the evidence bundle.
+- [ ] Open P1/P2 carryover items captured with owner + target wave.
+
+## 4) Execution evidence metadata
+
+- Closure PR: {{closure_pr}}
+- Closure branch: `{{closure_branch}}`
+- Closure commit: `{{closure_commit}}`
+- Status-hook event: `{{status_hook_event}}`
+- Evidence bundle id: `{{evidence_bundle_id}}`
+- Evidence bundle root: `.autodev/evidence/av5/{{evidence_bundle_id}}/`
+
+## 5) Risks / carryover
+
+{{risks_and_carryover}}
+
+## 6) Sign-off
+
+- Owner: {{owner}}
+- Reviewer(s): {{reviewers}}
+- Final decision: {{final_decision}}
