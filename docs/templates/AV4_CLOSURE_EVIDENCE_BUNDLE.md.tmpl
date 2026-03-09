@@ -1,0 +1,41 @@
+# AV4 Closure Evidence Bundle
+
+Status: {{closure_status}}
+Wave scope: `{{wave_scope}}`
+Closed at (KST): {{closed_at_kst}}
+
+## 1) Gate Summary
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Docs integrity (`make check-docs`) | {{docs_gate_status}} | {{docs_gate_evidence}} |
+| Focused tests (`pytest`) | {{tests_gate_status}} | {{tests_gate_evidence}} |
+| Status-hook closure sync (`av4.closed`) | {{status_hook_gate_status}} | {{status_hook_gate_evidence}} |
+| Closure doc update (`docs/AUTONOMOUS_V4_WAVE_CLOSURE.md`) | {{closure_doc_gate_status}} | {{closure_doc_gate_evidence}} |
+
+## 2) Closure Checklist
+
+- [ ] `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md` updated with completed tickets and outcomes.
+- [ ] `docs/STATUS_BOARD_CURRENT.md`, `docs/PLAN_NEXT_WEEK.md`, `docs/BACKLOG_NEXT_WEEK.md` synchronized for `av4.closed`.
+- [ ] `make check-docs` output attached.
+- [ ] Focused AV4 regression test output attached.
+- [ ] Incident packet / retention notes attached (if applicable).
+- [ ] Follow-up items moved to next-wave backlog.
+
+## 3) Execution Evidence
+
+- Closure PR: {{closure_pr}}
+- Closure branch: `{{closure_branch}}`
+- Closure commit: `{{closure_commit}}`
+- Status-hook event: `{{status_hook_event}}`
+- Status-hook audit entry: {{status_hook_audit_entry}}
+
+## 4) Risks / Follow-ups
+
+{{risks_and_followups}}
+
+## 5) Sign-off
+
+- Owner: {{owner}}
+- Reviewer(s): {{reviewers}}
+- Final decision: {{final_decision}}
