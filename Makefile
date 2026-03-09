@@ -84,6 +84,7 @@ check-docs:
 	$(PYTHON) scripts/check_markdown_links.py
 	$(PYTHON) scripts/check_av4_backlog_schema.py
 	$(PYTHON) scripts/check_av5_backlog_schema.py
+	$(PYTHON) scripts/check_av5_carryover_policy.py
 	$(PYTHON) scripts/check_stage_boundary_contract.py
 	$(PYTHON) scripts/check_retry_strategy_v2.py
 	$(PYTHON) scripts/check_failure_taxonomy_v2.py
