@@ -449,6 +449,33 @@ def drift_check_event(event: str, *, docs_root: Path, timestamp: str | None = No
     return drifted
 
 
+def detect_matching_event(*, docs_root: Path) -> str:
+    status_path = docs_root / "STATUS_BOARD_CURRENT.md"
+    status_text = status_path.read_text(encoding="utf-8")
+
+    current_mode: str | None = None
+    for line in status_text.splitlines():
+        if line.startswith(STATUS_MODE_PREFIX):
+            current_mode = line.removeprefix(STATUS_MODE_PREFIX).strip()
+            break
+
+    if not current_mode:
+        raise ValueError(f"could not detect mode from {status_path}")
+
+    matches = [event_id for event_id, spec in sorted(CANONICAL_EVENT_MAP.items()) if spec.mode == current_mode]
+    if len(matches) == 1:
+        return matches[0]
+
+    known_modes = ", ".join(sorted({spec.mode for spec in CANONICAL_EVENT_MAP.values()}))
+    if not matches:
+        raise ValueError(
+            f"status mode '{current_mode}' is not mapped to a canonical event. Known modes: {known_modes}"
+        )
+
+    detected = ", ".join(matches)
+    raise ValueError(f"ambiguous mode mapping for '{current_mode}': {detected}")
+
+
 def _default_audit_log_path() -> Path:
     return Path(__file__).resolve().parents[1] / DEFAULT_AUDIT_LOG_RELATIVE
 
@@ -798,6 +825,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate status-hook event registry schema and exit",
     )
+    parser.add_argument(
+        "--detect-event",
+        action="store_true",
+        help="detect the canonical event that matches current docs and print it",
+    )
     return parser
 
 
@@ -823,6 +855,25 @@ def main() -> int:
 
     audit_log_path = Path(args.audit_log).resolve()
     lockfile_path = Path(args.lock_file).resolve()
+
+    if args.detect_event:
+        if args.event:
+            parser.error("event positional arg cannot be used with --detect-event")
+        if args.replay:
+            parser.error("--replay cannot be used with --detect-event")
+        if args.apply:
+            parser.error("--apply cannot be used with --detect-event")
+        if args.drift_check:
+            parser.error("--drift-check cannot be used with --detect-event")
+        if args.dry_run:
+            parser.error("--dry-run cannot be used with --detect-event")
+        try:
+            event_id = detect_matching_event(docs_root=docs_root)
+        except ValueError as exc:
+            print(f"[FAIL] {exc}")
+            return 1
+        print(event_id)
+        return 0
 
     if args.replay:
         if args.event:

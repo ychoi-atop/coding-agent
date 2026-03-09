@@ -6,7 +6,10 @@ SHELL := /bin/bash
 PYTHON ?= python3
 
 # Canonical status-hook event used for docs automation drift checks.
-STATUS_HOOK_EVENT ?= av4.kickoff.started
+# Default is auto-detect from current docs to avoid stale hard-coded event drift.
+# Override at invocation-time for explicit historical checks, e.g.:
+#   make check-status-hooks STATUS_HOOK_EVENT=av4.kickoff.started
+STATUS_HOOK_EVENT ?= auto
 
 # Compile project packages to bytecode to catch syntax errors early.
 compile:
@@ -76,7 +79,12 @@ check-docs:
 # Status-hook docs drift gate (AV4-002/AV4-003).
 check-status-hooks:
 	$(PYTHON) scripts/status_board_automation.py --validate-registry
-	$(PYTHON) scripts/status_board_automation.py $(STATUS_HOOK_EVENT) --drift-check
+	@EVENT="$(STATUS_HOOK_EVENT)"; \
+	if [ "$$EVENT" = "auto" ]; then \
+		EVENT="$$($(PYTHON) scripts/status_board_automation.py --detect-event)"; \
+	fi; \
+	echo "[INFO] Status-hook drift-check event: $$EVENT"; \
+	$(PYTHON) scripts/status_board_automation.py "$$EVENT" --drift-check
 
 # Strict local CI-equivalent pass (existing behavior + docs gate).
 ci-strict: compile check-strict tests-strict check-template check-locks check-docs check-status-hooks

@@ -159,6 +159,32 @@ def test_drift_check_passes_when_docs_match_with_existing_timestamp(tmp_path: Pa
     assert drifted == []
 
 
+def test_detect_matching_event_resolves_single_canonical_match(tmp_path: Path) -> None:
+    mod = _load_module()
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+
+    assert mod.detect_matching_event(docs_root=docs_root) == "av4.kickoff.started"
+
+    mod.apply_event("av4.closed", docs_root=docs_root, timestamp="2026-03-09 10:10 KST (Asia/Seoul)")
+    assert mod.detect_matching_event(docs_root=docs_root) == "av4.closed"
+
+
+def test_detect_matching_event_errors_on_unknown_status_mode(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+
+    status_path = docs_root / "STATUS_BOARD_CURRENT.md"
+    status_path.write_text(
+        status_path.read_text(encoding="utf-8").replace("- **Mode:** AV4 Kickoff", "- **Mode:** AV5 Unknown"),
+        encoding="utf-8",
+    )
+
+    result = _run_cli("--detect-event", "--docs-root", str(docs_root))
+    assert result.returncode == 1
+    assert "is not mapped to a canonical event" in result.stdout
+
+
 def test_drift_check_fails_and_does_not_write_docs(tmp_path: Path) -> None:
     mod = _load_module()
     docs_root = tmp_path / "docs"
