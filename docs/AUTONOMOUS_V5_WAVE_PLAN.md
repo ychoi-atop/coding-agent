@@ -11,11 +11,8 @@ Status: 🚧 Active (checkpoint captured 2026-03-09)
 
 ## Checkpoint summary (2026-03-09, `main`)
 
-- **Merged tickets:** `AV5-001` ~ `AV5-009`
-- **Deferred / not started:** `AV5-010` ~ `AV5-013`
-- **Recently merged governance slice:** `AV5-014` (AV5 carryover policy definition)
-- **Merged tickets:** `AV5-001` ~ `AV5-009`, `AV5-013`
-- **Deferred / not started:** `AV5-010` ~ `AV5-012`, `AV5-014`
+- **Merged tickets:** `AV5-001` ~ `AV5-009`, `AV5-013`, `AV5-014`
+- **Deferred / not started:** `AV5-010` ~ `AV5-012`
 - **Current status-hook state:** `av5.kickoff.started`
 - **Checkpoint doc:** `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 
@@ -32,16 +29,14 @@ Status: 🚧 Active (checkpoint captured 2026-03-09)
 | `AV5-007` residual-risk template | ✅ Merged | reusable residual-risk template published |
 | `AV5-008` failure taxonomy refresh | ✅ Merged | retryability/remediation lane mapping refreshed |
 | `AV5-009` closure evidence checklist scaffold | ✅ Merged | AV5 closure checklist scaffold published |
-| `AV5-010` ~ `AV5-013` governance follow-ons | ⏸️ Deferred / not started | candidate set for next execution wave |
-| `AV5-014` carryover policy definition | ✅ Merged | AV5→AV6 closure annotation policy published |
-| `AV5-010` ~ `AV5-012`, `AV5-014` governance follow-ons | ⏸️ Deferred / not started | candidate set for next execution wave |
+| `AV5-010` ~ `AV5-012` governance follow-ons | ⏸️ Deferred / not started | candidate set for next execution wave |
 | `AV5-013` kickoff smoke evidence index | ✅ Merged | timestamped kickoff smoke evidence index published |
+| `AV5-014` carryover policy definition | ✅ Merged | AV5→AV6 closure annotation policy published |
 
 ## Known risks / open issues
 
 1. **Kickoff state lag:** status docs still represent kickoff-active mode, while many kickoff slices are already merged.
-2. **Governance carryover:** `AV5-010` ~ `AV5-013` remain pending, so closure-readiness governance is not yet complete.
-2. **Governance carryover:** `AV5-010` ~ `AV5-012`, `AV5-014` remain pending, so closure-readiness governance is not yet complete.
+2. **Governance carryover:** `AV5-010` ~ `AV5-012` remain pending, so closure-readiness governance is not yet complete.
 3. **Operator-surface drift risk:** parity/minimal-contract docs are merged; implementation drift remains possible without regular smoke evidence refresh.
 
 ## Next-wave candidates (small slices)
@@ -49,8 +44,6 @@ Status: 🚧 Active (checkpoint captured 2026-03-09)
 - `AV5-010` docs cross-link upgrade for governance set cleanup.
 - `AV5-011` transition-runbook update (`AV4 closed` → `AV5 active`).
 - `AV5-012` backlog schema lint extension for AV5 IDs/rows.
-- `AV5-013` kickoff smoke evidence index refresh with timestamps.
-- `AV5-014` carryover policy definition for AV5→AV6 defer annotations.
 
 ## Related docs
 

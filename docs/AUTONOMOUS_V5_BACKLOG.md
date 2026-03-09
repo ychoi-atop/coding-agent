@@ -18,15 +18,13 @@ Checkpoint: `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 | AV5-010 | P2 | S | ⏸️ Deferred / not started | Docs cross-link upgrade for AV5 governance set | README + planning docs include AV5 plan/backlog links; no stale “active AV4 kickoff” labels | `make check-docs` + grep audit for stale links | 1 PR |
 | AV5-011 | P2 | M | ⏸️ Deferred / not started | Transition-runbook update (AV4 closed → AV5 active) | runbook includes canonical transition steps and fallback command flow | runbook walkthrough + command dry-run | 1 PR |
 | AV5-012 | P2 | S | ✅ Merged | Backlog schema lint extension for AV5 IDs | docs validation enforces AV5 ticket row format (id/priority/effort/DoD/test/PR split) | docs schema lint test + negative cases | 1 PR |
-| AV5-013 | P2 | M | ⏸️ Deferred / not started | Smoke evidence index for AV5 kickoff period | kickoff smoke artifacts indexed with timestamp/source/check outcome table | smoke script run + index freshness check | 1 PR |
-| AV5-014 | P2 | S | ✅ Merged | AV5 carryover policy definition | explicit rule for deferring AV5 tickets to AV6 with closure annotation format | docs review + sample carryover entry check | 1 PR |
 | AV5-013 | P2 | M | ✅ Merged | Smoke evidence index for AV5 kickoff period | kickoff smoke artifacts indexed with timestamp/source/check outcome table | smoke script run + index freshness check | 1 PR |
-| AV5-014 | P2 | S | ⏸️ Deferred / not started | AV5 carryover policy definition | explicit rule for deferring AV5 tickets to AV6 with closure annotation format | docs review + sample carryover entry check | 1 PR |
+| AV5-014 | P2 | S | ✅ Merged | AV5 carryover policy definition | explicit rule for deferring AV5 tickets to AV6 with closure annotation format | docs review + sample carryover entry check | 1 PR |
 
 ## Checkpoint notes
 
 - P0 and P1 kickoff slices (`AV5-001` ~ `AV5-009`) are merged on `main`.
-- Remaining P2 governance items (`AV5-010` ~ `AV5-013`) are held as next-wave candidates, not active kickoff blockers.
+- Remaining P2 governance items (`AV5-010` ~ `AV5-012`) are held as next-wave candidates, not active kickoff blockers.
 
 ## Related docs
 
