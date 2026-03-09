@@ -278,6 +278,7 @@ def test_autonomous_start_records_quality_gate_policy_in_metadata_and_state(tmp_
         "tests": {"min_pass_rate": 0.9},
         "security": {"max_high_findings": 0},
         "performance": {"max_regression_pct": 5.0},
+        "composite": None,
     }
     assert metadata["autonomous_quality_gate_policy"] == expected_policy
     assert state["policy"]["quality_gate_policy"] == expected_policy

@@ -1023,7 +1023,60 @@ def _rotate_strategy_name(recommended: str, attempts: list[dict[str, Any]]) -> s
     return order[(start + 1) % len(order)]
 
 
-def _resolve_retry_strategy(attempts: list[dict[str, Any]], iteration: int) -> dict[str, Any]:
+_COMPONENT_STRATEGY_MAP: dict[str, str] = {
+    "tests_score": "tests-focused",
+    "lint_score": "tests-focused",
+    "type_health_score": "tests-focused",
+    "security_score": "security-focused",
+}
+
+_DEFAULT_WEAK_THRESHOLD = 60.0
+
+
+def _route_strategy_from_component_scores(
+    quality_score: Any,
+    *,
+    weak_threshold: float = _DEFAULT_WEAK_THRESHOLD,
+) -> dict[str, Any]:
+    """Route fix strategy based on the weakest component score.
+
+    Scores below *weak_threshold* are "weak" and drive strategy selection.
+    When multiple components are weak, the lowest wins.
+    """
+    if quality_score is None:
+        return {"recommended": "mixed", "rationale": "No quality score available.", "source": "component_scores"}
+
+    weakest_name: str | None = None
+    weakest_value = weak_threshold
+    for attr, _strategy in _COMPONENT_STRATEGY_MAP.items():
+        value = getattr(quality_score, attr, 100.0)
+        if value < weakest_value:
+            weakest_value = value
+            weakest_name = attr
+
+    if weakest_name is None:
+        return {
+            "recommended": "mixed",
+            "rationale": f"All component scores >= {weak_threshold}.",
+            "source": "component_scores",
+        }
+
+    return {
+        "recommended": _COMPONENT_STRATEGY_MAP[weakest_name],
+        "rationale": f"Component {weakest_name}={weakest_value:.1f} below threshold {weak_threshold}.",
+        "source": "component_scores",
+        "weakest_component": weakest_name,
+        "weakest_value": round(weakest_value, 2),
+    }
+
+
+def _resolve_retry_strategy(
+    attempts: list[dict[str, Any]],
+    iteration: int,
+    *,
+    quality_score: Any = None,
+    weak_threshold: float = _DEFAULT_WEAK_THRESHOLD,
+) -> dict[str, Any]:
     if iteration <= 1 or not attempts:
         name = "mixed"
         return {
@@ -1049,6 +1102,19 @@ def _resolve_retry_strategy(attempts: list[dict[str, Any]], iteration: int) -> d
 
     route = _route_strategy_from_fail_reasons(fail_reasons)
     recommended = str(route.get("recommended") or "mixed")
+    selected_by = "gate_fail_routing"
+
+    # Fallback: if gate routing defaults to "mixed", consult component scores
+    if recommended == "mixed" and quality_score is not None:
+        score_route = _route_strategy_from_component_scores(
+            quality_score, weak_threshold=weak_threshold,
+        )
+        score_rec = str(score_route.get("recommended") or "mixed")
+        if score_rec != "mixed":
+            recommended = score_rec
+            route = {**route, **score_route}
+            selected_by = "component_scores"
+
     selected = recommended
     rotation_applied = False
     rotation_reason = None
@@ -1087,7 +1153,7 @@ def _resolve_retry_strategy(attempts: list[dict[str, Any]], iteration: int) -> d
         "recommended": recommended,
         "recommended_hints": recommended_hints,
         "rationale": rationale,
-        "selected_by": "gate_fail_routing",
+        "selected_by": selected_by,
         "rotation_applied": rotation_applied,
         "rotation_reason": rotation_reason,
         "gate_fail_codes": list(route.get("gate_fail_codes") or []),
@@ -3628,7 +3694,33 @@ def _start(argv: list[str]) -> None:
             attempts = []
             state["attempts"] = attempts
 
-        strategy = _resolve_retry_strategy(attempts, attempt_index)
+        # Extract latest quality score from previous attempt's gate results for
+        # score-based strategy routing (Feature 2: adaptive fix strategy).
+        _last_quality_score = None
+        if attempts:
+            _last_gate = (attempts[-1] if isinstance(attempts[-1], dict) else {}).get("gate_results")
+            if isinstance(_last_gate, dict):
+                _cq = (_last_gate.get("gates") or {}).get("composite_quality")
+                if isinstance(_cq, dict) and _cq.get("components"):
+                    try:
+                        from .quality_score import QualityScore
+                        _comps = _cq["components"]
+                        _last_quality_score = QualityScore(
+                            composite=_cq.get("composite_score", 0.0),
+                            hard_blocked=bool(_cq.get("hard_blocked")),
+                            hard_blockers=[],
+                            tests_score=_comps.get("tests", 0.0),
+                            lint_score=_comps.get("lint", 0.0),
+                            type_health_score=_comps.get("type_health", 0.0),
+                            security_score=_comps.get("security", 0.0),
+                            simplicity_score=_comps.get("simplicity", 100.0),
+                        )
+                    except Exception:
+                        pass
+
+        strategy = _resolve_retry_strategy(
+            attempts, attempt_index, quality_score=_last_quality_score,
+        )
         state["last_strategy"] = strategy
 
         _log_event(

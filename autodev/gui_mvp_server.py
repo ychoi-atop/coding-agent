@@ -1072,6 +1072,21 @@ def _quality_trends(runs_root: Path, window: int, *, allow_partial: bool = False
             if not validation_available:
                 counters["runs_included_partial_missing_validation"] += 1
 
+        # Quality score data from experiment log
+        exp_log_data = _read_experiment_log(run_dir)
+        exp_summary = exp_log_data.get("summary", {})
+        exp_tasks = exp_summary.get("tasks", {})
+        quality_scores: dict[str, Any] = {}
+        if exp_tasks:
+            final_scores = [float(t.get("best_score", 0)) for t in exp_tasks.values() if isinstance(t, dict)]
+            if final_scores:
+                quality_scores = {
+                    "composite_avg": round(sum(final_scores) / len(final_scores), 2),
+                    "composite_min": round(min(final_scores), 2),
+                    "composite_max": round(max(final_scores), 2),
+                    "task_count": len(final_scores),
+                }
+
         run_rows.append(
             {
                 "run_id": run_dir.name,
@@ -1084,8 +1099,21 @@ def _quality_trends(runs_root: Path, window: int, *, allow_partial: bool = False
                 },
                 "validator": run_validator_counts,
                 "blockers": {"count": len(blockers), "names": blockers},
+                "quality_scores": quality_scores,
             }
         )
+
+    # Quality score aggregates across runs
+    composite_avgs = [r["quality_scores"]["composite_avg"] for r in run_rows if r.get("quality_scores")]
+    quality_aggregates: dict[str, Any] = {}
+    if composite_avgs:
+        quality_aggregates = {
+            "composite_avg_trend": composite_avgs,
+            "composite_avg_mean": round(sum(composite_avgs) / len(composite_avgs), 2),
+            "composite_avg_min": round(min(composite_avgs), 2),
+            "composite_avg_max": round(max(composite_avgs), 2),
+            "runs_with_scores": len(composite_avgs),
+        }
 
     return {
         "window": {"requested": int(window), "applied": trend_window},
@@ -1102,6 +1130,7 @@ def _quality_trends(runs_root: Path, window: int, *, allow_partial: bool = False
                 "unique": len(blocker_by_name),
                 "by_name": dict(sorted(blocker_by_name.items(), key=lambda item: item[0])),
             },
+            "quality": quality_aggregates,
         },
     }
 

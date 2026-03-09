@@ -83,6 +83,9 @@ class EventType(str, Enum):
     # Time budget
     TASK_TIME_BUDGET_EXCEEDED = "task.time_budget_exceeded"
 
+    # Multi-strategy exploration
+    MULTI_STRATEGY_EXPLORED = "multi_strategy.explored"
+
 
 # ---------------------------------------------------------------------------
 # Data classes

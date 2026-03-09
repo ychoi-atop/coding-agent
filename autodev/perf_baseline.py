@@ -20,7 +20,7 @@ logger = logging.getLogger("autodev")
 # ---------------------------------------------------------------------------
 # Schema version — bump on breaking changes to perf_baseline.json format
 # ---------------------------------------------------------------------------
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_ROLLING_WINDOW = 5
 
 # Tracked metrics and their default regression thresholds.
@@ -28,10 +28,13 @@ DEFAULT_ROLLING_WINDOW = 5
 # max_abs_ms: absolute increase in the metric value.
 # None means "no threshold" (always passes).
 DEFAULT_THRESHOLDS: Dict[str, Dict[str, Any]] = {
-    "total_elapsed_ms": {"max_ratio": 0.50, "max_abs_ms": 30_000},
-    "total_validation_ms": {"max_ratio": 0.50, "max_abs_ms": 30_000},
-    "total_llm_tokens": {"max_ratio": 0.50, "max_abs_ms": None},
-    "max_task_ms": {"max_ratio": 0.50, "max_abs_ms": 30_000},
+    "total_elapsed_ms": {"max_ratio": 0.50, "max_abs_ms": 30_000, "direction": "lower_is_better"},
+    "total_validation_ms": {"max_ratio": 0.50, "max_abs_ms": 30_000, "direction": "lower_is_better"},
+    "total_llm_tokens": {"max_ratio": 0.50, "max_abs_ms": None, "direction": "lower_is_better"},
+    "max_task_ms": {"max_ratio": 0.50, "max_abs_ms": 30_000, "direction": "lower_is_better"},
+    # Quality metrics — higher is better; decline = regression
+    "composite_score_avg": {"max_ratio": 0.15, "max_abs_ms": None, "direction": "higher_is_better"},
+    "composite_score_min": {"max_ratio": 0.20, "max_abs_ms": None, "direction": "higher_is_better"},
 }
 
 _TRACKED_METRICS = list(DEFAULT_THRESHOLDS.keys())
@@ -94,6 +97,17 @@ class RunMetricsSnapshot:
 
     # Per-validator pass/fail/duration records for adaptive quality gate
     validator_stats: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Quality score metrics (cross-run trending)
+    composite_score_avg: float = 0.0     # avg composite across all tasks
+    composite_score_min: float = 0.0     # worst task composite
+    tests_score_avg: float = 0.0
+    lint_score_avg: float = 0.0
+    type_health_score_avg: float = 0.0
+    security_score_avg: float = 0.0
+    hard_blocked_tasks: int = 0
+    reverted_attempts: int = 0
+    accepted_attempts: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -256,6 +270,34 @@ def collect_run_metrics(
     if not isinstance(totals, dict):
         totals = {}
 
+    # Quality score metrics from experiment log summary
+    exp_log = quality_summary.get("experiment_log", {})
+    if not isinstance(exp_log, dict):
+        exp_log = {}
+    exp_tasks = exp_log.get("tasks", {})
+    if not isinstance(exp_tasks, dict):
+        exp_tasks = {}
+
+    composite_score_avg = 0.0
+    composite_score_min = 0.0
+    hard_blocked_tasks = 0
+    reverted_attempts = 0
+    accepted_attempts = 0
+
+    if exp_tasks:
+        final_scores = [float(t.get("final_score", 0)) for t in exp_tasks.values() if isinstance(t, dict)]
+        if final_scores:
+            composite_score_avg = sum(final_scores) / len(final_scores)
+            composite_score_min = min(final_scores)
+
+        for t_info in exp_tasks.values():
+            if not isinstance(t_info, dict):
+                continue
+            decisions = t_info.get("decisions", {})
+            if isinstance(decisions, dict):
+                reverted_attempts += _safe_int(decisions.get("reverted", 0))
+                accepted_attempts += _safe_int(decisions.get("accepted", 0))
+
     return RunMetricsSnapshot(
         run_id=run_id,
         timestamp=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
@@ -278,6 +320,11 @@ def collect_run_metrics(
         repair_passes=_safe_int(totals.get("repair_passes", 0)),
         task_timings=task_timings or [],
         validator_stats=validator_stats or [],
+        composite_score_avg=composite_score_avg,
+        composite_score_min=composite_score_min,
+        hard_blocked_tasks=hard_blocked_tasks,
+        reverted_attempts=reverted_attempts,
+        accepted_attempts=accepted_attempts,
     )
 
 
@@ -353,7 +400,10 @@ def _compute_baseline_averages(
         if not isinstance(run, dict):
             continue
         for metric in _TRACKED_METRICS:
-            sums[metric] += float(_safe_int(run.get(metric, 0)))
+            try:
+                sums[metric] += float(run.get(metric, 0))
+            except (TypeError, ValueError):
+                pass
 
     count = len(runs)
     return {k: v / count for k, v in sums.items()}
@@ -392,8 +442,21 @@ def _check_metric(
     baseline_avg: float,
     thresholds: Dict[str, Any],
 ) -> MetricVerdict:
-    """Compare a single metric against its thresholds."""
-    delta = current_value - baseline_avg
+    """Compare a single metric against its thresholds.
+
+    Supports ``direction`` in thresholds:
+    - ``"lower_is_better"`` (default): increase = regression.
+    - ``"higher_is_better"``: decrease = regression.
+    """
+    direction = thresholds.get("direction", "lower_is_better")
+
+    if direction == "higher_is_better":
+        # For quality scores: a drop is bad.  delta = baseline_avg - current
+        delta = baseline_avg - current_value
+    else:
+        # For perf metrics: an increase is bad.  delta = current - baseline_avg
+        delta = current_value - baseline_avg
+
     ratio = (delta / baseline_avg) if baseline_avg > 0 else 0.0
 
     max_ratio = thresholds.get("max_ratio")
@@ -448,7 +511,10 @@ def detect_regression(
     snapshot_dict = snapshot.to_dict()
     verdicts: List[MetricVerdict] = []
     for metric in _TRACKED_METRICS:
-        current = float(_safe_int(snapshot_dict.get(metric, 0)))
+        try:
+            current = float(snapshot_dict.get(metric, 0))
+        except (TypeError, ValueError):
+            current = 0.0
         avg = averages.get(metric, 0.0)
         metric_thresholds = thresholds.get(metric, {})
         verdicts.append(_check_metric(metric, current, avg, metric_thresholds))

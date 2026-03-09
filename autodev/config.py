@@ -728,6 +728,35 @@ def _validate_run_section(run: Any, errors: List[str]) -> None:
             else:
                 run["max_fix_time_per_task_sec"] = max_fix_time
 
+    # Multi-strategy exploration config
+    ms_cfg = run.get("multi_strategy")
+    if ms_cfg is not None:
+        if not isinstance(ms_cfg, dict):
+            errors.append("run.multi_strategy must be an object.")
+        else:
+            _ms_known = {"enabled", "strategies", "min_failed_attempts", "score_margin"}
+            for k in ms_cfg:
+                if k not in _ms_known:
+                    errors.append(f"run.multi_strategy: unknown key '{k}'.")
+            ms_strategies = ms_cfg.get("strategies")
+            if ms_strategies is not None:
+                ms_strategies = _coerce_int(ms_strategies, "run.multi_strategy.strategies", errors, default=None)
+                if ms_strategies is not None and (ms_strategies < 2 or ms_strategies > 4):
+                    errors.append("run.multi_strategy.strategies must be between 2 and 4.")
+            ms_min_failed = ms_cfg.get("min_failed_attempts")
+            if ms_min_failed is not None:
+                ms_min_failed = _coerce_int(ms_min_failed, "run.multi_strategy.min_failed_attempts", errors, default=None)
+                if ms_min_failed is not None and ms_min_failed < 1:
+                    errors.append("run.multi_strategy.min_failed_attempts must be >= 1.")
+            ms_margin = ms_cfg.get("score_margin")
+            if ms_margin is not None:
+                try:
+                    ms_margin = float(ms_margin)
+                    if ms_margin < 0:
+                        errors.append("run.multi_strategy.score_margin must be >= 0.")
+                except (TypeError, ValueError):
+                    errors.append("run.multi_strategy.score_margin must be a number.")
+
     _validate_run_autonomous_section(run.get("autonomous"), errors)
 
 
