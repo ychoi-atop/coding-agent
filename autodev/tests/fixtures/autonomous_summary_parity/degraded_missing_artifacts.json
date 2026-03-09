@@ -1,0 +1,24 @@
+{
+  "status": "completed",
+  "preflight_status": "unknown",
+  "gate_counts": {
+    "pass": 0,
+    "fail": 0,
+    "total": 0
+  },
+  "guard_decision": null,
+  "operator_guidance_top": [
+    {
+      "code": "autonomous.unmapped_or_missing_code",
+      "family": "unknown",
+      "source": "generic_fallback",
+      "title": "Unmapped autonomous failure code",
+      "playbook_doc": "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md",
+      "playbook_anchor": "#unknown-or-unmapped-codes",
+      "playbook_url": "docs/AUTONOMOUS_FAILURE_PLAYBOOK.md#unknown-or-unmapped-codes",
+      "actions": [
+        "Capture the typed code and context from artifacts, then escalate for playbook-map update."
+      ]
+    }
+  ]
+}

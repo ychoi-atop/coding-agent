@@ -16,6 +16,12 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+
+
+def _load_parity_snapshot_fixture(name: str) -> dict:
+    root = Path(__file__).resolve().parent / "fixtures" / "autonomous_summary_parity"
+    return json.loads((root / f"{name}.json").read_text(encoding="utf-8"))
+
 def test_extract_autonomous_summary_aggregates_gate_and_strategy_artifacts(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-001"
     artifacts = run_dir / ".autodev"
@@ -346,6 +352,71 @@ def test_autonomous_triage_summary_cli_outputs_json_and_text(tmp_path: Path, cap
     assert "guard_decision: stop (autonomous_guard.repeated_gate_failure_limit_reached)" in text_out
     assert "tests.min_pass_rate_not_met" in text_out
 
+
+
+
+def test_autonomous_triage_summary_cli_json_matches_canonical_snapshot_fixture(tmp_path: Path, capsys) -> None:
+    run_dir = tmp_path / "run-triage-cli-snapshot"
+    artifacts = run_dir / ".autodev"
+
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-triage-cli-snapshot",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "guard_decision": {
+                "decision": "stop",
+                "reason_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+            },
+            "operator_guidance": {
+                "top": [
+                    {
+                        "code": "tests.min_pass_rate_not_met",
+                        "actions": ["Stabilize failing tests before retry."],
+                    }
+                ]
+            },
+        },
+    )
+    _write_json(
+        artifacts / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": False,
+                        "fail_reasons": [{"code": "tests.min_pass_rate_not_met"}],
+                    },
+                }
+            ]
+        },
+    )
+
+    autonomous_mode.cli(["triage-summary", "--run-dir", str(run_dir)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == _load_parity_snapshot_fixture("canonical")
+
+
+def test_autonomous_triage_summary_cli_json_matches_degraded_snapshot_fixture(tmp_path: Path, capsys) -> None:
+    run_dir = tmp_path / "run-triage-cli-degraded"
+    artifacts = run_dir / ".autodev"
+
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": True,
+            "run_id": "run-triage-cli-degraded",
+            "latest_strategy": {"name": "mixed"},
+        },
+    )
+
+    autonomous_mode.cli(["triage-summary", "--run-dir", str(run_dir)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == _load_parity_snapshot_fixture("degraded_missing_artifacts")
 
 def test_extract_autonomous_summary_builds_operator_guidance_with_fallbacks(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-guidance-fallback"

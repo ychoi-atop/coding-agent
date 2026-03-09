@@ -34,6 +34,11 @@ def _load_compat_fixture(filename: str) -> dict[str, object]:
     return json.loads((root / filename).read_text(encoding="utf-8"))
 
 
+def _load_parity_snapshot_fixture(name: str) -> dict[str, object]:
+    root = Path(__file__).resolve().parent / "fixtures" / "autonomous_summary_parity"
+    return json.loads((root / f"{name}.json").read_text(encoding="utf-8"))
+
+
 def _materialize_fixture_run(run_root: Path, files: list[dict[str, object]]) -> None:
     for row in files:
         rel_path = str(row.get("path") or "").strip()
@@ -509,6 +514,65 @@ def test_latest_quality_gate_snapshot_uses_latest_run(tmp_path):
     assert payload["summary"]["gate_counts"] == {"pass": 0, "fail": 1, "total": 1}
     assert payload["summary"]["guard_decision"]["reason_code"] == "autonomous_guard.repeated_gate_failure_limit_reached"
     assert payload["summary"]["operator_guidance_top"][0]["code"] == "tests.min_pass_rate_not_met"
+
+
+def test_latest_quality_gate_snapshot_summary_matches_canonical_snapshot_fixture(tmp_path):
+    run = tmp_path / "run-autonomous-parity"
+    _write_json(
+        run / ".autodev" / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-autonomous-parity",
+            "request_id": "req-001",
+            "profile": "minimal",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "guard_decision": {
+                "decision": "stop",
+                "reason_code": "autonomous_guard.repeated_gate_failure_limit_reached",
+            },
+            "operator_guidance": {
+                "top": [
+                    {
+                        "code": "tests.min_pass_rate_not_met",
+                        "actions": ["Stabilize failing tests before retry."],
+                    }
+                ]
+            },
+        },
+    )
+    _write_json(
+        run / ".autodev" / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": False,
+                        "fail_reasons": [{"code": "tests.min_pass_rate_not_met"}],
+                    },
+                }
+            ]
+        },
+    )
+
+    payload = _latest_quality_gate_snapshot(tmp_path)
+    assert payload["summary"] == _load_parity_snapshot_fixture("canonical")
+
+
+def test_latest_quality_gate_snapshot_summary_matches_degraded_snapshot_fixture(tmp_path):
+    run = tmp_path / "run-autonomous-parity-degraded"
+    _write_json(
+        run / ".autodev" / "autonomous_report.json",
+        {
+            "ok": True,
+            "run_id": "run-autonomous-parity-degraded",
+            "profile": "minimal",
+            "latest_strategy": {"name": "mixed"},
+        },
+    )
+
+    payload = _latest_quality_gate_snapshot(tmp_path)
+    assert payload["summary"] == _load_parity_snapshot_fixture("degraded_missing_artifacts")
 
 
 def test_quality_gate_snapshot_latest_endpoint_returns_payload(gui_server):
