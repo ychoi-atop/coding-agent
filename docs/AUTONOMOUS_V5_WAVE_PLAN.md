@@ -1,6 +1,6 @@
-# AUTONOMOUS V5 — Wave Plan (Kickoff)
+# AUTONOMOUS V5 — Wave Plan (Checkpoint)
 
-Status: 🚧 Kickoff started (2026-03-09)
+Status: 🚧 Active (checkpoint captured 2026-03-09)
 
 ## Goals / outcomes
 
@@ -9,40 +9,45 @@ Status: 🚧 Kickoff started (2026-03-09)
 3. **Lower incident recovery time:** improve failure classification and remediation guidance so failed runs can be retried or escalated quickly.
 4. **Sustainable delivery cadence:** preserve AV4 reliability posture while shipping AV5 in narrow, docs/test-first PR slices.
 
-## 2-week milestone slices
+## Checkpoint summary (2026-03-09, `main`)
 
-### Week 1 (Days 1-7): kickoff foundations + control contracts
-- Publish AV5 kickoff packet (plan + backlog + status/README linkage).
-- Define AV5 control-surface deltas (stage boundary contracts, retry policy semantics, event/status expectations).
-- Lock first P0 slice boundaries with explicit DoD/test lanes.
-- Keep quality gates green (`make check-docs`, `make check-status-hooks`, smoke/release checks).
+- **Merged tickets:** `AV5-001` ~ `AV5-009`
+- **Deferred / not started:** `AV5-010` ~ `AV5-014`
+- **Current status-hook state:** `av5.kickoff.started`
+- **Checkpoint doc:** `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 
-### Week 2 (Days 8-14): operator-facing hardening + rollout readiness
-- Land first operator-facing AV5 slices (incident guidance/summary parity paths).
-- Add AV5 closure-readiness checklist stubs and evidence mapping.
-- Validate docs/status drift-free operation after AV5 kickoff transitions.
-- Produce residual-risk snapshot and next-slice rollout order.
+## Completion ledger
 
-## Architecture deltas from AV4
+| Scope | Status on `main` | Notes |
+|---|---|---|
+| `AV5-001` kickoff packet sync | ✅ Merged | plan/backlog/status/README kickoff references aligned |
+| `AV5-002` status-hook transition map | ✅ Merged | lifecycle draft captured for kickoff→closure flow |
+| `AV5-003` stage-boundary contract | ✅ Merged | ingest/plan/execute/verify contract + validation path |
+| `AV5-004` retry semantics v2 | ✅ Merged | deterministic retry/stop/escalate semantics documented |
+| `AV5-005` incident packet minimal contract v2 | ✅ Merged | minimal actionable fields and schema expectations documented |
+| `AV5-006` operator summary parity map | ✅ Merged | CLI/API/GUI parity map and snapshot checks added |
+| `AV5-007` residual-risk template | ✅ Merged | reusable residual-risk template published |
+| `AV5-008` failure taxonomy refresh | ✅ Merged | retryability/remediation lane mapping refreshed |
+| `AV5-009` closure evidence checklist scaffold | ✅ Merged | AV5 closure checklist scaffold published |
+| `AV5-010` ~ `AV5-014` governance follow-ons | ⏸️ Deferred / not started | candidate set for next execution wave |
 
-- **Control contracts:** AV4 emphasized status hooks + retention policy; AV5 adds stricter stage-level acceptance contracts for deterministic retries/replays.
-- **Decision traceability:** AV4 added concise summaries; AV5 expands to explicit remediation-oriented evidence lanes for retry vs escalate decisions.
-- **Wave governance:** AV4 closed with full lifecycle automation; AV5 starts from docs-first kickoff with narrower PR split discipline and explicit closure criteria from day 1.
-- **Handoff ergonomics:** AV4 improved operator visibility; AV5 focuses on reducing cognitive load at incident/handoff points via compact, canonical packets.
+## Known risks / open issues
 
-## Top risks + mitigations
+1. **Kickoff state lag:** status docs still represent kickoff-active mode, while many kickoff slices are already merged.
+2. **Governance carryover:** `AV5-010` ~ `AV5-014` remain pending, so closure-readiness governance is not yet complete.
+3. **Operator-surface drift risk:** parity/minimal-contract docs are merged; implementation drift remains possible without regular smoke evidence refresh.
 
-1. **Risk:** AV5 introduces contract complexity that slows delivery.
-   - **Mitigation:** enforce small PR slices, mark non-goals per ticket, and keep each ticket independently reviewable.
-2. **Risk:** New control semantics drift from existing status-hook automation.
-   - **Mitigation:** maintain compatibility checks, document transitional state mapping, gate with docs/status drift checks.
-3. **Risk:** Operator surfaces become verbose instead of actionable.
-   - **Mitigation:** define minimal required fields, prefer summary-first rendering, and validate with focused smoke scenarios.
-4. **Risk:** Kickoff backlog overcommits beyond 2-week capacity.
-   - **Mitigation:** priority guardrails (P0/P1 first), explicit effort caps, and carryover rules for P2 work.
+## Next-wave candidates (small slices)
+
+- `AV5-010` docs cross-link upgrade for governance set cleanup.
+- `AV5-011` transition-runbook update (`AV4 closed` → `AV5 active`).
+- `AV5-012` backlog schema lint extension for AV5 IDs/rows.
+- `AV5-013` kickoff smoke evidence index refresh with timestamps.
+- `AV5-014` carryover policy definition for AV5→AV6 defer annotations.
 
 ## Related docs
 
+- `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 - `docs/AUTONOMOUS_V5_BACKLOG.md`
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
