@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-release-autonomous check-release-autonomous-strict check-template check-locks check-docs check-status-hooks benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve smoke-autonomous-e2e smoke-retry-replay smoke-failure-taxonomy-drill
+.PHONY: compile check check-fast check-strict tests tests-fast tests-strict ci ci-fast ci-strict fast strict release-check check-release-gates check-release-autonomous check-release-autonomous-strict check-template check-locks check-docs check-status-hooks benchmark-generate perf-smoke perf-strict perf-compare perf-compare-smoke untyped-check test-backend demo-scorecard demo-bootstrap demo-bootstrap-serve smoke-autonomous-e2e smoke-retry-replay smoke-failure-taxonomy-drill render-av5-kickoff-smoke-index check-av5-kickoff-smoke-index
 
 # Reusable Python interpreter for consistency
 PYTHON ?= python3
@@ -75,6 +75,13 @@ smoke-retry-replay:
 # Failure taxonomy drill dry-run lane (AV5-008).
 smoke-failure-taxonomy-drill:
 	$(PYTHON) scripts/failure_taxonomy_drill_dry_run.py --artifacts-dir ./artifacts/failure-taxonomy-drill-dry-run
+
+# AV5 kickoff smoke evidence index render/check (AV5-013).
+render-av5-kickoff-smoke-index:
+	$(PYTHON) scripts/render_av5_kickoff_smoke_evidence_index.py
+
+check-av5-kickoff-smoke-index:
+	$(PYTHON) scripts/render_av5_kickoff_smoke_evidence_index.py --check
 
 # Fast local CI-equivalent pass for quick iteration.
 ci-fast: compile check-fast tests-fast check-status-hooks

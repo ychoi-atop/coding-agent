@@ -20,6 +20,8 @@ Checkpoint: `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 | AV5-012 | P2 | S | ✅ Merged | Backlog schema lint extension for AV5 IDs | docs validation enforces AV5 ticket row format (id/priority/effort/DoD/test/PR split) | docs schema lint test + negative cases | 1 PR |
 | AV5-013 | P2 | M | ⏸️ Deferred / not started | Smoke evidence index for AV5 kickoff period | kickoff smoke artifacts indexed with timestamp/source/check outcome table | smoke script run + index freshness check | 1 PR |
 | AV5-014 | P2 | S | ✅ Merged | AV5 carryover policy definition | explicit rule for deferring AV5 tickets to AV6 with closure annotation format | docs review + sample carryover entry check | 1 PR |
+| AV5-013 | P2 | M | ✅ Merged | Smoke evidence index for AV5 kickoff period | kickoff smoke artifacts indexed with timestamp/source/check outcome table | smoke script run + index freshness check | 1 PR |
+| AV5-014 | P2 | S | ⏸️ Deferred / not started | AV5 carryover policy definition | explicit rule for deferring AV5 tickets to AV6 with closure annotation format | docs review + sample carryover entry check | 1 PR |
 
 ## Checkpoint notes
 
@@ -31,6 +33,7 @@ Checkpoint: `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 - `docs/AUTONOMOUS_V5_WAVE_PLAN.md`
 - `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 - `docs/AUTONOMOUS_V5_CARRYOVER_POLICY.md`
+- `docs/AUTONOMOUS_V5_KICKOFF_SMOKE_EVIDENCE_INDEX.md`
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/STATUS_BOARD_CURRENT.md`
