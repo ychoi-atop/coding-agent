@@ -17,6 +17,43 @@ Canonical status-hook events drive deterministic updates for:
 | `av5.stabilization.started` *(design draft)* | Mode `AV5 Stabilization`; AV5 snapshot transitions to `🧪 Stabilization started (smoke + release gates in focus)` | Title `# PLAN — Next Wave (AV5 Stabilization Active)`; snapshot `- AV5 stabilization is active (...)` | Title `# BACKLOG — Next Wave (AV5 Stabilization Queue)`; baseline `- AV5 stabilization: 🧪 started` | Status remains `✅ Closed on \`main\`` (AV4 closure ledger frozen) |
 | `av5.closed` *(design draft)* | Mode `AV5 Closed`; AV5 snapshot transitions to `✅ Closed (execution + stabilization complete)` and docs move to post-AV5 planning stance | Title `# PLAN — Next Wave (Post-AV5 Planning)`; snapshot `- AV5 wave (\`AV5-001\` ~ \`AV5-014\`) is complete and closed on \`main\`.` | Title `# BACKLOG — Next Wave (Post-AV5 Intake Queue)`; baseline `- AV5 closure: ✅ complete (\`AV5-001\` ~ \`AV5-014\`)` | Status remains `✅ Closed on \`main\`` (AV4 closure ledger unchanged) |
 
+## Transition runbook: AV4 closed → AV5 kickoff active (AV5-011)
+
+Use this runbook when AV4 is already closed on `main` and the next wave must be promoted to AV5 kickoff with deterministic docs parity.
+
+### Canonical transition steps
+
+1. **Confirm clean base on `main`:**
+   - `git fetch origin && git checkout main && git pull --ff-only origin main`
+2. **Validate registry before mutation:**
+   - `python3 scripts/status_board_automation.py --validate-registry`
+3. **Verify source state with event detection:**
+   - `python3 scripts/status_board_automation.py --detect-event`
+   - Expected event before kickoff promotion: `av4.closed`
+4. **Dry-run the target transition:**
+   - `python3 scripts/status_board_automation.py av5.kickoff.started --dry-run`
+5. **Apply the canonical kickoff event:**
+   - `python3 scripts/status_board_automation.py av5.kickoff.started`
+6. **Confirm no drift after apply:**
+   - `python3 scripts/status_board_automation.py av5.kickoff.started --drift-check`
+7. **Attach command evidence to the PR:**
+   - include detect/dry-run/drift-check snippets in test notes.
+
+### Fallback command flow (manual recovery)
+
+Use this only when normal apply fails (lock contention, interrupted write, or ambiguous state):
+
+1. **Re-check current event first:**
+   - `python3 scripts/status_board_automation.py --detect-event`
+2. **If lock contention is stale, retry with explicit override:**
+   - `python3 scripts/status_board_automation.py av5.kickoff.started --force-lock`
+3. **Replay a last-known-good audit entry in safe mode:**
+   - `python3 scripts/status_board_automation.py --replay <entry_id|index>`
+4. **If replay output is correct, apply intentionally:**
+   - `python3 scripts/status_board_automation.py --replay <entry_id|index> --apply`
+5. **Close with target drift-check before merge:**
+   - `python3 scripts/status_board_automation.py av5.kickoff.started --drift-check`
+
 ## Notes
 
 - AV5 execution/stabilization/closure rows are **design-draft targets** for transition semantics (AV5-002 scope) and intentionally do not imply immediate runtime registry wiring.
