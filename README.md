@@ -575,6 +575,7 @@ Next-wave planning/governance docs:
 - AV5 kickoff state is started (`av5.kickoff.started`); canonical status board: `docs/STATUS_BOARD_CURRENT.md`
 - `docs/AUTONOMOUS_V5_WAVE_PLAN.md` (AV5 goals, milestones, architecture deltas, risks)
 - `docs/AUTONOMOUS_V5_BACKLOG.md` (AV5 prioritized execution backlog with DoD/test/PR splits)
+- `docs/AUTONOMOUS_FAILURE_TAXONOMY_V2.md` (AV5-008 failure-class retryability and remediation-lane mapping)
 - `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md` (AV4 closure ledger managed by status-hook rollup)
 - `docs/BACKLOG_NEXT_WEEK.md` (AV5 kickoff top queue quick reference)
 - `docs/AUTONOMOUS_V3_WAVE_CLOSURE.md` (AV3 completed scope, outcomes, and AV4 handoff baseline)
