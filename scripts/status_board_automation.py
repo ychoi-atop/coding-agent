@@ -73,10 +73,23 @@ STATUS_SCOPE_PREFIX = "- **Scope:** "
 STATUS_STATE_PREFIX = "- **State:** "
 STATUS_AV4_PREFIX = "- **AV4:** "
 PLAN_TITLE_PREFIX = "# PLAN — Next Wave ("
-PLAN_AV4_PREFIX = "- AV4 "
+PLAN_SNAPSHOT_PREFIXES = (
+    "- AV4 kickoff package",
+    "- AV4 execution is",
+    "- AV4 stabilization is",
+    "- AV4 wave (",
+    "- AV5 kickoff package",
+)
 BACKLOG_TITLE_PREFIX = "# BACKLOG — Next Wave ("
-BACKLOG_AV4_PREFIX = "- AV4 "
+BACKLOG_SNAPSHOT_PREFIXES = (
+    "- AV4 kickoff:",
+    "- AV4 execution:",
+    "- AV4 stabilization:",
+    "- AV4 closure:",
+    "- AV5 kickoff:",
+)
 CLOSURE_STATUS_PREFIX = "Status: "
+ACTIVE_EVENT_LINE_PREFIX = "- Active status-hook event/state:"
 DEFAULT_AUDIT_LOG_RELATIVE = "artifacts/status-hooks/status-hook-audit.jsonl"
 DEFAULT_LOCKFILE_RELATIVE = "artifacts/status-hooks/status-hook-write.lock"
 DEFAULT_LOCK_STALE_SECONDS = 900
@@ -154,6 +167,22 @@ EVENT_REGISTRY: tuple[EventRegistryEntry, ...] = (
             closure_status="✅ Closed on `main`",
         ),
     ),
+    EventRegistryEntry(
+        event_id="av5.kickoff.started",
+        description="Initialize AV5 kickoff docs baseline while keeping AV4 closure status intact.",
+        expected_doc_transitions=EXPECTED_DOC_TRANSITIONS,
+        spec=CanonicalEventSpec(
+            mode="AV5 Kickoff Active",
+            scope="AV5 kickoff package execution (plan/backlog/governance slices)",
+            state="AV5 kickoff is started; AV4 remains closed on `main`",
+            av4_snapshot="✅ Closed (execution + stabilization complete)",
+            plan_title="# PLAN — Next Wave (AV5 Kickoff Active)",
+            plan_av4_snapshot="- AV5 kickoff package is started (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_BACKLOG.md`).",
+            backlog_title="# BACKLOG — Next Wave (AV5 Kickoff Queue)",
+            backlog_av4_snapshot="- AV5 kickoff: 🚧 started (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_BACKLOG.md`)",
+            closure_status="✅ Closed on `main`",
+        ),
+    ),
 )
 
 
@@ -202,6 +231,39 @@ def _replace_line_by_prefix(content: str, prefix: str, replacement: str, *, file
     return "\n".join(lines) + trailing_newline
 
 
+def _replace_line_by_prefixes(content: str, prefixes: Sequence[str], replacement: str, *, file_path: Path) -> str:
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if any(line.startswith(prefix) for prefix in prefixes):
+            lines[index] = replacement
+            break
+    else:
+        expected = ", ".join(prefixes)
+        raise ValueError(f"expected one of line prefixes not found in {file_path}: {expected}")
+
+    trailing_newline = "\n" if content.endswith("\n") else ""
+    return "\n".join(lines) + trailing_newline
+
+
+def _replace_wave_snapshot_line(content: str, replacement: str, *, file_path: Path, fallback_prefixes: Sequence[str]) -> str:
+    lines = content.splitlines()
+
+    active_event_index: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith(ACTIVE_EVENT_LINE_PREFIX):
+            active_event_index = index
+            break
+
+    if active_event_index is not None:
+        for index in range(active_event_index - 1, -1, -1):
+            if lines[index].startswith("- AV"):
+                lines[index] = replacement
+                trailing_newline = "\n" if content.endswith("\n") else ""
+                return "\n".join(lines) + trailing_newline
+
+    return _replace_line_by_prefixes(content, fallback_prefixes, replacement, file_path=file_path)
+
+
 def _extract_status_timestamp(content: str) -> str | None:
     for line in content.splitlines():
         if line.startswith(STATUS_TIMESTAMP_PREFIX):
@@ -231,13 +293,23 @@ def _render_status_board(content: str, spec: CanonicalEventSpec, *, file_path: P
 
 def _render_plan(content: str, spec: CanonicalEventSpec, *, file_path: Path) -> str:
     updated = _replace_line_by_prefix(content, PLAN_TITLE_PREFIX, spec.plan_title, file_path=file_path)
-    updated = _replace_line_by_prefix(updated, PLAN_AV4_PREFIX, spec.plan_av4_snapshot, file_path=file_path)
+    updated = _replace_wave_snapshot_line(
+        updated,
+        spec.plan_av4_snapshot,
+        file_path=file_path,
+        fallback_prefixes=PLAN_SNAPSHOT_PREFIXES,
+    )
     return updated
 
 
 def _render_backlog(content: str, spec: CanonicalEventSpec, *, file_path: Path) -> str:
     updated = _replace_line_by_prefix(content, BACKLOG_TITLE_PREFIX, spec.backlog_title, file_path=file_path)
-    updated = _replace_line_by_prefix(updated, BACKLOG_AV4_PREFIX, spec.backlog_av4_snapshot, file_path=file_path)
+    updated = _replace_wave_snapshot_line(
+        updated,
+        spec.backlog_av4_snapshot,
+        file_path=file_path,
+        fallback_prefixes=BACKLOG_SNAPSHOT_PREFIXES,
+    )
     return updated
 
 

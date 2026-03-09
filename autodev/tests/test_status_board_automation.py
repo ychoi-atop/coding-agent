@@ -88,6 +88,7 @@ def test_event_registry_valid_default_passes_schema_validation() -> None:
         "av4.execution.in_progress",
         "av4.stabilization.started",
         "av4.closed",
+        "av5.kickoff.started",
     }
     assert set(mod.CANONICAL_EVENT_MAP) == expected_events
 
@@ -168,6 +169,25 @@ def test_detect_matching_event_resolves_single_canonical_match(tmp_path: Path) -
 
     mod.apply_event("av4.closed", docs_root=docs_root, timestamp="2026-03-09 10:10 KST (Asia/Seoul)")
     assert mod.detect_matching_event(docs_root=docs_root) == "av4.closed"
+
+    status_path = docs_root / "STATUS_BOARD_CURRENT.md"
+    status_path.write_text(
+        status_path.read_text(encoding="utf-8").replace("- **Mode:** AV4 Closed", "- **Mode:** AV5 Kickoff Active"),
+        encoding="utf-8",
+    )
+    assert mod.detect_matching_event(docs_root=docs_root) == "av5.kickoff.started"
+
+
+def test_detected_av5_kickoff_event_can_drive_drift_check(tmp_path: Path) -> None:
+    mod = _load_module()
+    docs_root = tmp_path / "docs"
+    _seed_docs(docs_root)
+
+    mod.apply_event("av5.kickoff.started", docs_root=docs_root, timestamp="2026-03-09 10:34 KST (Asia/Seoul)")
+
+    detected = mod.detect_matching_event(docs_root=docs_root)
+    assert detected == "av5.kickoff.started"
+    assert mod.drift_check_event(detected, docs_root=docs_root) == []
 
 
 def test_detect_matching_event_errors_on_unknown_status_mode(tmp_path: Path) -> None:

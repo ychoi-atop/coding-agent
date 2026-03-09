@@ -1,4 +1,4 @@
-# Status Hook Transition Matrix (AV4)
+# Status Hook Transition Matrix (AV4 + AV5 Kickoff)
 
 Canonical status-hook events drive deterministic updates for:
 - `docs/STATUS_BOARD_CURRENT.md`
@@ -12,6 +12,7 @@ Canonical status-hook events drive deterministic updates for:
 | `av4.execution.in_progress` | Mode `AV4 Execution`; AV4 snapshot `🏗️ Execution in progress (P0 slices actively shipping)` | Title `# PLAN — Next Wave (AV4 Execution In Progress)`; snapshot `- AV4 execution is in progress (...)` | Title `# BACKLOG — Next Wave (AV4 Active Delivery Queue)`; baseline `- AV4 execution: 🏗️ in progress` | Status `🏗️ Open (execution in progress)` |
 | `av4.stabilization.started` | Mode `AV4 Stabilization`; AV4 snapshot `🧪 Stabilization started (smoke + release gates in focus)` | Title `# PLAN — Next Wave (AV4 Stabilization Active)`; snapshot `- AV4 stabilization is active (...)` | Title `# BACKLOG — Next Wave (AV4 Stabilization Queue)`; baseline `- AV4 stabilization: 🧪 started` | Status `🧪 Open (stabilization active)` |
 | `av4.closed` | Mode `AV4 Closed`; AV4 snapshot `✅ Closed (execution + stabilization complete)` | Title `# PLAN — Next Wave (Post-AV4 Planning)`; snapshot `- AV4 wave (`AV4-001` ~ `AV4-014`) is complete and closed on \`main\`.` | Title `# BACKLOG — Next Wave (Post-AV4 Intake Queue)`; baseline `- AV4 closure: ✅ complete (`AV4-001` ~ `AV4-014`)` | Status `✅ Closed on \`main\`` |
+| `av5.kickoff.started` | Mode `AV5 Kickoff Active`; AV4 snapshot remains `✅ Closed (execution + stabilization complete)` while AV5 kickoff starts | Title `# PLAN — Next Wave (AV5 Kickoff Active)`; snapshot `- AV5 kickoff package is started (...)` | Title `# BACKLOG — Next Wave (AV5 Kickoff Queue)`; baseline `- AV5 kickoff: 🚧 started (...)` | Status `✅ Closed on \`main\`` |
 
 ## Notes
 
