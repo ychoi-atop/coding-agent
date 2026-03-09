@@ -71,6 +71,7 @@ ci-fast: compile check-fast tests-fast check-status-hooks
 # Docs-as-code sanity checks (local markdown links in docs and GitHub templates).
 check-docs:
 	$(PYTHON) scripts/check_markdown_links.py
+	$(PYTHON) scripts/check_av4_backlog_schema.py
 
 # Status-hook docs drift gate (AV4-002/AV4-003).
 check-status-hooks:
