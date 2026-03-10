@@ -14,12 +14,15 @@ Canonical status-hook events drive deterministic updates for:
 | `av4.closed` | Mode `AV4 Closed`; AV4 snapshot `✅ Closed (execution + stabilization complete)` | Title `# PLAN — Next Wave (Post-AV4 Planning)`; snapshot `- AV4 wave (AV4-001 ~ AV4-014) is complete and closed on main.` | Title `# BACKLOG — Next Wave (Post-AV4 Intake Queue)`; baseline `- AV4 closure: ✅ complete (AV4-001 ~ AV4-014)` | Status `✅ Closed on main` |
 | `av5.kickoff.started` | Mode `AV5 Kickoff Active`; AV4 snapshot remains `✅ Closed (execution + stabilization complete)` while AV5 kickoff starts | Title `# PLAN — Next Wave (AV5 Kickoff Active)`; snapshot `- AV5 kickoff package is started (...)` | Title `# BACKLOG — Next Wave (AV5 Kickoff Queue)`; baseline `- AV5 kickoff: 🚧 started (...)` | Status `✅ Closed on main` |
 | `av6.kickoff.started` | Mode `AV6 Kickoff Active`; AV5 checkpoint is noted while AV4 closure remains intact | Title `# PLAN — Next Wave (AV6 Kickoff Active)`; snapshot `- AV6 kickoff package is started (...)` | Title `# BACKLOG — Next Wave (AV6 Kickoff Queue)`; baseline `- AV6 kickoff: 🚧 started (...)` | Status remains `✅ Closed on main` (AV4 closure ledger frozen) |
+| `av6.execution.in_progress` *(draft)* | Mode `AV6 Execution Active`; AV6 wave moves from kickoff packet publication into active delivery | Title `# PLAN — Next Wave (AV6 Execution Active)`; snapshot `- AV6 execution is in progress (...)` | Title `# BACKLOG — Next Wave (AV6 Active Delivery Queue)`; baseline `- AV6 execution: 🏗️ in progress (...)` | Status remains `✅ Closed on main` (AV4 closure ledger frozen) |
+| `av6.stabilization.started` *(draft)* | Mode `AV6 Stabilization Active`; AV6 scope is feature-complete and release evidence focus begins | Title `# PLAN — Next Wave (AV6 Stabilization Active)`; snapshot `- AV6 stabilization is active (...)` | Title `# BACKLOG — Next Wave (AV6 Stabilization Queue)`; baseline `- AV6 stabilization: 🧪 started (...)` | Status remains `✅ Closed on main` (AV4 closure ledger frozen) |
+| `av6.closed` *(draft)* | Mode `AV6 Closed`; AV6 closure evidence is complete and next-wave intake can begin | Title `# PLAN — Next Wave (Post-AV6 Planning)`; snapshot `- AV6 wave (...) is complete and closed on main.` | Title `# BACKLOG — Next Wave (Post-AV6 Intake Queue)`; baseline `- AV6 closure: ✅ complete (...)` | Status remains `✅ Closed on main` (AV4 closure ledger frozen) |
 
-## Transition runbook: AV5 checkpoint → AV6 kickoff active
+## Transition runbook: AV5 checkpoint → AV6 kickoff/execution/stabilization/closure
 
-Use this runbook when AV5 checkpoint docs are published and the next wave must be promoted to AV6 kickoff with deterministic docs parity.
+Use this runbook when AV5 checkpoint docs are published and AV6 must move through a deterministic lifecycle from kickoff to closure.
 
-### Canonical transition steps
+### Canonical transition steps (kickoff)
 
 1. **Confirm clean base on `main`:**
    - `git fetch origin && git checkout main && git pull --ff-only origin main`
@@ -33,6 +36,16 @@ Use this runbook when AV5 checkpoint docs are published and the next wave must b
    - `python3 scripts/status_board_automation.py av6.kickoff.started`
 6. **Confirm no drift after apply:**
    - `python3 scripts/status_board_automation.py av6.kickoff.started --drift-check`
+
+### Lifecycle promotion flow (AV6 draft sequence)
+
+1. `av6.kickoff.started` → kickoff docs baseline (published plan/backlog + status sync)
+2. `av6.execution.in_progress` *(draft)* → delivery mode (ticket implementation and validation in flight)
+3. `av6.stabilization.started` *(draft)* → feature-freeze mode (smoke/release checks prioritized)
+4. `av6.closed` *(draft)* → closure mode (evidence sealed; next-wave intake enabled)
+
+> Draft note: AV6 post-kickoff events are documented here as transition semantics for planning/review.
+> Canonical automation support is currently guaranteed for `av6.kickoff.started`; promote additional AV6 events in registry/automation when corresponding docs lanes are finalized.
 
 ### Fallback command flow (manual recovery)
 
