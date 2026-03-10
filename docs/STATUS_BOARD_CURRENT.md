@@ -14,7 +14,7 @@ Status timestamp: 2026-03-09 23:12 KST (Asia/Seoul)
 - **AV2:** ✅ Closed (`AV2-001` ~ `AV2-014`)
 - **AV3:** ✅ Closed (`AV3-001` ~ `AV3-013`)
 - **AV4:** ✅ Closed (execution + stabilization complete)
-- **AV5:** ✅ Checkpoint captured (`docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`)
+- **AV5:** ✅ Checkpoint captured (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_BACKLOG.md`, `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`)
 - **AV6:** 🚧 Kickoff in progress (`AV6-001` merged; `AV6-002` ~ `AV6-006` pending)
 
 ## Current tracking focus
@@ -32,6 +32,7 @@ Status timestamp: 2026-03-09 23:12 KST (Asia/Seoul)
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/AUTONOMOUS_V5_WAVE_PLAN.md`
+- `docs/AUTONOMOUS_V5_BACKLOG.md`
 - `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 - `docs/STATUS_HOOK_TRANSITION_MATRIX.md`
 - `docs/AUTONOMOUS_MODE.md`

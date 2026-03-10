@@ -10,7 +10,7 @@ Primary objective is to operationalize existing autoresearch integration safely 
 - AV2 wave (`AV2-001` ~ `AV2-014`) is complete and merged.
 - AV3 wave (`AV3-001` ~ `AV3-013`) is complete and merged.
 - AV4 wave (`AV4-001` ~ `AV4-014`) is complete and closed on `main`.
-- AV5 wave is checkpointed on `main` (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`).
+- AV5 wave is checkpointed on `main` (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_BACKLOG.md`, `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`).
 - AV6 kickoff package is started (`docs/AUTONOMOUS_V6_WAVE_PLAN.md`, `docs/AUTONOMOUS_V6_BACKLOG.md`).
 - Active status-hook event/state: `av6.kickoff.started`.
 
@@ -47,5 +47,6 @@ Manual status-hook fallback:
 - `docs/STATUS_BOARD_CURRENT.md`
 - `docs/BACKLOG_NEXT_WEEK.md`
 - `docs/AUTONOMOUS_V5_WAVE_PLAN.md`
+- `docs/AUTONOMOUS_V5_BACKLOG.md`
 - `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 - `docs/STATUS_HOOK_TRANSITION_MATRIX.md`

@@ -577,6 +577,7 @@ Next-wave planning/governance docs:
 - `docs/AUTONOMOUS_V6_BACKLOG.md` (AV6 prioritized execution backlog with DoD/test/PR splits)
 - `docs/AUTONOMOUS_V6_WAVE_CHECKPOINT.md` (AV6 kickoff checkpoint scaffold)
 - `docs/AUTONOMOUS_V5_WAVE_PLAN.md` (AV5 checkpoint plan and closure handoff context)
+- `docs/AUTONOMOUS_V5_BACKLOG.md` (AV5 governance backlog ledger and carryover source tickets)
 - `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md` (AV5 checkpoint ledger)
 - `docs/AUTONOMOUS_FAILURE_TAXONOMY_V2.md` (AV5 failure-class retryability and remediation-lane mapping baseline)
 - `docs/AUTONOMOUS_V4_WAVE_CLOSURE.md` (AV4 closure ledger managed by status-hook rollup)

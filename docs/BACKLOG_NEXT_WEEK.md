@@ -8,7 +8,7 @@ Current mode is AV6 kickoff active with AV4 closure preserved and AV5 checkpoint
 - AV2 closure: ✅ `AV2-001` ~ `AV2-014`
 - AV3 closure: ✅ `AV3-001` ~ `AV3-013`
 - AV4 closure: ✅ complete (`AV4-001` ~ `AV4-014`)
-- AV5 checkpoint: ✅ captured (`docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`)
+- AV5 checkpoint: ✅ captured (`docs/AUTONOMOUS_V5_WAVE_PLAN.md`, `docs/AUTONOMOUS_V5_BACKLOG.md`, `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`)
 - AV6 kickoff: 🚧 started (`docs/AUTONOMOUS_V6_WAVE_PLAN.md`, `docs/AUTONOMOUS_V6_BACKLOG.md`)
 - Active status-hook event/state: `av6.kickoff.started`
 
@@ -38,5 +38,7 @@ Current mode is AV6 kickoff active with AV4 closure preserved and AV5 checkpoint
 - `docs/AUTONOMOUS_V6_AV5_CARRYOVER_INTAKE_MAP.md`
 - `docs/PLAN_NEXT_WEEK.md`
 - `docs/STATUS_BOARD_CURRENT.md`
+- `docs/AUTONOMOUS_V5_WAVE_PLAN.md`
+- `docs/AUTONOMOUS_V5_BACKLOG.md`
 - `docs/AUTONOMOUS_V5_WAVE_CHECKPOINT.md`
 - `docs/STATUS_HOOK_TRANSITION_MATRIX.md`
