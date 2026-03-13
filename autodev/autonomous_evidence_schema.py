@@ -49,6 +49,7 @@ SCHEMA_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "guard": ("latest.reason_code", "decisions"),
     "preflight": ("status", "ok"),
     "summary_snapshot": ("preflight_status", "gate_counts.total", "guard_decision.reason_code"),
+    "xai_delivery": ("summary", "repositories", "validation.status"),
 }
 
 
