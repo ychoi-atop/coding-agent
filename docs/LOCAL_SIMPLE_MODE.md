@@ -98,7 +98,7 @@ For full RC gate tracking (tests/docs/known limits/changelog), use:
 - `docs/RC_NEXT_CUT_CHECKLIST.md`
 - `docs/CHANGELOG_DRAFT_NEXT_CUT.md`
 
-## NXT-007 smoke suite (quick run -> process update -> artifact read)
+## NXT-007 smoke suite (quick run -> trust compare -> saved snapshots)
 
 Use this deterministic lane to validate the local-simple run-control chain end-to-end:
 
@@ -114,6 +114,9 @@ What it verifies:
 - Quick-run kickoff via `POST /api/runs/start` (`execute=true`)
 - Process panel data path updates via `/api/processes/<id>` + `/history` (running -> terminal)
 - Artifact viewer read path via `/api/runs/<run_id>/artifacts/read`
+- Trust overview/trend APIs via `/api/autonomous/trust/latest` and `/api/autonomous/trust/trends`
+- Run comparison via `/api/runs/compare`
+- Saved compare snapshot lifecycle via `/api/runs/compare/snapshots` save/list/detail/update/delete
 
 Failure artifacts:
 - Stored under `artifacts/local-simple-e2e-smoke/<timestamp>/`

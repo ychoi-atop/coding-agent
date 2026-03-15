@@ -64,6 +64,18 @@ def _http_json(
         raise RuntimeError(f"Non-JSON response for {method} {url}: {raw[:500]}") from exc
 
 
+def _http_text(url: str, *, timeout: float = 5.0) -> str:
+    req = Request(url=url, method="GET", headers={"Accept": "text/html, text/plain;q=0.9, */*;q=0.1"})
+    try:
+        with urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            return resp.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} for GET {url}: {raw}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Request failed GET {url}: {exc}") from exc
+
+
 def _wait_for_health(base_url: str, timeout_sec: float = 20.0) -> None:
     deadline = time.time() + timeout_sec
     last_error = ""
@@ -187,6 +199,265 @@ sys.exit(0)
     return fake
 
 
+def _write_trust_run_fixture(
+    run_dir: Path,
+    *,
+    run_id: str,
+    profile: str,
+    model: str,
+    status: str,
+    total_task_attempts: int,
+    hard_failures: int,
+    soft_failures: int,
+    blocker_count: int,
+    validation_passed: int,
+    validation_failed: int,
+    quality_score: float,
+    trust_owner: str,
+    trust_severity: str,
+) -> None:
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2))
+    ended = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    artifacts = run_dir / ".autodev"
+    artifacts.mkdir(parents=True, exist_ok=True)
+
+    task_rows: list[dict[str, Any]] = []
+    for index in range(max(validation_passed, 1 if validation_failed == 0 else 0)):
+        task_rows.append({"task_id": f"task-pass-{index + 1:03d}", "status": "passed"})
+    for index in range(validation_failed):
+        task_rows.append({"task_id": f"task-fail-{index + 1:03d}", "status": "failed"})
+
+    validator_rows: list[dict[str, Any]] = []
+    for index in range(validation_passed):
+        validator_rows.append(
+            {
+                "name": f"validator-pass-{index + 1:03d}",
+                "status": "passed",
+                "ok": True,
+                "artifact_path": ".autodev/task_final_last_validation.json",
+            }
+        )
+    for index in range(validation_failed):
+        validator_rows.append(
+            {
+                "name": f"validator-fail-{index + 1:03d}",
+                "status": "failed",
+                "ok": False,
+                "artifact_path": ".autodev/task_final_last_validation.json",
+            }
+        )
+
+    blocker_rows = [f"blocker-{index + 1:03d}" for index in range(blocker_count)]
+    gate_passed = hard_failures == 0 and validation_failed == 0
+    fail_reasons = [] if gate_passed else [{"code": "tests.min_pass_rate_not_met"}]
+
+    _write_json(
+        artifacts / "run_metadata.json",
+        {
+            "run_id": run_id,
+            "request_id": f"req-{run_id}",
+            "requested_profile": profile,
+            "llm": {"model": model},
+            "run_started_at": started,
+            "run_completed_at": ended,
+            "result_ok": status == "completed" and gate_passed,
+        },
+    )
+    _write_json(
+        artifacts / "checkpoint.json",
+        {
+            "run_id": run_id,
+            "status": status,
+            "completed_task_ids": [row["task_id"] for row in task_rows if row["status"] == "passed"],
+            "failed_task_id": task_rows[-1]["task_id"] if validation_failed else None,
+        },
+    )
+    _write_json(
+        artifacts / "run_trace.json",
+        {
+            "run_id": run_id,
+            "model": model,
+            "started_at": started,
+            "completed_at": ended,
+            "events": [
+                {"phase": "kickoff", "at": started},
+                {"phase": "validate", "at": ended},
+                {"phase": "complete", "at": ended},
+            ],
+        },
+    )
+    _write_json(
+        artifacts / "task_quality_index.json",
+        {
+            "project": {"type": "smoke"},
+            "tasks": task_rows,
+            "totals": {
+                "total_task_attempts": total_task_attempts,
+                "hard_failures": hard_failures,
+                "soft_failures": soft_failures,
+                "repair_passes": 0,
+            },
+            "final": {"status": "ok" if gate_passed else "failed"},
+            "resolved_quality_profile": {"name": profile},
+            "unresolved_blockers": blocker_rows,
+        },
+    )
+    _write_json(
+        artifacts / "task_final_last_validation.json",
+        {
+            "summary": {
+                "total": validation_passed + validation_failed,
+                "passed": validation_passed,
+                "failed": validation_failed,
+                "soft_fail": 0,
+                "skipped": 0,
+                "blocking_failed": validation_failed,
+            },
+            "validators": validator_rows,
+            "validation": validator_rows,
+        },
+    )
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "ok": gate_passed,
+            "run_id": run_id,
+            "latest_strategy": {"name": "mixed"},
+            "preflight": {"status": "passed", "reason_codes": []},
+            "operator_guidance": {
+                "top": [
+                    {
+                        "code": "tests.min_pass_rate_not_met" if not gate_passed else "operator.review.final_artifacts",
+                        "actions": [
+                            "Inspect validation artifacts and compare trust posture.",
+                            "Confirm saved comparison metadata before operator handoff.",
+                        ],
+                    }
+                ]
+            },
+            "incident_routing": {
+                "primary": {
+                    "owner_team": trust_owner,
+                    "severity": trust_severity,
+                    "target_sla": "4h" if trust_severity == "high" else "12h",
+                    "escalation_class": "engineering_hotfix" if trust_severity == "high" else "manual_triage",
+                }
+            },
+            "gate_results": {
+                "passed": gate_passed,
+                "gates": {
+                    "composite_quality": {
+                        "status": "passed" if gate_passed else "failed",
+                        "composite_score": quality_score,
+                        "hard_blocked": not gate_passed,
+                        "components": {"tests": quality_score},
+                    }
+                },
+                "fail_reasons": fail_reasons,
+            },
+        },
+    )
+    _write_json(
+        artifacts / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": gate_passed,
+                        "gates": {
+                            "composite_quality": {
+                                "status": "passed" if gate_passed else "failed",
+                                "composite_score": quality_score,
+                                "hard_blocked": not gate_passed,
+                                "components": {"tests": quality_score},
+                            }
+                        },
+                        "fail_reasons": fail_reasons,
+                    },
+                }
+            ]
+        },
+    )
+    if not gate_passed:
+        _write_json(
+            artifacts / "autonomous_incident_packet.json",
+            {
+                "schema_version": "av3-005-v1",
+                "status": "failed",
+                "run_summary": {"run_id": run_id},
+            },
+        )
+
+
+def _build_compare_snapshot_payload(
+    *,
+    left_detail: dict[str, Any],
+    right_detail: dict[str, Any],
+    compare_payload: dict[str, Any],
+) -> dict[str, Any]:
+    left = compare_payload.get("left") if isinstance(compare_payload.get("left"), dict) else {}
+    right = compare_payload.get("right") if isinstance(compare_payload.get("right"), dict) else {}
+    left_trust = left.get("trust") if isinstance(left.get("trust"), dict) else {}
+    right_trust = right.get("trust") if isinstance(right.get("trust"), dict) else {}
+    left_packet = left_detail.get("trust_packet") if isinstance(left_detail.get("trust_packet"), dict) else {}
+    right_packet = right_detail.get("trust_packet") if isinstance(right_detail.get("trust_packet"), dict) else {}
+    left_score = float(left_trust.get("score") or 0.0)
+    right_score = float(right_trust.get("score") or 0.0)
+    generated_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return {
+        "snapshot": {
+            "schema_version": "compare-trust-snapshot-v1",
+            "generated_at": generated_at,
+            "source": "local-simple-e2e-smoke",
+            "left": {
+                "run_id": left.get("run_id"),
+                "status": left.get("status"),
+                "profile": left.get("profile"),
+                "model": left.get("model"),
+                "trust": left_trust,
+                "trust_packet_summary": left_packet,
+            },
+            "right": {
+                "run_id": right.get("run_id"),
+                "status": right.get("status"),
+                "profile": right.get("profile"),
+                "model": right.get("model"),
+                "trust": right_trust,
+                "trust_packet_summary": right_packet,
+            },
+            "delta": compare_payload.get("delta", {}),
+            "trust_packet_diff": [
+                {
+                    "path": "trust_signals.overall.status",
+                    "left": left_trust.get("status"),
+                    "right": right_trust.get("status"),
+                },
+                {
+                    "path": "trust_signals.overall.score",
+                    "left": f"{left_score:.2f}",
+                    "right": f"{right_score:.2f}",
+                },
+            ],
+            "highlights": [
+                f"Trust: {left_trust.get('status') or 'unknown'} ({left_score:.2f}) -> {right_trust.get('status') or 'unknown'} ({right_score:.2f})"
+            ],
+        },
+        "compare_payload": {
+            "left": {**left, "trust_packet": left_packet, "trust_message": str(left_detail.get("trust_message") or "")},
+            "right": {**right, "trust_packet": right_packet, "trust_message": str(right_detail.get("trust_message") or "")},
+            "delta": compare_payload.get("delta", {}),
+        },
+        "markdown": (
+            "# Compare Trust Snapshot\n\n"
+            f"- baseline_run: {left.get('run_id') or '-'}\n"
+            f"- candidate_run: {right.get('run_id') or '-'}\n"
+            f"- trust_delta: {compare_payload.get('delta', {}).get('trust_score', 0.0):+.2f}\n"
+        ),
+    }
+
+
 def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
     run_stamp = _now_stamp()
     run_artifacts = artifacts_dir / run_stamp
@@ -240,6 +511,16 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
             )
 
             _wait_for_health(base_url)
+
+            index_html = _http_text(f"{base_url}/index.html")
+            static_checks = {
+                "has_trust_trend_cards": "trustTrendCards" in index_html,
+                "has_saved_comparisons_panel": "Saved Comparisons" in index_html,
+                "has_trust_diff_filter": "compareTrustDiffSeveritySelect" in index_html,
+            }
+            snapshots["static_index"] = static_checks
+            if not all(static_checks.values()):
+                raise RuntimeError(f"static trust/compare UI markers missing: {static_checks}")
 
             context = _http_json("GET", f"{base_url}/api/gui/context")
             snapshots["gui_context"] = context
@@ -299,6 +580,111 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
             if not isinstance(summary, dict) or int(summary.get("passed", 0)) < 1:
                 raise RuntimeError(f"artifact summary does not indicate pass: {artifact_payload}")
 
+            baseline_run_id = "run-smoke-baseline"
+            baseline_run_dir = runs_root / baseline_run_id
+            candidate_run_dir = runs_root / run_id
+
+            _write_trust_run_fixture(
+                baseline_run_dir,
+                run_id=baseline_run_id,
+                profile="local_simple",
+                model="fake-model-baseline",
+                status="failed",
+                total_task_attempts=2,
+                hard_failures=1,
+                soft_failures=0,
+                blocker_count=1,
+                validation_passed=0,
+                validation_failed=1,
+                quality_score=41.0,
+                trust_owner="Feature Engineering",
+                trust_severity="high",
+            )
+            _write_trust_run_fixture(
+                candidate_run_dir,
+                run_id=run_id,
+                profile="local_simple",
+                model="fake-model",
+                status="completed",
+                total_task_attempts=1,
+                hard_failures=0,
+                soft_failures=0,
+                blocker_count=0,
+                validation_passed=1,
+                validation_failed=0,
+                quality_score=96.0,
+                trust_owner="Autonomy On-Call",
+                trust_severity="medium",
+            )
+
+            trust_latest = _http_json("GET", f"{base_url}/api/autonomous/trust/latest")
+            snapshots["trust_latest"] = trust_latest
+            if trust_latest.get("empty") is not False:
+                raise RuntimeError(f"expected populated trust latest payload: {trust_latest}")
+
+            trust_trends = _http_json("GET", f"{base_url}/api/autonomous/trust/trends?window=5")
+            snapshots["trust_trends"] = trust_trends
+            trend_summary = trust_trends.get("summary") if isinstance(trust_trends, dict) else {}
+            if not isinstance(trend_summary, dict) or int(trend_summary.get("runs_considered", 0)) < 2:
+                raise RuntimeError(f"expected trust trends to consider at least 2 runs: {trust_trends}")
+
+            baseline_detail = _http_json("GET", f"{base_url}/api/runs/{baseline_run_id}")
+            candidate_detail = _http_json("GET", f"{base_url}/api/runs/{run_id}")
+            snapshots["baseline_run_detail"] = baseline_detail
+            snapshots["candidate_run_detail"] = candidate_detail
+            if not isinstance(baseline_detail.get("trust_summary"), dict) or not isinstance(candidate_detail.get("trust_summary"), dict):
+                raise RuntimeError("expected trust summaries on both run detail payloads")
+
+            compare_payload = _http_json("GET", f"{base_url}/api/runs/compare?left={baseline_run_id}&right={run_id}")
+            snapshots["compare"] = compare_payload
+            compare_delta = compare_payload.get("delta") if isinstance(compare_payload, dict) else {}
+            if not isinstance(compare_delta, dict) or compare_delta.get("trust_status_changed") is not True:
+                raise RuntimeError(f"expected trust compare delta to show status change: {compare_payload}")
+
+            compare_snapshot_payload = _build_compare_snapshot_payload(
+                left_detail=baseline_detail,
+                right_detail=candidate_detail,
+                compare_payload=compare_payload,
+            )
+            compare_save = _http_json("POST", f"{base_url}/api/runs/compare/snapshots", payload=compare_snapshot_payload)
+            snapshots["compare_snapshot_save"] = compare_save
+            saved_snapshot = compare_save.get("snapshot") if isinstance(compare_save, dict) else {}
+            snapshot_id = str((saved_snapshot or {}).get("snapshot_id") or "").strip()
+            if not snapshot_id:
+                raise RuntimeError(f"missing compare snapshot id from save response: {compare_save}")
+
+            compare_list = _http_json("GET", f"{base_url}/api/runs/compare/snapshots?query=smoke")
+            snapshots["compare_snapshot_list"] = compare_list
+            list_rows = compare_list.get("snapshots") if isinstance(compare_list, dict) else []
+            if not isinstance(list_rows, list) or not any(str(row.get("snapshot_id") or "") == snapshot_id for row in list_rows if isinstance(row, dict)):
+                raise RuntimeError(f"saved compare snapshot not visible in list response: {compare_list}")
+
+            compare_detail = _http_json("GET", f"{base_url}/api/runs/compare/snapshots/{snapshot_id}")
+            snapshots["compare_snapshot_detail"] = compare_detail
+            if str((compare_detail.get("snapshot") or {}).get("snapshot_id") or "") != snapshot_id:
+                raise RuntimeError(f"saved compare snapshot detail mismatch: {compare_detail}")
+
+            compare_update = _http_json(
+                "PATCH",
+                f"{base_url}/api/runs/compare/snapshots/{snapshot_id}",
+                payload={"display_name": "Smoke compare snapshot", "pinned": True, "tags": ["smoke", "trust"]},
+            )
+            snapshots["compare_snapshot_update"] = compare_update
+            updated_snapshot = compare_update.get("snapshot") if isinstance(compare_update, dict) else {}
+            if not isinstance(updated_snapshot, dict) or updated_snapshot.get("pinned") is not True:
+                raise RuntimeError(f"compare snapshot metadata update failed: {compare_update}")
+
+            compare_delete = _http_json("DELETE", f"{base_url}/api/runs/compare/snapshots/{snapshot_id}")
+            snapshots["compare_snapshot_delete"] = compare_delete
+            if compare_delete.get("deleted") is not True:
+                raise RuntimeError(f"compare snapshot delete failed: {compare_delete}")
+
+            compare_list_after_delete = _http_json("GET", f"{base_url}/api/runs/compare/snapshots")
+            snapshots["compare_snapshot_list_after_delete"] = compare_list_after_delete
+            remaining_rows = compare_list_after_delete.get("snapshots") if isinstance(compare_list_after_delete, dict) else []
+            if isinstance(remaining_rows, list) and any(str(row.get("snapshot_id") or "") == snapshot_id for row in remaining_rows if isinstance(row, dict)):
+                raise RuntimeError(f"deleted compare snapshot still present in list response: {compare_list_after_delete}")
+
             _write_json(
                 run_artifacts / "result.json",
                 {
@@ -306,6 +692,8 @@ def run_smoke(*, artifacts_dir: Path, keep_tmp: bool) -> Path:
                     "base_url": base_url,
                     "process_id": process_id,
                     "run_id": run_id,
+                    "baseline_run_id": baseline_run_id,
+                    "compare_snapshot_id": snapshot_id,
                     "artifacts": str(run_artifacts),
                 },
             )

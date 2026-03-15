@@ -534,6 +534,7 @@ make smoke-local-simple-e2e
 python scripts/local_simple_e2e_smoke.py --artifacts-dir ./artifacts/local-simple-e2e-smoke
 ```
 Smoke artifacts are persisted under `./artifacts/local-simple-e2e-smoke/<timestamp>/` (server stdout/stderr logs + API snapshots) so failures remain debuggable.
+This lane now also verifies the trust overview APIs, run-to-run trust compare, and saved compare snapshot lifecycle used by the GUI Compare tab.
 
 Autonomous E2E smoke lane (AV2-013):
 ```bash
