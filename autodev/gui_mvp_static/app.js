@@ -19,6 +19,7 @@ const state = {
   comparePayload: null,
   compareSource: '',
   compareManualSelection: false,
+  compareTrustFocus: '',
   guiContext: null,
   healthSnapshot: null,
   scorecardPayload: null,
@@ -2427,6 +2428,14 @@ function formatComparisonReviewState(value) {
   return '-';
 }
 
+function comparisonTrustTone(side) {
+  const status = String(side?.trust?.status || '').toLowerCase();
+  if (status === 'high') return 'ok';
+  if (status === 'moderate') return 'warning';
+  if (status === 'low') return 'danger';
+  return 'neutral';
+}
+
 function toComparisonSummary(detail) {
   const summary = detail?.summary || {};
   const totals = summary.totals || {};
@@ -2471,6 +2480,8 @@ function toComparisonSummary(detail) {
     blockers,
     validator_outcomes: outcomes,
     trust: normalizeComparisonTrust(detail),
+    trust_packet: detail?.trust_packet || null,
+    trust_message: String(detail?.trust_message || ''),
   };
 }
 
@@ -2516,8 +2527,9 @@ async function enrichComparisonPayload(payload) {
     && Array.isArray(payload?.delta?.blockers_only_right);
   const hasTrustRows = payload?.left?.trust && payload?.right?.trust;
   const hasTrustDelta = payload?.delta && Object.prototype.hasOwnProperty.call(payload.delta, 'trust_score');
+  const hasTrustPackets = payload?.left?.trust_packet && payload?.right?.trust_packet;
 
-  if (hasValidatorDiffs && hasBlockerSplits && hasTrustRows && hasTrustDelta) {
+  if (hasValidatorDiffs && hasBlockerSplits && hasTrustRows && hasTrustDelta && hasTrustPackets) {
     return payload;
   }
 
@@ -2536,10 +2548,14 @@ async function enrichComparisonPayload(payload) {
       left: {
         ...(payload?.left || {}),
         trust: payload?.left?.trust || fallback.left.trust,
+        trust_packet: payload?.left?.trust_packet || fallback.left.trust_packet,
+        trust_message: payload?.left?.trust_message || fallback.left.trust_message,
       },
       right: {
         ...(payload?.right || {}),
         trust: payload?.right?.trust || fallback.right.trust,
+        trust_packet: payload?.right?.trust_packet || fallback.right.trust_packet,
+        trust_message: payload?.right?.trust_message || fallback.right.trust_message,
       },
       delta: {
         ...(payload?.delta || {}),
@@ -2560,6 +2576,120 @@ async function enrichComparisonPayload(payload) {
   }
 }
 
+function buildCompareTrustInspectButtons() {
+  return [
+    '<button type="button" class="compare-diff-action" data-compare-trust-side="left">Inspect baseline</button>',
+    '<button type="button" class="compare-diff-action" data-compare-trust-side="right">Inspect candidate</button>',
+  ].join('');
+}
+
+function renderCompareTrustDrilldown(payload) {
+  const panel = el('compareTrustPanel');
+  const emptyNode = el('compareTrustEmpty');
+  if (!panel || !emptyNode) return;
+
+  panel.innerHTML = '';
+
+  if (!payload?.left || !payload?.right) {
+    panel.classList.add('hidden');
+    emptyNode.classList.remove('hidden');
+    emptyNode.textContent = 'Click a trust difference to inspect trust packets and operator actions for either run.';
+    return;
+  }
+
+  const focus = state.compareTrustFocus && payload[state.compareTrustFocus] ? state.compareTrustFocus : '';
+  const sides = [
+    ['left', 'Baseline', payload.left || {}],
+    ['right', 'Candidate', payload.right || {}],
+  ];
+
+  sides.forEach(([sideKey, sideLabel, side]) => {
+    const article = document.createElement('article');
+    article.className = `compare-trust-card tone-${comparisonTrustTone(side)} ${focus === sideKey ? 'is-focused' : ''}`.trim();
+
+    const trust = side?.trust || {};
+    const packet = side?.trust_packet || {};
+    const actions = Array.isArray(packet?.operator_next?.top_actions)
+      ? packet.operator_next.top_actions.slice(0, 3)
+      : [];
+    const message = String(side?.trust_message || '').trim();
+    const summaryItems = [
+      ['Trust status', trust.status || '-'],
+      ['Trust score', formatComparisonTrustScore(trust.score)],
+      ['Human review', formatComparisonReviewState(trust.requires_human_review)],
+      ['Quality signal', trust.latest_quality_status || '-'],
+      ['Owner', trust.incident_owner_team || '-'],
+      ['Severity', trust.incident_severity || '-'],
+    ];
+
+    article.innerHTML = `
+      <div class="compare-trust-header">
+        <div>
+          <h4>${escapeHtml(sideLabel)} trust</h4>
+          <div class="compare-trust-meta">${escapeHtml(side.run_id || '-')}</div>
+        </div>
+        <button type="button" data-compare-open-run="${escapeHtml(sideKey)}">Open run</button>
+      </div>
+      <div class="compare-trust-summary">
+        ${summaryItems.map(([label, value]) => `
+          <div>
+            <div class="label">${escapeHtml(label)}</div>
+            <div class="value">${escapeHtml(String(value))}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div class="compare-trust-controls">
+        <button type="button" data-compare-focus="${escapeHtml(sideKey)}">Focus ${escapeHtml(sideLabel.toLowerCase())}</button>
+      </div>
+    `;
+
+    const actionsNode = document.createElement('div');
+    actionsNode.className = 'compare-trust-actions';
+    if (actions.length) {
+      actions.forEach((item) => {
+        const actionText = Array.isArray(item?.actions) && item.actions.length
+          ? item.actions.join('; ')
+          : '-';
+        const actionCard = document.createElement('article');
+        actionCard.className = 'trust-action';
+        actionCard.innerHTML = `
+          <div class="title">${escapeHtml(item?.title || item?.code || 'Operator action')}</div>
+          <div class="meta">${escapeHtml(item?.code || '-')}</div>
+          <div class="body">${escapeHtml(actionText)}</div>
+        `;
+        actionsNode.appendChild(actionCard);
+      });
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'compare-trust-empty';
+      empty.textContent = message || 'No trust packet actions available for this run.';
+      actionsNode.appendChild(empty);
+    }
+    article.appendChild(actionsNode);
+    panel.appendChild(article);
+  });
+
+  panel.classList.remove('hidden');
+  emptyNode.classList.add('hidden');
+}
+
+function setCompareTrustFocus(sideKey, { scroll = false } = {}) {
+  if (!['left', 'right'].includes(String(sideKey || ''))) return;
+  state.compareTrustFocus = sideKey;
+  renderCompareTrustDrilldown(state.comparePayload);
+  if (scroll) {
+    const panel = el('compareTrustPanel');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+async function openCompareRun(sideKey) {
+  const runId = state.comparePayload?.[sideKey]?.run_id;
+  if (!runId) return;
+  await selectRun(runId);
+  activateTab('overview');
+}
+
 function renderComparison(payload, { source = state.compareSource, error = '' } = {}) {
   const grid = el('compareGrid');
   const diffs = el('compareDiffs');
@@ -2576,11 +2706,13 @@ function renderComparison(payload, { source = state.compareSource, error = '' } 
   }
 
   if (!payload) {
+    state.compareTrustFocus = '';
     if (grid) {
       grid.classList.add('hidden');
       grid.innerHTML = '';
     }
     if (diffs) diffs.innerHTML = '<div class="empty">Select two runs to compare.</div>';
+    renderCompareTrustDrilldown(null);
     if (errorNode) {
       errorNode.classList.toggle('hidden', !error);
       errorNode.textContent = error;
@@ -2654,15 +2786,15 @@ function renderComparison(payload, { source = state.compareSource, error = '' } 
     diffItems.push(`<li><strong>Status:</strong> ${escapeHtml(left.status || 'unknown')} → ${escapeHtml(right.status || 'unknown')}</li>`);
   }
   if (Boolean(delta.trust_status_changed || ((left.trust?.status || '') !== (right.trust?.status || '')))) {
-    diffItems.push(`<li><strong>Trust:</strong> ${escapeHtml(left.trust?.status || 'unknown')} (${escapeHtml(formatComparisonTrustScore(left.trust?.score))}) → ${escapeHtml(right.trust?.status || 'unknown')} (${escapeHtml(formatComparisonTrustScore(right.trust?.score))})</li>`);
+    diffItems.push(`<li><strong>Trust:</strong> ${escapeHtml(left.trust?.status || 'unknown')} (${escapeHtml(formatComparisonTrustScore(left.trust?.score))}) → ${escapeHtml(right.trust?.status || 'unknown')} (${escapeHtml(formatComparisonTrustScore(right.trust?.score))}) ${buildCompareTrustInspectButtons()}</li>`);
   } else if (Math.abs(Number(delta.trust_score ?? 0)) > 0.001) {
-    diffItems.push(`<li><strong>Trust score:</strong> ${escapeHtml(formatComparisonTrustScore(left.trust?.score))} → ${escapeHtml(formatComparisonTrustScore(right.trust?.score))}</li>`);
+    diffItems.push(`<li><strong>Trust score:</strong> ${escapeHtml(formatComparisonTrustScore(left.trust?.score))} → ${escapeHtml(formatComparisonTrustScore(right.trust?.score))} ${buildCompareTrustInspectButtons()}</li>`);
   }
   if (Boolean(delta.trust_review_changed || (left.trust?.requires_human_review !== right.trust?.requires_human_review))) {
-    diffItems.push(`<li><strong>Human review:</strong> ${escapeHtml(formatComparisonReviewState(left.trust?.requires_human_review))} → ${escapeHtml(formatComparisonReviewState(right.trust?.requires_human_review))}</li>`);
+    diffItems.push(`<li><strong>Human review:</strong> ${escapeHtml(formatComparisonReviewState(left.trust?.requires_human_review))} → ${escapeHtml(formatComparisonReviewState(right.trust?.requires_human_review))} ${buildCompareTrustInspectButtons()}</li>`);
   }
   if (Boolean(delta.trust_owner_changed || ((left.trust?.incident_owner_team || '') !== (right.trust?.incident_owner_team || '')))) {
-    diffItems.push(`<li><strong>Incident owner:</strong> ${escapeHtml(left.trust?.incident_owner_team || '-')} → ${escapeHtml(right.trust?.incident_owner_team || '-')}</li>`);
+    diffItems.push(`<li><strong>Incident owner:</strong> ${escapeHtml(left.trust?.incident_owner_team || '-')} → ${escapeHtml(right.trust?.incident_owner_team || '-')} ${buildCompareTrustInspectButtons()}</li>`);
   }
   if (blockerLeft.length || blockerRight.length) {
     diffItems.push(`<li><strong>Blockers:</strong> only baseline [${escapeHtml(blockerLeft.join(', ') || 'none')}], only candidate [${escapeHtml(blockerRight.join(', ') || 'none')}]</li>`);
@@ -2678,6 +2810,7 @@ function renderComparison(payload, { source = state.compareSource, error = '' } 
   } else {
     diffs.innerHTML = `<ul>${diffItems.join('')}</ul>`;
   }
+  renderCompareTrustDrilldown(payload);
 }
 
 async function refreshComparison({ silent = false } = {}) {
@@ -3826,6 +3959,8 @@ function initCompareControls() {
   const right = el('compareRightRun');
   const swap = el('compareSwapBtn');
   const refresh = el('compareRefreshBtn');
+  const diffs = el('compareDiffs');
+  const trustPanel = el('compareTrustPanel');
 
   if (!left || !right || !swap || !refresh) return;
 
@@ -3853,6 +3988,31 @@ function initCompareControls() {
   refresh.addEventListener('click', async () => {
     await refreshComparison();
   });
+
+  if (diffs) {
+    diffs.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target.closest('[data-compare-trust-side]') : null;
+      const side = target?.getAttribute('data-compare-trust-side') || '';
+      if (!side) return;
+      setCompareTrustFocus(side, { scroll: true });
+    });
+  }
+
+  if (trustPanel) {
+    trustPanel.addEventListener('click', async (event) => {
+      const target = event.target instanceof Element ? event.target.closest('button') : null;
+      if (!target) return;
+      const focusSide = target.getAttribute('data-compare-focus') || '';
+      if (focusSide) {
+        setCompareTrustFocus(focusSide);
+        return;
+      }
+      const openSide = target.getAttribute('data-compare-open-run') || '';
+      if (openSide) {
+        await openCompareRun(openSide);
+      }
+    });
+  }
 }
 
 function initLiveUpdateControls() {

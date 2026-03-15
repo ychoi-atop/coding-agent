@@ -1021,6 +1021,8 @@ def test_overview_scorecard_static_contract(gui_server):
     assert 'id="trustActions"' in index_html
     assert 'id="trustEmpty"' in index_html
     assert 'id="trustError"' in index_html
+    assert 'id="compareTrustPanel"' in index_html
+    assert 'id="compareTrustEmpty"' in index_html
     assert 'id="overviewStateBox"' in index_html
     assert 'id="overviewRefreshBtn"' in index_html
     assert 'id="validationStateBox"' in index_html
@@ -1032,11 +1034,15 @@ def test_overview_scorecard_static_contract(gui_server):
     assert "function renderScorecardWidget()" in app_js
     assert "function refreshTrustWidget({ silent = false } = {})" in app_js
     assert "function renderTrustWidget()" in app_js
+    assert "function renderCompareTrustDrilldown(payload)" in app_js
+    assert "function setCompareTrustFocus(sideKey, { scroll = false } = {})" in app_js
+    assert "function openCompareRun(sideKey)" in app_js
     assert "buildMockTrustPayload" in app_js
     assert "function renderOverviewState()" in app_js
     assert "function renderValidationState({ rows = [], filtered = [] } = {})" in app_js
     assert "function initTabRecoveryActions()" in app_js
     assert "buildMockScorecardPayload" in app_js
+    assert 'data-compare-trust-side="left"' in app_js
     assert "/api/scorecard/latest" in app_js
     assert "/api/autonomous/trust/latest" in app_js
 
