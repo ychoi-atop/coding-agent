@@ -418,6 +418,190 @@ def test_autonomous_triage_summary_cli_json_matches_degraded_snapshot_fixture(tm
 
     assert payload == _load_parity_snapshot_fixture("degraded_missing_artifacts")
 
+
+def test_compare_snapshots_cli_supports_operator_management_workflow(tmp_path: Path, capsys) -> None:
+    runs_root = tmp_path / "runs-root"
+    export_path = tmp_path / "compare-export.json"
+    export_path.write_text(
+        json.dumps(
+            {
+                "snapshot": {
+                    "schema_version": "compare-trust-snapshot-v1",
+                    "generated_at": "2026-03-15T12:00:00Z",
+                    "source": "cli-test",
+                    "left": {
+                        "run_id": "run-a",
+                        "status": "failed",
+                        "trust": {"status": "low", "score": 0.42, "requires_human_review": True},
+                    },
+                    "right": {
+                        "run_id": "run-b",
+                        "status": "ok",
+                        "trust": {"status": "high", "score": 0.96, "requires_human_review": False},
+                    },
+                    "delta": {"trust_status_changed": True, "trust_score": 0.54},
+                    "trust_packet_diff": [{"path": "trust_signals.overall.status", "left": "low", "right": "high"}],
+                    "highlights": ["Trust: low (0.42) -> high (0.96)"],
+                },
+                "markdown": "# Compare Trust Snapshot\n\n- baseline_run: run-a\n- candidate_run: run-b\n",
+                "compare_payload": {
+                    "left": {
+                        "run_id": "run-a",
+                        "status": "failed",
+                        "trust": {"status": "low", "score": 0.42, "requires_human_review": True},
+                        "trust_packet": {"trust_signals": {"overall": {"status": "low", "score": 0.42}}},
+                    },
+                    "right": {
+                        "run_id": "run-b",
+                        "status": "ok",
+                        "trust": {"status": "high", "score": 0.96, "requires_human_review": False},
+                        "trust_packet": {"trust_signals": {"overall": {"status": "high", "score": 0.96}}},
+                    },
+                    "delta": {"trust_status_changed": True, "trust_score": 0.54},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "import",
+            "--runs-root",
+            str(runs_root),
+            "--file",
+            str(export_path),
+            "--display-name",
+            "Release compare",
+            "--pinned",
+            "true",
+            "--tags",
+            "release,gate",
+        ]
+    )
+    import_payload = json.loads(capsys.readouterr().out)
+    snapshot = import_payload["snapshot"]
+    snapshot_id = snapshot["snapshot_id"]
+    assert snapshot["display_name"] == "Release compare"
+    assert snapshot["pinned"] is True
+    assert snapshot["tags"] == ["release", "gate"]
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "list",
+            "--runs-root",
+            str(runs_root),
+            "--query",
+            "release",
+            "--format",
+            "text",
+        ]
+    )
+    list_text = capsys.readouterr().out
+    assert "# Compare Snapshots" in list_text
+    assert snapshot_id in list_text
+    assert "trust_delta=+0.54" in list_text
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "show",
+            "--runs-root",
+            str(runs_root),
+            "--snapshot-id",
+            snapshot_id,
+        ]
+    )
+    detail_payload = json.loads(capsys.readouterr().out)
+    assert detail_payload["snapshot"]["snapshot_id"] == snapshot_id
+    assert detail_payload["compare_snapshot"]["left"]["run_id"] == "run-a"
+    assert detail_payload["snapshot"]["integrity_ok"] is True
+    assert detail_payload["integrity"]["mismatches"] == []
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "update",
+            "--runs-root",
+            str(runs_root),
+            "--snapshot-id",
+            snapshot_id,
+            "--display-name",
+            "Renamed compare",
+            "--archived",
+            "true",
+            "--tags",
+            "release,renamed",
+        ]
+    )
+    update_payload = json.loads(capsys.readouterr().out)
+    assert update_payload["snapshot"]["display_name"] == "Renamed compare"
+    assert update_payload["snapshot"]["archived"] is True
+    assert update_payload["snapshot"]["tags"] == ["release", "renamed"]
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "retention",
+            "--runs-root",
+            str(runs_root),
+            "--keep-latest",
+            "0",
+            "--include-archived",
+            "--format",
+            "text",
+        ]
+    )
+    retention_text = capsys.readouterr().out
+    assert "# Compare Snapshot Retention" in retention_text
+    assert snapshot_id in retention_text
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "retention",
+            "--runs-root",
+            str(runs_root),
+            "--keep-latest",
+            "0",
+            "--include-archived",
+            "--apply",
+        ]
+    )
+    retention_payload = json.loads(capsys.readouterr().out)
+    assert retention_payload["dry_run"] is False
+    assert retention_payload["deleted_snapshot_ids"] == [snapshot_id]
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "import",
+            "--runs-root",
+            str(runs_root),
+            "--file",
+            str(export_path),
+        ]
+    )
+    second_import = json.loads(capsys.readouterr().out)
+    second_snapshot_id = second_import["snapshot"]["snapshot_id"]
+
+    autonomous_mode.cli(
+        [
+            "compare-snapshots",
+            "delete",
+            "--runs-root",
+            str(runs_root),
+            "--snapshot-id",
+            second_snapshot_id,
+            "--format",
+            "text",
+        ]
+    )
+    delete_text = capsys.readouterr().out
+    assert f"deleted compare snapshot: {second_snapshot_id}" in delete_text
+
 def test_extract_autonomous_summary_builds_operator_guidance_with_fallbacks(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-guidance-fallback"
     artifacts = run_dir / ".autodev"

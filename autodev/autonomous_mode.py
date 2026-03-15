@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Dict
 from uuid import uuid4
@@ -3337,6 +3338,60 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     trust_summary.add_argument("--run-dir", required=True)
     trust_summary.add_argument("--format", choices=["json", "text"], default="json")
 
+    compare_snapshots = sub.add_parser("compare-snapshots", help="manage persisted compare snapshots")
+    compare_snapshots_sub = compare_snapshots.add_subparsers(dest="compare_action", required=True)
+
+    compare_list = compare_snapshots_sub.add_parser("list", help="list persisted compare snapshots")
+    compare_list.add_argument("--runs-root", required=True)
+    compare_list.add_argument("--query", default="")
+    compare_list.add_argument("--sort", default="newest")
+    compare_list.add_argument("--archive-filter", choices=["active", "archived", "all"], default="active")
+    compare_list.add_argument("--pinned-filter", choices=["all", "pinned", "unpinned"], default="all")
+    compare_list.add_argument("--baseline-run-id", default="")
+    compare_list.add_argument("--candidate-run-id", default="")
+    compare_list.add_argument("--tag-filter", default="")
+    compare_list.add_argument("--date-from", default="")
+    compare_list.add_argument("--date-to", default="")
+    compare_list.add_argument("--page", type=int, default=1)
+    compare_list.add_argument("--page-size", type=int, default=20)
+    compare_list.add_argument("--format", choices=["json", "text"], default="json")
+
+    compare_show = compare_snapshots_sub.add_parser("show", help="show a persisted compare snapshot")
+    compare_show.add_argument("--runs-root", required=True)
+    compare_show.add_argument("--snapshot-id", required=True)
+    compare_show.add_argument("--format", choices=["json", "text"], default="json")
+
+    compare_import = compare_snapshots_sub.add_parser("import", help="import an exported compare snapshot JSON file")
+    compare_import.add_argument("--runs-root", required=True)
+    compare_import.add_argument("--file", required=True)
+    compare_import.add_argument("--display-name", default=None)
+    compare_import.add_argument("--pinned", default=None, type=_parse_cli_bool)
+    compare_import.add_argument("--archived", default=None, type=_parse_cli_bool)
+    compare_import.add_argument("--tags", default="")
+    compare_import.add_argument("--format", choices=["json", "text"], default="json")
+
+    compare_retention = compare_snapshots_sub.add_parser("retention", help="preview or apply compare snapshot retention")
+    compare_retention.add_argument("--runs-root", required=True)
+    compare_retention.add_argument("--keep-latest", type=int, default=None)
+    compare_retention.add_argument("--max-age-days", type=int, default=None)
+    compare_retention.add_argument("--include-archived", action="store_true")
+    compare_retention.add_argument("--apply", action="store_true", help="delete matching snapshots instead of dry-run preview")
+    compare_retention.add_argument("--format", choices=["json", "text"], default="json")
+
+    compare_update = compare_snapshots_sub.add_parser("update", help="update compare snapshot metadata")
+    compare_update.add_argument("--runs-root", required=True)
+    compare_update.add_argument("--snapshot-id", required=True)
+    compare_update.add_argument("--display-name", default=None)
+    compare_update.add_argument("--pinned", default=None, type=_parse_cli_bool)
+    compare_update.add_argument("--archived", default=None, type=_parse_cli_bool)
+    compare_update.add_argument("--tags", default=None)
+    compare_update.add_argument("--format", choices=["json", "text"], default="json")
+
+    compare_delete = compare_snapshots_sub.add_parser("delete", help="delete a persisted compare snapshot")
+    compare_delete.add_argument("--runs-root", required=True)
+    compare_delete.add_argument("--snapshot-id", required=True)
+    compare_delete.add_argument("--format", choices=["json", "text"], default="json")
+
     incident_export = sub.add_parser("incident-export", help="export autonomous incident packet for operator channels")
     incident_export.add_argument("--run-dir", required=True)
     incident_export.add_argument("--format", choices=list(SUPPORTED_EXPORT_FORMATS), required=True)
@@ -4645,6 +4700,214 @@ def _trust_summary(argv: list[str]) -> None:
     print(json_dumps(packet))
 
 
+def _compare_snapshot_tags_arg(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def _render_compare_snapshot_list_text(payload: dict[str, Any]) -> str:
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    rows = payload.get("snapshots") if isinstance(payload.get("snapshots"), list) else []
+    warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+    lines = [
+        "# Compare Snapshots",
+        f"- total: {meta.get('total', 0)}",
+        f"- page: {meta.get('page', 1)}/{meta.get('total_pages', 1)}",
+        f"- page_size: {meta.get('page_size', 0)}",
+        f"- sort: {meta.get('sort', 'newest')}",
+    ]
+    if rows:
+        lines.append("- snapshots:")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            labels: list[str] = []
+            if row.get("pinned"):
+                labels.append("pinned")
+            if row.get("archived"):
+                labels.append("archived")
+            integrity = row.get("integrity") if isinstance(row.get("integrity"), dict) else {}
+            integrity_status = str(integrity.get("status") or "unknown")
+            delta_summary = row.get("delta_summary") if isinstance(row.get("delta_summary"), dict) else {}
+            baseline = str(row.get("baseline_run_id") or "-")
+            candidate = str(row.get("candidate_run_id") or "-")
+            trust_delta = delta_summary.get("trust_score_delta")
+            trust_delta_text = f", trust_delta={trust_delta:+.2f}" if isinstance(trust_delta, (int, float)) else ""
+            label_text = f" [{', '.join(labels)}]" if labels else ""
+            lines.append(
+                f"  - {row.get('snapshot_id')}: {row.get('display_name') or '-'}"
+                f"{label_text} baseline={baseline} candidate={candidate} integrity={integrity_status}{trust_delta_text}"
+            )
+    else:
+        lines.append("- snapshots: -")
+    if warnings:
+        lines.append("- warnings:")
+        for warning in warnings:
+            lines.append(f"  - {warning}")
+    return "\n".join(lines)
+
+
+def _render_compare_snapshot_detail_text(payload: dict[str, Any]) -> str:
+    snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+    integrity = payload.get("integrity") if isinstance(payload.get("integrity"), dict) else {}
+    markdown = str(payload.get("markdown") or "").strip()
+    lines = [
+        "# Compare Snapshot",
+        f"- snapshot_id: {snapshot.get('snapshot_id') or '-'}",
+        f"- display_name: {snapshot.get('display_name') or '-'}",
+        f"- integrity: {integrity.get('status') or '-'}",
+        f"- baseline_run_id: {snapshot.get('baseline_run_id') or '-'}",
+        f"- candidate_run_id: {snapshot.get('candidate_run_id') or '-'}",
+    ]
+    if markdown:
+        lines.extend(["", markdown])
+    return "\n".join(lines)
+
+
+def _render_compare_snapshot_retention_text(payload: dict[str, Any]) -> str:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    matched = payload.get("matched") if isinstance(payload.get("matched"), list) else []
+    lines = [
+        "# Compare Snapshot Retention",
+        f"- dry_run: {bool(payload.get('dry_run', True))}",
+        f"- matched: {summary.get('matched', 0)}",
+        f"- deleted: {summary.get('deleted', 0)}",
+        f"- failed: {summary.get('failed', 0)}",
+    ]
+    if matched:
+        lines.append("- candidates:")
+        for row in matched:
+            if not isinstance(row, dict):
+                continue
+            reasons = ", ".join(str(item) for item in row.get("reasons", []) if item) or "-"
+            lines.append(f"  - {row.get('snapshot_id')}: {reasons}")
+    return "\n".join(lines)
+
+
+def _compare_snapshots(argv: list[str]) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(["compare-snapshots", *argv])
+
+    from .gui_mvp_server import (
+        _apply_compare_snapshot_retention,
+        _get_compare_snapshot,
+        _import_compare_snapshot,
+        _list_compare_snapshots,
+        _normalize_compare_snapshot_sort,
+        _parse_compare_snapshot_filter_datetime,
+        _parse_compare_snapshot_page_size,
+        _update_compare_snapshot_metadata,
+        _delete_compare_snapshot,
+    )
+
+    runs_root = Path(str(args.runs_root)).expanduser().resolve()
+
+    if args.compare_action == "list":
+        payload = _list_compare_snapshots(
+            runs_root,
+            query=str(args.query or ""),
+            sort=_normalize_compare_snapshot_sort(str(args.sort or "")),
+            archive_filter=str(args.archive_filter or "active"),
+            pinned_filter=str(args.pinned_filter or "all"),
+            baseline_run_id=str(args.baseline_run_id or ""),
+            candidate_run_id=str(args.candidate_run_id or ""),
+            tag_filter=str(args.tag_filter or ""),
+            date_from=_parse_compare_snapshot_filter_datetime(str(args.date_from or "")),
+            date_to=_parse_compare_snapshot_filter_datetime(str(args.date_to or "")),
+            page=max(1, int(args.page)),
+            page_size=_parse_compare_snapshot_page_size(str(args.page_size)),
+        )
+        if args.format == "text":
+            print(_render_compare_snapshot_list_text(payload))
+            return
+        print(json_dumps(payload))
+        return
+
+    if args.compare_action == "show":
+        payload, status = _get_compare_snapshot(runs_root, str(args.snapshot_id))
+        if status != HTTPStatus.OK:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            raise SystemExit(str(error.get("message") or "compare snapshot lookup failed"))
+        if args.format == "text":
+            print(_render_compare_snapshot_detail_text(payload))
+            return
+        print(json_dumps(payload))
+        return
+
+    if args.compare_action == "import":
+        raw_text = Path(str(args.file)).expanduser().read_text(encoding="utf-8")
+        file_payload = json.loads(raw_text)
+        request_payload: dict[str, Any] = dict(file_payload) if isinstance(file_payload, dict) else {"snapshot": file_payload}
+        if args.display_name is not None:
+            request_payload["display_name"] = args.display_name
+        if args.pinned is not None:
+            request_payload["pinned"] = bool(args.pinned)
+        if args.archived is not None:
+            request_payload["archived"] = bool(args.archived)
+        if args.tags:
+            request_payload["tags"] = _compare_snapshot_tags_arg(args.tags)
+        payload, status = _import_compare_snapshot(runs_root, request_payload)
+        if status != HTTPStatus.OK:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            raise SystemExit(str(error.get("message") or "compare snapshot import failed"))
+        if args.format == "text":
+            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+            print(f"imported compare snapshot: {snapshot.get('snapshot_id') or '-'} ({snapshot.get('display_name') or '-'})")
+            return
+        print(json_dumps(payload))
+        return
+
+    if args.compare_action == "retention":
+        payload, status = _apply_compare_snapshot_retention(
+            runs_root,
+            keep_latest=args.keep_latest,
+            max_age_days=args.max_age_days,
+            include_archived=bool(args.include_archived),
+            dry_run=(not bool(args.apply)),
+        )
+        if status != HTTPStatus.OK:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            raise SystemExit(str(error.get("message") or "compare snapshot retention failed"))
+        if args.format == "text":
+            print(_render_compare_snapshot_retention_text(payload))
+            return
+        print(json_dumps(payload))
+        return
+
+    if args.compare_action == "update":
+        payload, status = _update_compare_snapshot_metadata(
+            runs_root,
+            str(args.snapshot_id),
+            display_name=args.display_name,
+            pinned=args.pinned,
+            archived=args.archived,
+            tags=_compare_snapshot_tags_arg(args.tags),
+        )
+        if status != HTTPStatus.OK:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            raise SystemExit(str(error.get("message") or "compare snapshot update failed"))
+        if args.format == "text":
+            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+            print(f"updated compare snapshot: {snapshot.get('snapshot_id') or '-'}")
+            return
+        print(json_dumps(payload))
+        return
+
+    if args.compare_action == "delete":
+        payload, status = _delete_compare_snapshot(runs_root, str(args.snapshot_id))
+        if status != HTTPStatus.OK:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            raise SystemExit(str(error.get("message") or "compare snapshot delete failed"))
+        if args.format == "text":
+            print(f"deleted compare snapshot: {payload.get('snapshot_id') or '-'}")
+            return
+        print(json_dumps(payload))
+        return
+
+    raise SystemExit(f"unsupported compare snapshot action: {args.compare_action}")
+
+
 def _status(argv: list[str]) -> None:
     parser = _build_cli_parser()
     args = parser.parse_args(["status", *argv])
@@ -4778,7 +5041,7 @@ def _incident_replay(argv: list[str]) -> None:
 
 def cli(argv: list[str]) -> None:
     if not argv:
-        raise SystemExit("Usage: autodev autonomous <start|status|summary|triage-summary|trust-summary|incident-export|incident-send|ticket-draft|issue-export|incident-replay> ...")
+        raise SystemExit("Usage: autodev autonomous <start|status|summary|triage-summary|trust-summary|compare-snapshots|incident-export|incident-send|ticket-draft|issue-export|incident-replay> ...")
     action = argv[0]
     if action == "start":
         _start(argv[1:])
@@ -4794,6 +5057,9 @@ def cli(argv: list[str]) -> None:
         return
     if action == "trust-summary":
         _trust_summary(argv[1:])
+        return
+    if action == "compare-snapshots":
+        _compare_snapshots(argv[1:])
         return
     if action == "incident-export":
         _incident_export(argv[1:])
