@@ -46,6 +46,12 @@ from .json_utils import json_dumps
 from .llm_client import LLMClient, ModelEndpoint, ModelRouter
 from .loop import run_autodev_enterprise
 from .report import write_report
+from .trust_intelligence import (
+    TRUST_INTELLIGENCE_JSON,
+    build_trust_intelligence_packet,
+    persist_trust_intelligence_artifacts,
+    render_trust_intelligence_packet,
+)
 from .workspace import Workspace
 
 logger = logging.getLogger("autodev")
@@ -58,6 +64,7 @@ AUTONOMOUS_GATE_RESULTS_JSON = ".autodev/autonomous_gate_results.json"
 AUTONOMOUS_GATE_BASELINE_JSON = ".autodev/autonomous_gate_baseline.json"
 AUTONOMOUS_STRATEGY_TRACE_JSON = ".autodev/autonomous_strategy_trace.json"
 AUTONOMOUS_GUARD_DECISIONS_JSON = ".autodev/autonomous_guard_decisions.json"
+AUTONOMOUS_XAI_DELIVERY_PACKET_JSON = ".autodev/xai_delivery_packet.json"
 AUTONOMOUS_INCIDENT_SEND_AUDIT_JSONL = ".autodev/autonomous_incident_send_audit.jsonl"
 _AUTONOMOUS_GATE_BASELINE_HISTORY_LIMIT = 20
 _AUTONOMOUS_RESUME_DIAGNOSTIC_VERSION = "av2-008"
@@ -3326,6 +3333,10 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     triage_summary.add_argument("--run-dir", required=True)
     triage_summary.add_argument("--format", choices=["json", "text"], default="json")
 
+    trust_summary = sub.add_parser("trust-summary", help="print trust intelligence summary from artifacts")
+    trust_summary.add_argument("--run-dir", required=True)
+    trust_summary.add_argument("--format", choices=["json", "text"], default="json")
+
     incident_export = sub.add_parser("incident-export", help="export autonomous incident packet for operator channels")
     incident_export.add_argument("--run-dir", required=True)
     incident_export.add_argument("--format", choices=list(SUPPORTED_EXPORT_FORMATS), required=True)
@@ -3929,6 +3940,14 @@ def _start(argv: list[str]) -> None:
     run_metadata["autonomous_ticket_draft"] = ticket_draft_result
     _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata, ignore_keys=("run_completed_at",))
 
+    trust_summary = extract_autonomous_summary(run_out)
+    trust_packet = build_trust_intelligence_packet(run_out, summary=trust_summary)
+    trust_artifacts = persist_trust_intelligence_artifacts(run_out, trust_packet)
+    run_metadata["autonomous_trust_intelligence_path"] = TRUST_INTELLIGENCE_JSON
+    run_metadata["autonomous_xai_delivery_packet_path"] = AUTONOMOUS_XAI_DELIVERY_PACKET_JSON
+    run_metadata["autonomous_trust_artifacts"] = trust_artifacts
+    _write_json_if_changed(ws, ".autodev/run_metadata.json", run_metadata, ignore_keys=("run_completed_at",))
+
     write_report(ws.root, prd_struct, plan, last_validation, ok)
     _log_event(
         "autonomous.run_complete",
@@ -3980,6 +3999,8 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
     ticket_draft_md_path = artifacts_dir / "autonomous_ticket_draft.md"
     ticket_draft_json_path = artifacts_dir / "autonomous_ticket_draft.json"
     issue_export_path = artifacts_dir / "autonomous_issue_export.json"
+    trust_intelligence_path = artifacts_dir / "autonomous_trust_intelligence.json"
+    xai_delivery_path = artifacts_dir / "xai_delivery_packet.json"
 
     report_payload, report_error = _safe_load_json(report_path)
     gate_payload, gate_error = _safe_load_json(gate_path)
@@ -4003,6 +4024,8 @@ def extract_autonomous_summary(run_dir: str) -> dict[str, Any]:
         "ticket_draft_markdown": {"path": str(ticket_draft_md_path), "status": "ok" if ticket_draft_md_path.exists() else "missing"},
         "ticket_draft_json": {"path": str(ticket_draft_json_path), "status": "ok" if ticket_draft_json_error is None else ticket_draft_json_error},
         "issue_export": {"path": str(issue_export_path), "status": "ok" if issue_export_error is None else issue_export_error},
+        "trust_intelligence": {"path": str(trust_intelligence_path), "status": "ok" if trust_intelligence_path.exists() else "missing"},
+        "xai_delivery": {"path": str(xai_delivery_path), "status": "ok" if xai_delivery_path.exists() else "missing"},
     }
 
     for name, err in (
@@ -4611,6 +4634,17 @@ def _triage_summary(argv: list[str]) -> None:
     print(json_dumps(summary))
 
 
+def _trust_summary(argv: list[str]) -> None:
+    parser = _build_cli_parser()
+    args = parser.parse_args(["trust-summary", *argv])
+    summary = extract_autonomous_summary(args.run_dir)
+    packet = build_trust_intelligence_packet(args.run_dir, summary=summary)
+    if args.format == "text":
+        print(render_trust_intelligence_packet(packet, output_format="markdown"))
+        return
+    print(json_dumps(packet))
+
+
 def _status(argv: list[str]) -> None:
     parser = _build_cli_parser()
     args = parser.parse_args(["status", *argv])
@@ -4744,7 +4778,7 @@ def _incident_replay(argv: list[str]) -> None:
 
 def cli(argv: list[str]) -> None:
     if not argv:
-        raise SystemExit("Usage: autodev autonomous <start|status|summary|triage-summary|incident-export|incident-send|ticket-draft|issue-export|incident-replay> ...")
+        raise SystemExit("Usage: autodev autonomous <start|status|summary|triage-summary|trust-summary|incident-export|incident-send|ticket-draft|issue-export|incident-replay> ...")
     action = argv[0]
     if action == "start":
         _start(argv[1:])
@@ -4757,6 +4791,9 @@ def cli(argv: list[str]) -> None:
         return
     if action == "triage-summary":
         _triage_summary(argv[1:])
+        return
+    if action == "trust-summary":
+        _trust_summary(argv[1:])
         return
     if action == "incident-export":
         _incident_export(argv[1:])

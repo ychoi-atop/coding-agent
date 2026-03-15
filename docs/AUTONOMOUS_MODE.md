@@ -83,6 +83,18 @@ autodev autonomous triage-summary --run-dir ./generated_runs/<run_id> --format t
 This command emits the canonical summary fields shared with `/api/autonomous/quality-gate/latest`:
 `status`, `preflight_status`, `gate_counts`, `guard_decision`, `operator_guidance_top`.
 
+For a unified trust/XAI packet backed by runtime evidence, use:
+
+```bash
+autodev autonomous trust-summary --run-dir ./generated_runs/<run_id>
+# optional human-readable format
+autodev autonomous trust-summary --run-dir ./generated_runs/<run_id> --format text
+```
+
+This command combines summary, quality, guard, operator, and observability artifacts into one
+trust-intelligence view and mirrors the persisted `.autodev/autonomous_trust_intelligence.json`
+artifact.
+
 ### Incident export helper
 
 ```bash
@@ -271,6 +283,8 @@ Each autonomous run writes:
 - `.autodev/autonomous_ticket_draft.md` / `.autodev/autonomous_ticket_draft.json` — operator-ready issue/ticket draft artifacts
 - `.autodev/autonomous_incident_send.json` — incident send-attempt history (`latest` + attempt records per target)
 - `.autodev/autonomous_incident_send_audit.jsonl` — append-only delivery audit trail (timestamped entry per target attempt/event)
+- `.autodev/autonomous_trust_intelligence.json` / `.autodev/autonomous_trust_intelligence.md` — canonical trust packet derived from report/gate/guard/observability artifacts
+- `.autodev/xai_delivery_packet.json` / `.autodev/xai_delivery_packet.md` — delivery-oriented XAI packet derived from trust intelligence
 - `AUTONOMOUS_REPORT.md` — quick human summary (includes incident packet/send sections)
 - existing run artifacts (`report.json`, quality artifacts, checkpoints) are preserved
 

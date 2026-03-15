@@ -434,6 +434,13 @@ autodev autonomous summary --run-dir ./generated_runs/<run_dir>
 autodev autonomous summary --run-dir ./generated_runs/<run_dir> --format text
 ```
 
+Build a unified trust/XAI view from runtime artifacts:
+```bash
+autodev autonomous trust-summary --run-dir ./generated_runs/<run_dir>
+# optional human-readable format
+autodev autonomous trust-summary --run-dir ./generated_runs/<run_dir> --format text
+```
+
 Export autonomous incident packet for Slack/Markdown/email escalation:
 ```bash
 autodev autonomous incident-export --run-dir ./generated_runs/<run_dir> --format slack
@@ -469,6 +476,8 @@ Autonomous artifacts are written under the run directory:
 - `.autodev/autonomous_issue_export.json` (GitHub issue export attempts, payload previews, and live-result diagnostics)
 - `.autodev/autonomous_incident_send.json` (incident-send attempt history)
 - `.autodev/autonomous_incident_send_audit.jsonl` (append-only per-attempt delivery audit trail)
+- `.autodev/autonomous_trust_intelligence.json` / `.autodev/autonomous_trust_intelligence.md` (evidence-backed trust packet combining quality, guard, operator, and observability signals)
+- `.autodev/xai_delivery_packet.json` / `.autodev/xai_delivery_packet.md` (delivery-oriented XAI packet derived from the trust intelligence artifact)
 - `AUTONOMOUS_REPORT.md`
 - `.autodev/run_metadata.json` (includes optional `autonomous_quality_gate_policy` when configured)
 
