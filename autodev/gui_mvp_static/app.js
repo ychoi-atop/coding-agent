@@ -20,6 +20,8 @@ const state = {
   compareSource: '',
   compareManualSelection: false,
   compareTrustFocus: '',
+  compareTrustDiffSeverity: 'all',
+  compareTrustDiffIncludeNoise: false,
   compareSavedSnapshots: [],
   compareSelectedSnapshotId: '',
   compareSnapshotFilter: '',
@@ -2935,6 +2937,12 @@ function buildComparisonHighlights(payload) {
   return lines;
 }
 
+function trustDeltaTone(direction, severity) {
+  if (severity === 'high' || direction === 'regressing') return 'danger';
+  if (direction === 'improving') return 'ok';
+  return 'warning';
+}
+
 function buildCompareSnapshot(payload) {
   const generatedAt = new Date().toISOString();
   const trustDiffRows = buildTrustPacketDiffRows(payload?.left?.trust_packet, payload?.right?.trust_packet);
@@ -3277,12 +3285,30 @@ function renderCompareSnapshotOptions() {
       const snapshotId = String(row?.snapshot_id || '');
       const tags = Array.isArray(row?.tags) ? row.tags : [];
       const badges = [];
+      const deltaSummary = row?.delta_summary || {};
+      const scoreDelta = Number(deltaSummary?.trust_score_delta);
+      const summaryChips = [];
+      if (deltaSummary?.trust_status_transition) {
+        summaryChips.push({ label: deltaSummary.trust_status_transition, tone: 'warning' });
+      }
+      if (Number.isFinite(scoreDelta)) {
+        summaryChips.push({
+          label: `trust ${scoreDelta > 0 ? '+' : ''}${scoreDelta.toFixed(2)}`,
+          tone: trustDeltaTone(deltaSummary?.direction, deltaSummary?.severity),
+        });
+      }
+      if (typeof deltaSummary?.highlight_count === 'number') {
+        summaryChips.push({
+          label: `${deltaSummary.highlight_count} highlight${deltaSummary.highlight_count === 1 ? '' : 's'}`,
+          tone: 'warning',
+        });
+      }
       if (row?.archived) badges.push('Archived');
       if (!row?.integrity_ok) badges.push(`Integrity mismatch (${Array.isArray(row?.integrity_mismatches) ? row.integrity_mismatches.length : 0})`);
       if (Number(row?.duplicate_count || 0) > 1) {
         badges.push(row?.duplicate_of ? `Duplicate of ${row.duplicate_of}` : `Duplicate group ×${row.duplicate_count}`);
       }
-      article.className = `compare-saved-card ${snapshotId === state.compareSelectedSnapshotId ? 'is-selected' : ''} ${row?.archived ? 'is-archived' : ''}`.trim();
+      article.className = `compare-saved-card ${snapshotId === state.compareSelectedSnapshotId ? 'is-selected' : ''} ${row?.archived ? 'is-archived' : ''} ${deltaSummary?.direction === 'regressing' ? 'is-regressing' : ''} ${deltaSummary?.direction === 'improving' ? 'is-improving' : ''}`.trim();
       article.innerHTML = `
         <div class="compare-saved-header">
           <div>
@@ -3292,6 +3318,7 @@ function renderCompareSnapshotOptions() {
             </label>
             <div class="compare-saved-title">${row?.pinned ? 'PINNED • ' : ''}${escapeHtml(String(row?.display_name || `${row?.left_run_id || 'baseline'} vs ${row?.right_run_id || 'candidate'}`))}</div>
             <div class="compare-saved-meta">${escapeHtml(String(row?.left_run_id || 'baseline'))} vs ${escapeHtml(String(row?.right_run_id || 'candidate'))} • ${escapeHtml(String(row?.persisted_at || ''))}</div>
+            <div class="compare-saved-summary">${summaryChips.length ? summaryChips.map((item) => `<span class="compare-saved-summary-chip tone-${escapeHtml(item.tone || 'warning')}">${escapeHtml(String(item.label || ''))}</span>`).join('') : '<span class="muted">No trust delta summary.</span>'}</div>
             <div class="compare-saved-tags">${tags.length ? tags.map((tag) => `<span class="compare-saved-tag">${escapeHtml(String(tag))}</span>`).join('') : '<span class="muted">No tags</span>'}</div>
             <div class="compare-saved-flags">${badges.length ? badges.map((flag) => `<span class="compare-saved-flag">${escapeHtml(String(flag))}</span>`).join('') : '<span class="muted">No integrity or archive flags.</span>'}</div>
           </div>
@@ -3551,6 +3578,44 @@ function flattenTrustPacketDiffObject(value, prefix = '', rows = []) {
 }
 
 function buildTrustPacketDiffRows(leftPacket, rightPacket) {
+  function severityRank(severity) {
+    if (severity === 'high') return 3;
+    if (severity === 'medium') return 2;
+    return 1;
+  }
+
+  function classifyRow(path, left, right) {
+    const normalizedPath = String(path || '').toLowerCase();
+    const leftText = String(left || '');
+    const rightText = String(right || '');
+    const missingChanged = leftText === '<missing>' || rightText === '<missing>';
+    const noisy = normalizedPath.includes('warnings')
+      || normalizedPath.includes('event_count')
+      || normalizedPath.includes('llm_call_count')
+      || normalizedPath.includes('experiment_entry_count')
+      || normalizedPath.includes('generated_at');
+
+    let severity = 'low';
+    if (
+      missingChanged
+      || normalizedPath.includes('trust_signals.overall.status')
+      || normalizedPath.includes('requires_human_review')
+      || normalizedPath.includes('review_reasons')
+      || normalizedPath.includes('hard_blocked')
+    ) {
+      severity = 'high';
+    } else if (
+      normalizedPath.includes('trust_signals.overall.score')
+      || normalizedPath.includes('incident_severity')
+      || normalizedPath.includes('latest_quality.status')
+      || normalizedPath.includes('latest_quality.normalized_composite_score')
+    ) {
+      severity = 'medium';
+    }
+
+    return { severity, noisy, sortRank: severityRank(severity) };
+  }
+
   const leftRows = new Map(flattenTrustPacketDiffObject(summarizeTrustPacketForDiff(leftPacket)));
   const rightRows = new Map(flattenTrustPacketDiffObject(summarizeTrustPacketForDiff(rightPacket)));
   const keys = [...new Set([...leftRows.keys(), ...rightRows.keys()])].sort();
@@ -3560,17 +3625,37 @@ function buildTrustPacketDiffRows(leftPacket, rightPacket) {
       path,
       left: leftRows.has(path) ? leftRows.get(path) : '<missing>',
       right: rightRows.has(path) ? rightRows.get(path) : '<missing>',
+      ...classifyRow(
+        path,
+        leftRows.has(path) ? leftRows.get(path) : '<missing>',
+        rightRows.has(path) ? rightRows.get(path) : '<missing>',
+      ),
     }))
-    .filter((row) => row.left !== row.right);
+    .filter((row) => row.left !== row.right)
+    .sort((a, b) => {
+      const severityDelta = Number(b.sortRank || 0) - Number(a.sortRank || 0);
+      if (severityDelta !== 0) return severityDelta;
+      const noisyDelta = Number(Boolean(a.noisy)) - Number(Boolean(b.noisy));
+      if (noisyDelta !== 0) return noisyDelta;
+      return String(a.path || '').localeCompare(String(b.path || ''));
+    });
 }
 
 function renderCompareTrustPacketDiff(payload) {
   const panel = el('compareTrustDiffPanel');
   const emptyNode = el('compareTrustDiffEmpty');
   const metaNode = el('compareTrustDiffMeta');
+  const severitySelect = el('compareTrustDiffSeveritySelect');
+  const noiseToggle = el('compareTrustDiffNoiseToggle');
   if (!panel || !emptyNode || !metaNode) return;
 
   panel.innerHTML = '';
+  if (severitySelect && severitySelect.value !== state.compareTrustDiffSeverity) {
+    severitySelect.value = state.compareTrustDiffSeverity;
+  }
+  if (noiseToggle instanceof HTMLInputElement) {
+    noiseToggle.checked = Boolean(state.compareTrustDiffIncludeNoise);
+  }
 
   const leftPacket = payload?.left?.trust_packet;
   const rightPacket = payload?.right?.trust_packet;
@@ -3583,15 +3668,25 @@ function renderCompareTrustPacketDiff(payload) {
   }
 
   const rows = buildTrustPacketDiffRows(leftPacket, rightPacket);
-  if (!rows.length) {
+  const severityFilter = String(state.compareTrustDiffSeverity || 'all').toLowerCase();
+  const includeNoise = Boolean(state.compareTrustDiffIncludeNoise);
+  const visibleRows = rows.filter((row) => {
+    if (!includeNoise && row.noisy) return false;
+    if (severityFilter === 'high') return row.severity === 'high';
+    if (severityFilter === 'medium') return row.severity === 'high' || row.severity === 'medium';
+    return true;
+  });
+  if (!visibleRows.length) {
     panel.classList.add('hidden');
     emptyNode.classList.remove('hidden');
-    emptyNode.textContent = 'No structural trust packet differences detected in the operator-facing packet subset.';
-    metaNode.textContent = '0 changed trust packet fields';
+    emptyNode.textContent = rows.length
+      ? 'All changed trust packet fields are currently suppressed by the severity or noise filters.'
+      : 'No structural trust packet differences detected in the operator-facing packet subset.';
+    metaNode.textContent = rows.length ? `${rows.length} changed trust packet fields • 0 visible` : '0 changed trust packet fields';
     return;
   }
 
-  const limited = rows.slice(0, 32);
+  const limited = visibleRows.slice(0, 32);
   panel.innerHTML = `
     <div class="compare-trust-diff-head">
       <div>Field path</div>
@@ -3602,9 +3697,9 @@ function renderCompareTrustPacketDiff(payload) {
 
   limited.forEach((row) => {
     const node = document.createElement('div');
-    node.className = 'compare-trust-diff-row';
+    node.className = `compare-trust-diff-row severity-${escapeHtml(row.severity || 'low')}`;
     node.innerHTML = `
-      <div class="compare-trust-diff-path">${escapeHtml(row.path || '-')}</div>
+      <div class="compare-trust-diff-path">${escapeHtml(row.path || '-')} <span class="muted">(${escapeHtml(String(row.severity || 'low'))}${row.noisy ? ', noisy' : ''})</span></div>
       <div class="compare-trust-diff-value">
         <button type="button" class="compare-trust-diff-open" data-compare-trust-diff-side="left" data-compare-trust-diff-path="${escapeHtml(row.path || '')}">${escapeHtml(String(row.left))}</button>
       </div>
@@ -3617,9 +3712,9 @@ function renderCompareTrustPacketDiff(payload) {
 
   panel.classList.remove('hidden');
   emptyNode.classList.add('hidden');
-  metaNode.textContent = rows.length > limited.length
-    ? `${rows.length} changed trust packet fields • showing first ${limited.length}`
-    : `${rows.length} changed trust packet fields`;
+  metaNode.textContent = visibleRows.length > limited.length
+    ? `${rows.length} changed trust packet fields • ${visibleRows.length} visible • showing first ${limited.length}`
+    : `${rows.length} changed trust packet fields • ${visibleRows.length} visible`;
 }
 
 function renderCompareTrustDrilldown(payload) {
@@ -5105,6 +5200,8 @@ function initCompareControls() {
   const savedPageNextBtn = el('compareSavedPageNextBtn');
   const retentionPreviewBtn = el('compareRetentionPreviewBtn');
   const retentionApplyBtn = el('compareRetentionApplyBtn');
+  const trustDiffSeveritySelect = el('compareTrustDiffSeveritySelect');
+  const trustDiffNoiseToggle = el('compareTrustDiffNoiseToggle');
   const savedPanel = el('compareSavedPanel');
   const diffs = el('compareDiffs');
   const trustPanel = el('compareTrustPanel');
@@ -5437,6 +5534,20 @@ function initCompareControls() {
       } catch (err) {
         renderCompareSnapshotStatus(`Retention apply failed: ${err.message || 'request failed'}`);
       }
+    });
+  }
+
+  if (trustDiffSeveritySelect) {
+    trustDiffSeveritySelect.addEventListener('change', () => {
+      state.compareTrustDiffSeverity = trustDiffSeveritySelect.value || 'all';
+      renderCompareTrustPacketDiff(state.comparePayload);
+    });
+  }
+
+  if (trustDiffNoiseToggle instanceof HTMLInputElement) {
+    trustDiffNoiseToggle.addEventListener('change', () => {
+      state.compareTrustDiffIncludeNoise = trustDiffNoiseToggle.checked;
+      renderCompareTrustPacketDiff(state.comparePayload);
     });
   }
 

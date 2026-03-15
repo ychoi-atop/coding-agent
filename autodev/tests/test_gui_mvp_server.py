@@ -593,6 +593,7 @@ def test_compare_snapshot_persist_list_and_reload(gui_server):
     list_status, list_body = _get_json(f"{base_url}/api/runs/compare/snapshots")
     assert list_status == 200
     assert list_body["snapshots"][0]["snapshot_id"] == snapshot_id
+    assert list_body["snapshots"][0]["delta_summary"]["trust_score_delta"] == 0.54
     assert list_body["meta"]["audit_log_path"].endswith(".jsonl")
 
     detail_status, detail_body = _get_json(f"{base_url}/api/runs/compare/snapshots/{snapshot_id}")
@@ -1462,6 +1463,8 @@ def test_overview_scorecard_static_contract(gui_server):
     assert 'id="compareTrustDiffPanel"' in index_html
     assert 'id="compareTrustDiffEmpty"' in index_html
     assert 'id="compareTrustDiffMeta"' in index_html
+    assert 'id="compareTrustDiffSeveritySelect"' in index_html
+    assert 'id="compareTrustDiffNoiseToggle"' in index_html
     assert 'id="compareSaveSnapshotBtn"' in index_html
     assert 'id="compareExportJsonBtn"' in index_html
     assert 'id="compareExportMdBtn"' in index_html
@@ -1521,6 +1524,7 @@ def test_overview_scorecard_static_contract(gui_server):
     assert "function renderCompareTrustPacketDiff(payload)" in app_js
     assert "function buildTrustPacketDiffRows(leftPacket, rightPacket)" in app_js
     assert "function summarizeTrustPacketForDiff(packet)" in app_js
+    assert "function trustDeltaTone(direction, severity)" in app_js
     assert "function buildCompareSnapshot(payload)" in app_js
     assert "function renderCompareSnapshotMarkdown(snapshot)" in app_js
     assert "function compareSnapshotDownloadName(snapshot, format = 'json')" in app_js
@@ -1560,6 +1564,8 @@ def test_overview_scorecard_static_contract(gui_server):
     assert 'data-compare-open-trust-artifact="${escapeHtml(sideKey)}"' in app_js
     assert 'data-compare-trust-diff-side="left"' in app_js
     assert "Focused trust path:" in app_js
+    assert "compareTrustDiffSeverity" in app_js
+    assert "compareTrustDiffIncludeNoise" in app_js
     assert "/api/runs/compare/snapshots" in app_js
     assert "/api/runs/compare/snapshots/bulk" in app_js
     assert "/api/runs/compare/snapshots/import" in app_js

@@ -1549,6 +1549,44 @@ def _compare_snapshot_integrity_status(record: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _compare_snapshot_delta_summary(record: Mapping[str, Any]) -> dict[str, Any]:
+    compare_payload = record.get("compare_payload") if isinstance(record.get("compare_payload"), dict) else {}
+    snapshot = record.get("snapshot") if isinstance(record.get("snapshot"), dict) else {}
+    left = compare_payload.get("left") if isinstance(compare_payload.get("left"), dict) else {}
+    right = compare_payload.get("right") if isinstance(compare_payload.get("right"), dict) else {}
+    delta = compare_payload.get("delta") if isinstance(compare_payload.get("delta"), dict) else {}
+    left_trust = left.get("trust") if isinstance(left.get("trust"), dict) else {}
+    right_trust = right.get("trust") if isinstance(right.get("trust"), dict) else {}
+    highlights = snapshot.get("highlights") if isinstance(snapshot.get("highlights"), list) else []
+    trust_delta = float(delta.get("trust_score") or 0.0)
+    left_status = str(left_trust.get("status") or "")
+    right_status = str(right_trust.get("status") or "")
+    left_review = left_trust.get("requires_human_review")
+    right_review = right_trust.get("requires_human_review")
+    direction = "flat"
+    if trust_delta > 0.01:
+        direction = "improving"
+    elif trust_delta < -0.01:
+        direction = "regressing"
+    severity = "low"
+    if left_review is True and right_review is False and trust_delta > 0:
+        severity = "medium"
+    if left_review is False and right_review is True:
+        severity = "high"
+    if left_status == "high" and right_status == "low":
+        severity = "high"
+    elif left_status == "low" and right_status == "high":
+        severity = "medium"
+    return {
+        "trust_score_delta": round(trust_delta, 2),
+        "direction": direction,
+        "severity": severity,
+        "trust_status_transition": f"{left_status or '-'}->{right_status or '-'}",
+        "review_transition": f"{left_review!s}->{right_review!s}",
+        "highlight_count": len([item for item in highlights if item]),
+    }
+
+
 def _compare_snapshot_metadata(
     record: dict[str, Any],
     json_path: Path,
@@ -1567,6 +1605,7 @@ def _compare_snapshot_metadata(
     default_name = f"{left_run_id or 'baseline'} vs {right_run_id or 'candidate'}"
     integrity_status = integrity if integrity is not None else _compare_snapshot_integrity_status(record)
     archived = bool(record.get("archived", False))
+    delta_summary = _compare_snapshot_delta_summary(record)
     return {
         "snapshot_id": str(record.get("snapshot_id") or json_path.stem),
         "schema_version": str(record.get("schema_version") or COMPARE_SNAPSHOT_RECORD_VERSION),
@@ -1585,6 +1624,7 @@ def _compare_snapshot_metadata(
         "content_sha256": str((integrity_status.get("computed") or {}).get("content_sha256") or ""),
         "duplicate_of": duplicate_of,
         "duplicate_count": max(1, int(duplicate_count or 1)),
+        "delta_summary": delta_summary,
         "migration": migration or {"applied": False, "from_schema_version": str(record.get("schema_version") or ""), "notes": []},
         "json_path": str(json_path),
         "markdown_path": str(md_path) if md_path.exists() else "",

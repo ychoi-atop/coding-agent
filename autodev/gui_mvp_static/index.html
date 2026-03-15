@@ -330,6 +330,18 @@
 
           <section>
             <h3>Trust packet diff</h3>
+            <div class="compare-controls">
+              <select id="compareTrustDiffSeveritySelect" aria-label="Filter trust diff severity">
+                <option value="all">All severities</option>
+                <option value="high">High only</option>
+                <option value="medium">Medium and above</option>
+                <option value="low">Low and above</option>
+              </select>
+              <label class="inline-toggle" for="compareTrustDiffNoiseToggle">
+                <input id="compareTrustDiffNoiseToggle" type="checkbox" />
+                Include noisy fields
+              </label>
+            </div>
             <div id="compareTrustDiffMeta" class="muted"></div>
             <div id="compareTrustDiffPanel" class="compare-trust-diff hidden"></div>
             <div id="compareTrustDiffEmpty" class="empty">Trust packet field differences will appear here when both compared runs expose trust packets.</div>
