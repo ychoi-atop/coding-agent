@@ -44,6 +44,9 @@ const state = {
   trustPayload: null,
   trustError: '',
   trustLoading: false,
+  trustTrendPayload: null,
+  trustTrendError: '',
+  trustTrendLoading: false,
   lastProcessId: '',
   trendPayload: null,
   artifactViewerPath: '',
@@ -615,6 +618,43 @@ function buildMockTrustPayload() {
   };
 }
 
+function buildMockTrustTrendPayload() {
+  return {
+    empty: false,
+    message: '',
+    summary: {
+      runs_considered: 4,
+      avg_trust_score: 0.71,
+      review_required_count: 2,
+      status_counts: { high: 1, moderate: 2, low: 1, unknown: 0 },
+      trend_direction: 'improving',
+      score_delta: 0.21,
+      latest_run_id: 'mock-run-001',
+    },
+    runs: [
+      {
+        run_id: 'mock-run-001',
+        trust_status: 'moderate',
+        trust_score: 0.58,
+        requires_human_review: true,
+        latest_quality_status: 'advisory_warning',
+        incident_owner_team: 'Feature Engineering',
+        updated_at: new Date().toISOString(),
+      },
+      {
+        run_id: 'mock-run-002',
+        trust_status: 'high',
+        trust_score: 0.93,
+        requires_human_review: false,
+        latest_quality_status: 'passed',
+        incident_owner_team: 'Autonomy On-Call',
+        updated_at: new Date(Date.now() - 3600_000).toISOString(),
+      },
+    ],
+    warnings: [],
+  };
+}
+
 function buildMockDetailTrust(detail) {
   const runId = String(detail?.run_id || '');
   if (runId === 'mock-run-001') {
@@ -921,6 +961,114 @@ async function refreshTrustWidget({ silent = false } = {}) {
   } finally {
     state.trustLoading = false;
     renderTrustWidget();
+  }
+}
+
+function renderTrustTrendWidget() {
+  const cardsNode = el('trustTrendCards');
+  const listNode = el('trustTrendList');
+  const emptyNode = el('trustTrendEmpty');
+  const errorNode = el('trustTrendError');
+  const metaNode = el('trustTrendMeta');
+  if (!cardsNode || !listNode || !emptyNode || !errorNode || !metaNode) return;
+
+  cardsNode.innerHTML = '';
+  listNode.innerHTML = '';
+  errorNode.classList.add('hidden');
+  errorNode.textContent = '';
+
+  if (state.trustTrendLoading) {
+    cardsNode.classList.add('hidden');
+    listNode.classList.add('hidden');
+    emptyNode.classList.remove('hidden');
+    emptyNode.textContent = 'Loading trust trend history…';
+    metaNode.textContent = '';
+    return;
+  }
+
+  if (state.trustTrendError) {
+    cardsNode.classList.add('hidden');
+    listNode.classList.add('hidden');
+    emptyNode.classList.add('hidden');
+    errorNode.classList.remove('hidden');
+    errorNode.textContent = state.trustTrendError;
+    metaNode.textContent = '';
+    return;
+  }
+
+  const payload = state.trustTrendPayload;
+  const summary = payload?.summary || null;
+  if (!payload || payload.empty || !summary) {
+    cardsNode.classList.add('hidden');
+    listNode.classList.add('hidden');
+    emptyNode.classList.remove('hidden');
+    emptyNode.textContent = payload?.message || 'No trust trend data available yet.';
+    metaNode.textContent = '';
+    return;
+  }
+
+  const statusCounts = summary.status_counts || {};
+  const cardDefs = [
+    ['avg', 'Avg Trust', String(summary.avg_trust_score ?? '-')],
+    ['direction', 'Trend', String(summary.trend_direction || '-')],
+    ['delta', 'Score Delta', String(summary.score_delta ?? '-')],
+    ['review', 'Review Required', String(summary.review_required_count ?? 0)],
+    ['high', 'High Trust', String(statusCounts.high ?? 0)],
+    ['low', 'Low Trust', String(statusCounts.low ?? 0)],
+  ];
+
+  cardDefs.forEach(([key, label, value]) => {
+    const article = document.createElement('article');
+    let tone = 'neutral';
+    if (key === 'avg') tone = Number(summary.avg_trust_score || 0) >= 0.85 ? 'ok' : Number(summary.avg_trust_score || 0) >= 0.6 ? 'warning' : 'danger';
+    if (key === 'direction') tone = summary.trend_direction === 'improving' ? 'ok' : summary.trend_direction === 'regressing' ? 'danger' : 'neutral';
+    if (key === 'review') tone = Number(summary.review_required_count || 0) > 0 ? 'warning' : 'ok';
+    if (key === 'low') tone = Number(statusCounts.low || 0) > 0 ? 'danger' : 'ok';
+    article.className = `scorecard-card tone-${tone}`;
+    article.innerHTML = `
+      <div class="value">${escapeHtml(value)}</div>
+      <div class="label">${escapeHtml(label)}</div>
+    `;
+    cardsNode.appendChild(article);
+  });
+
+  const rows = Array.isArray(payload?.runs) ? payload.runs : [];
+  rows.slice(0, 5).forEach((row) => {
+    const article = document.createElement('article');
+    article.className = 'trust-trend-item';
+    article.innerHTML = `
+      <div class="title">${escapeHtml(String(row?.run_id || '-'))} • ${escapeHtml(String(row?.trust_status || 'unknown').toUpperCase())} • ${escapeHtml(String(row?.trust_score ?? '-'))}</div>
+      <div class="meta">quality=${escapeHtml(String(row?.latest_quality_status || '-'))} • owner=${escapeHtml(String(row?.incident_owner_team || '-'))} • updated=${escapeHtml(formatTime(row?.updated_at || row?.completed_at || ''))}</div>
+      <div class="body">${escapeHtml(row?.requires_human_review ? 'Human review required' : 'Autonomous approval-ready')}</div>
+    `;
+    listNode.appendChild(article);
+  });
+
+  metaNode.textContent = `${summary.runs_considered || 0} run(s) • latest=${summary.latest_run_id || '-'} • window=${payload?.window?.applied || '-'}`;
+  emptyNode.classList.add('hidden');
+  cardsNode.classList.remove('hidden');
+  listNode.classList.toggle('hidden', rows.length === 0);
+}
+
+async function refreshTrustTrendWidget({ silent = false } = {}) {
+  state.trustTrendLoading = true;
+  if (!silent) {
+    state.trustTrendError = '';
+  }
+  renderTrustTrendWidget();
+
+  try {
+    const payload = state.useMock
+      ? buildMockTrustTrendPayload()
+      : await fetchJson('/api/autonomous/trust/trends?window=10');
+    state.trustTrendPayload = payload;
+    state.trustTrendError = '';
+  } catch (err) {
+    state.trustTrendPayload = null;
+    state.trustTrendError = `Trust trends unavailable: ${err.message || 'request failed'}`;
+  } finally {
+    state.trustTrendLoading = false;
+    renderTrustTrendWidget();
   }
 }
 
@@ -4311,6 +4459,7 @@ async function loadRuns() {
     await refreshTrends({ silent: true });
     await refreshScorecardWidget({ silent: true });
     await refreshTrustWidget({ silent: true });
+    await refreshTrustTrendWidget({ silent: true });
     await loadProcesses({ silent: true });
     await refreshHealthBanner();
     state.runsLoading = false;
@@ -4342,6 +4491,7 @@ async function loadRuns() {
     await refreshTrends({ silent: true });
     await refreshScorecardWidget({ silent: true });
     await refreshTrustWidget({ silent: true });
+    await refreshTrustTrendWidget({ silent: true });
     await loadProcesses({ silent: true });
     await refreshHealthBanner();
     state.runsLoading = false;
@@ -4367,6 +4517,10 @@ async function loadRuns() {
     state.trustError = 'Latest trust intelligence unavailable: unable to load runs list.';
     state.trustLoading = false;
     renderTrustWidget();
+    state.trustTrendPayload = null;
+    state.trustTrendError = 'Trust trends unavailable: unable to load runs list.';
+    state.trustTrendLoading = false;
+    renderTrustTrendWidget();
     await loadProcesses({ silent: true });
     await refreshHealthBanner();
     setupPolling();

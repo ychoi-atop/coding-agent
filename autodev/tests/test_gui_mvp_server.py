@@ -30,6 +30,7 @@ from autodev.gui_mvp_server import (
     _resolve_request_role,
     _run_compare,
     _run_detail,
+    _trust_trends,
 )
 
 
@@ -1181,6 +1182,82 @@ def test_trust_latest_endpoint_returns_payload(gui_server):
     assert body["packet"]["operator_next"]["owner_team"] == "Autonomy On-Call"
 
 
+def test_trust_trends_summarize_recent_runs(tmp_path):
+    run_high = tmp_path / "run-trust-high"
+    _write_json(
+        run_high / ".autodev" / "autonomous_report.json",
+        {
+            "ok": True,
+            "run_id": "run-trust-high",
+            "profile": "enterprise",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "operator_guidance": {"top": [{"code": "ok", "actions": ["Approve closure."]}]},
+            "incident_routing": {"primary": {"owner_team": "Autonomy", "severity": "medium", "target_sla": "12h", "escalation_class": "manual_triage"}},
+            "gate_results": {"passed": True, "gates": {"composite_quality": {"status": "passed", "composite_score": 96.0, "hard_blocked": False, "components": {"tests": 100.0}}}, "fail_reasons": []},
+        },
+    )
+    _write_json(run_high / ".autodev" / "autonomous_gate_results.json", {"attempts": []})
+    _write_json(run_high / ".autodev" / "autonomous_strategy_trace.json", {"latest": {"name": "mixed"}})
+    _write_json(run_high / ".autodev" / "autonomous_guard_decisions.json", {"decisions": [], "latest": None})
+    _write_json(run_high / ".autodev" / "run_trace.json", {"events": [{"event_type": "quality_score.computed"}], "phases": [], "llm_metrics": {}})
+
+    run_low = tmp_path / "run-trust-low"
+    _write_json(
+        run_low / ".autodev" / "autonomous_report.json",
+        {
+            "ok": False,
+            "run_id": "run-trust-low",
+            "profile": "minimal",
+            "status": "failed",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "operator_guidance": {"top": [{"code": "tests_failed", "actions": ["Investigate failing tests."]}]},
+            "incident_routing": {"primary": {"owner_team": "Feature Eng", "severity": "high", "target_sla": "4h", "escalation_class": "manual_triage"}},
+            "guard_decision": {"decision": "stop", "reason_code": "tests_failed"},
+            "gate_results": {"passed": False, "gates": {"composite_quality": {"status": "failed", "composite_score": 41.0, "hard_blocked": True, "components": {"tests": 30.0}}}, "fail_reasons": [{"code": "tests_failed"}]},
+        },
+    )
+    _write_json(run_low / ".autodev" / "autonomous_gate_results.json", {"attempts": [{"iteration": 1, "gate_results": {"passed": False, "fail_reasons": [{"code": "tests_failed"}]}}]})
+    _write_json(run_low / ".autodev" / "autonomous_strategy_trace.json", {"latest": {"name": "mixed"}})
+    _write_json(run_low / ".autodev" / "autonomous_guard_decisions.json", {"decisions": [{"decision": "stop"}], "latest": {"decision": "stop"}})
+    _write_json(run_low / ".autodev" / "run_trace.json", {"events": [{"event_type": "quality_score.computed"}], "phases": [], "llm_metrics": {}})
+
+    payload = _trust_trends(tmp_path, window=10)
+    assert payload["empty"] is False
+    assert payload["summary"]["runs_considered"] == 2
+    assert payload["summary"]["status_counts"]["high"] == 1
+    assert payload["summary"]["status_counts"]["low"] == 1
+    assert payload["summary"]["review_required_count"] == 1
+    assert payload["summary"]["trend_direction"] in {"improving", "regressing", "flat"}
+    assert len(payload["runs"]) == 2
+
+
+def test_trust_trends_endpoint_returns_payload(gui_server):
+    base_url, runs_root = gui_server
+    run = runs_root / "run-trust-trend-endpoint"
+    _write_json(
+        run / ".autodev" / "autonomous_report.json",
+        {
+            "ok": True,
+            "run_id": "run-trust-trend-endpoint",
+            "profile": "enterprise",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "operator_guidance": {"top": [{"code": "ok", "actions": ["Approve closure."]}]},
+            "incident_routing": {"primary": {"owner_team": "Autonomy", "severity": "medium", "target_sla": "12h", "escalation_class": "manual_triage"}},
+            "gate_results": {"passed": True, "gates": {"composite_quality": {"status": "passed", "composite_score": 94.0, "hard_blocked": False, "components": {"tests": 100.0}}}, "fail_reasons": []},
+        },
+    )
+    _write_json(run / ".autodev" / "autonomous_gate_results.json", {"attempts": []})
+    _write_json(run / ".autodev" / "autonomous_strategy_trace.json", {"latest": {"name": "mixed"}})
+    _write_json(run / ".autodev" / "autonomous_guard_decisions.json", {"decisions": [], "latest": None})
+    _write_json(run / ".autodev" / "run_trace.json", {"events": [{"event_type": "quality_score.computed"}], "phases": [], "llm_metrics": {}})
+
+    status, body = _get_json(f"{base_url}/api/autonomous/trust/trends?window=5")
+    assert status == 200
+    assert body["empty"] is False
+    assert body["summary"]["runs_considered"] == 1
+    assert body["runs"][0]["run_id"] == "run-trust-trend-endpoint"
+
+
 def test_artifact_read_endpoint_returns_json_payload(gui_server):
     base_url, runs_root = gui_server
     run = runs_root / "run-artifact"
@@ -1269,6 +1346,10 @@ def test_overview_scorecard_static_contract(gui_server):
     assert 'id="trustActions"' in index_html
     assert 'id="trustEmpty"' in index_html
     assert 'id="trustError"' in index_html
+    assert 'id="trustTrendCards"' in index_html
+    assert 'id="trustTrendList"' in index_html
+    assert 'id="trustTrendEmpty"' in index_html
+    assert 'id="trustTrendError"' in index_html
     assert 'id="compareTrustPanel"' in index_html
     assert 'id="compareTrustEmpty"' in index_html
     assert 'id="compareTrustDiffPanel"' in index_html
@@ -1319,6 +1400,9 @@ def test_overview_scorecard_static_contract(gui_server):
     assert "function renderScorecardWidget()" in app_js
     assert "function refreshTrustWidget({ silent = false } = {})" in app_js
     assert "function renderTrustWidget()" in app_js
+    assert "function buildMockTrustTrendPayload()" in app_js
+    assert "function renderTrustTrendWidget()" in app_js
+    assert "function refreshTrustTrendWidget({ silent = false } = {})" in app_js
     assert "function renderCompareTrustDrilldown(payload)" in app_js
     assert "function renderCompareTrustPacketDiff(payload)" in app_js
     assert "function buildTrustPacketDiffRows(leftPacket, rightPacket)" in app_js
@@ -1366,6 +1450,7 @@ def test_overview_scorecard_static_contract(gui_server):
     assert "method: 'DELETE'" in app_js
     assert ".autodev/autonomous_trust_intelligence.json" in app_js
     assert ".autodev/autonomous_trust_intelligence.md" in app_js
+    assert "/api/autonomous/trust/trends" in app_js
     assert "/api/scorecard/latest" in app_js
     assert "/api/autonomous/trust/latest" in app_js
 

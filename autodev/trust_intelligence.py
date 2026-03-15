@@ -79,6 +79,22 @@ def _score_band(score: float) -> str:
     return "low"
 
 
+def _clamp_score(score: float) -> float:
+    return max(0.0, min(1.0, score))
+
+
+def _normalize_percent_like(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 1.0:
+        numeric = numeric / 100.0
+    return _clamp_score(numeric)
+
+
 def _artifact_ref(name: str, details: Mapping[str, Any]) -> dict[str, Any]:
     path = Path(str(details.get("path") or "")).expanduser()
     status = _safe_status(details.get("status"))
@@ -138,6 +154,7 @@ def _derive_latest_quality(
                     "source": "report.gate_results.composite_quality",
                     "status": _safe_status(composite.get("status")),
                     "composite_score": composite.get("composite_score"),
+                    "normalized_composite_score": _normalize_percent_like(composite.get("composite_score")),
                     "hard_blocked": bool(composite.get("hard_blocked")),
                     "components": _safe_dict(composite.get("components")),
                     "fail_reasons": [
@@ -154,6 +171,7 @@ def _derive_latest_quality(
             "source": "experiment_log.latest_entry",
             "status": _safe_status(decision.get("decision") or "unknown"),
             "composite_score": latest.get("composite_score"),
+            "normalized_composite_score": _normalize_percent_like(latest.get("composite_score")),
             "hard_blocked": bool(latest.get("hard_blocked")),
             "components": _safe_dict(latest.get("components")),
             "decision": decision,
@@ -166,6 +184,7 @@ def _derive_latest_quality(
         "source": "unavailable",
         "status": "unknown",
         "composite_score": None,
+        "normalized_composite_score": None,
         "hard_blocked": None,
         "components": {},
     }
@@ -226,10 +245,14 @@ def _derive_evidence_integrity_signal(
     status: str,
 ) -> dict[str, Any]:
     by_name = {str(item.get("name")): item for item in refs}
-    required = ["report", "gate_results", "guard_decisions", "run_trace"]
+    if status == "completed":
+        required = ["report", "run_trace"]
+        recommended = ["gate_results", "guard_decisions", "run_metadata", "experiment_log", "strategy_trace"]
+    else:
+        required = ["report", "gate_results", "guard_decisions", "run_trace"]
+        recommended = ["run_metadata", "experiment_log", "strategy_trace"]
     if status == "failed":
         required.extend(["incident_packet", "ticket_draft_markdown", "ticket_draft_json"])
-    recommended = ["run_metadata", "experiment_log", "strategy_trace"]
 
     missing_required = [
         name
@@ -242,11 +265,16 @@ def _derive_evidence_integrity_signal(
         if not _is_present_status(_safe_status(_safe_dict(by_name.get(name)).get("status")))
     ]
 
-    total = len(required) if required else 1
-    score = max(0.0, min(1.0, (total - len(missing_required)) / total))
+    required_total = len(required) if required else 1
+    required_coverage = max(0.0, min(1.0, (required_total - len(missing_required)) / required_total))
+    recommended_total = len(recommended) if recommended else 1
+    recommended_coverage = max(0.0, min(1.0, (recommended_total - len(missing_recommended)) / recommended_total))
+    score = _clamp_score((required_coverage * 0.8) + (recommended_coverage * 0.2))
     return {
         "score": round(score, 2),
         "status": _score_band(score),
+        "required_coverage": round(required_coverage, 2),
+        "recommended_coverage": round(recommended_coverage, 2),
         "missing_required": missing_required,
         "missing_recommended": missing_recommended,
     }
@@ -255,33 +283,80 @@ def _derive_evidence_integrity_signal(
 def _derive_validation_signal(
     summary: Mapping[str, Any],
     latest_quality: Mapping[str, Any],
+    experiment_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     reasons: list[str] = []
+    evidence: list[dict[str, Any]] = []
     status = str(summary.get("status") or "unknown")
     quality_status = str(latest_quality.get("status") or "unknown")
     hard_blocked = latest_quality.get("hard_blocked") is True
+    preflight_status = str(summary.get("preflight_status") or "unknown")
+    gate_counts = _safe_dict(summary.get("gate_counts"))
+    gate_total = max(0, int(gate_counts.get("total") or 0))
+    gate_pass = max(0, int(gate_counts.get("pass") or 0))
+    gate_pass_rate = (gate_pass / gate_total) if gate_total else 0.0
+    normalized_quality = _normalize_percent_like(latest_quality.get("normalized_composite_score"))
+    if normalized_quality is None:
+        normalized_quality = _normalize_percent_like(latest_quality.get("composite_score"))
+
+    accepted = 0
+    reverted = 0
+    for row in experiment_rows:
+        decision = _safe_dict(row.get("decision"))
+        decision_value = str(decision.get("decision") or "").strip().lower()
+        if decision_value == "accepted":
+            accepted += 1
+        elif decision_value == "reverted":
+            reverted += 1
+    decision_total = accepted + reverted
+    repeatability = accepted / decision_total if decision_total else (1.0 if status == "completed" else 0.5)
+
+    score = 0.0
+    quality_component = normalized_quality if normalized_quality is not None else 0.4
+    score += quality_component * 0.55
+    evidence.append({"factor": "quality_score", "weight": 0.55, "value": round(quality_component, 2)})
+
+    gate_component = gate_pass_rate if gate_total else (1.0 if status == "completed" else 0.4)
+    score += gate_component * 0.2
+    evidence.append({"factor": "gate_pass_rate", "weight": 0.2, "value": round(gate_component, 2)})
+
+    repeatability_component = repeatability
+    score += repeatability_component * 0.15
+    evidence.append({"factor": "repeatability", "weight": 0.15, "value": round(repeatability_component, 2)})
+
+    source_component = 1.0 if latest_quality.get("source") != "unavailable" else 0.35
+    score += source_component * 0.1
+    evidence.append({"factor": "quality_source_available", "weight": 0.1, "value": round(source_component, 2)})
 
     if latest_quality.get("source") == "unavailable":
-        score = 0.4
         reasons.append("latest_quality_signal_unavailable")
-    elif hard_blocked:
-        score = 0.2
+    if hard_blocked:
+        score -= 0.4
         reasons.append("quality_signal_hard_blocked")
-    elif status == "completed" and quality_status in {"passed", "accepted"}:
-        score = 1.0
-    elif status == "failed":
-        score = 0.25
+        evidence.append({"factor": "hard_block_penalty", "weight": -0.4, "value": 1.0})
+    if status == "failed":
+        score -= 0.25
         reasons.append("run_failed")
-    elif quality_status in {"advisory_warning", "neutral"}:
-        score = 0.6
+        evidence.append({"factor": "run_failed_penalty", "weight": -0.25, "value": 1.0})
+    if preflight_status not in {"passed", "ok"}:
+        score -= 0.15
+        reasons.append(f"preflight_{preflight_status}")
+        evidence.append({"factor": "preflight_penalty", "weight": -0.15, "value": 1.0})
+    if quality_status in {"advisory_warning", "neutral", "soft_fail"}:
+        score -= 0.1
         reasons.append("quality_signal_advisory")
-    else:
-        score = 0.75
+        evidence.append({"factor": "advisory_penalty", "weight": -0.1, "value": 1.0})
+
+    score = _clamp_score(score)
 
     return {
         "score": round(score, 2),
         "status": _score_band(score),
         "latest_quality_status": quality_status,
+        "quality_score_normalized": round(normalized_quality, 2) if normalized_quality is not None else None,
+        "gate_pass_rate": round(gate_pass_rate, 2) if gate_total else None,
+        "repeatability": round(repeatability, 2),
+        "evidence": evidence,
         "reasons": reasons,
     }
 
@@ -293,8 +368,14 @@ def _derive_policy_traceability_signal(summary: Mapping[str, Any]) -> dict[str, 
     guidance_top = _safe_list(operator_guidance.get("top"))
     routing_primary = _safe_dict(incident_routing.get("primary"))
     guard_decision = summary.get("guard_decision")
+    preflight_status = str(summary.get("preflight_status") or "unknown")
     reasons: list[str] = []
     parts: list[float] = []
+
+    preflight_present = preflight_status not in {"", "unknown", "missing"}
+    parts.append(1.0 if preflight_present else 0.0)
+    if not preflight_present:
+        reasons.append("preflight_status_missing")
 
     if status != "completed":
         guard_present = isinstance(guard_decision, dict)
@@ -340,6 +421,11 @@ def _derive_operator_readiness_signal(
     if not routing_ready:
         reasons.append("incident_owner_team_missing")
 
+    severity_ready = bool(str(summary.get("incident_severity") or "").strip() not in {"", "-", "unknown"})
+    parts.append(1.0 if severity_ready else 0.0)
+    if not severity_ready:
+        reasons.append("incident_severity_missing")
+
     if status == "failed":
         for name in ("incident_packet", "ticket_draft_markdown", "ticket_draft_json"):
             present = _is_present_status(
@@ -357,25 +443,80 @@ def _derive_operator_readiness_signal(
     }
 
 
-def _derive_overall_trust_signal(components: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    scores = [
-        float(_safe_dict(value).get("score") or 0.0)
-        for value in components.values()
-        if isinstance(value, Mapping)
-    ]
-    score = sum(scores) / len(scores) if scores else 0.0
-    status = _score_band(score)
-    requires_human_review = status != "high"
-    if any(
-        _safe_dict(value).get("status") == "low"
-        for value in components.values()
-        if isinstance(value, Mapping)
-    ):
-        requires_human_review = True
+def _derive_overall_trust_signal(
+    *,
+    summary: Mapping[str, Any],
+    components: Mapping[str, Mapping[str, Any]],
+    latest_quality: Mapping[str, Any],
+    runtime_observability: Mapping[str, Any],
+) -> dict[str, Any]:
+    weights = {
+        "evidence_integrity": 0.25,
+        "validation_signal": 0.4,
+        "policy_traceability": 0.15,
+        "operator_readiness": 0.2,
+    }
+    weighted_total = 0.0
+    breakdown: list[dict[str, Any]] = []
+    for key, weight in weights.items():
+        component = _safe_dict(components.get(key))
+        component_score = _clamp_score(float(component.get("score") or 0.0))
+        weighted_total += component_score * weight
+        breakdown.append(
+            {
+                "signal": key,
+                "weight": weight,
+                "score": round(component_score, 2),
+                "weighted_score": round(component_score * weight, 2),
+                "status": component.get("status"),
+            }
+        )
+
+    diagnostics = _safe_list(summary.get("diagnostics"))
+    warnings = _safe_list(summary.get("warnings"))
+    event_count = int(runtime_observability.get("event_count") or 0)
+    llm_call_count = int(runtime_observability.get("llm_call_count") or 0)
+    quality_status = str(latest_quality.get("status") or "unknown")
+    hard_blocked = latest_quality.get("hard_blocked") is True
+    status = str(summary.get("status") or "unknown")
+    preflight_status = str(summary.get("preflight_status") or "unknown")
+
+    review_reasons: list[str] = []
+    if preflight_status not in {"passed", "ok"}:
+        review_reasons.append(f"preflight_status={preflight_status}")
+    if hard_blocked:
+        review_reasons.append("quality_gate_hard_blocked")
+    if status == "failed":
+        review_reasons.append("run_status=failed")
+    evidence_integrity = _safe_dict(components.get("evidence_integrity"))
+    missing_required = _safe_list(evidence_integrity.get("missing_required"))
+    if missing_required:
+        review_reasons.append(f"missing_required_artifacts={','.join(str(item) for item in missing_required)}")
+    if diagnostics and status != "completed":
+        review_reasons.append(f"diagnostics_present={len(diagnostics)}")
+    if warnings and status != "completed":
+        review_reasons.append(f"warnings_present={len(warnings)}")
+    if event_count <= 0 and llm_call_count > 0:
+        review_reasons.append("run_trace_events_missing")
+    if quality_status not in {"passed", "accepted"}:
+        review_reasons.append(f"latest_quality_status={quality_status}")
+
+    score = _clamp_score(weighted_total)
+    if diagnostics and status != "completed":
+        score = _clamp_score(score - min(0.15, len(diagnostics) * 0.03))
+    if warnings and status != "completed":
+        score = _clamp_score(score - min(0.1, len(warnings) * 0.02))
+    status_band = _score_band(score)
+    requires_human_review = bool(review_reasons) or score < 0.85 or status_band != "high"
+
+    explanation = "Autonomous approval-ready." if not requires_human_review else "Human review required because evidence or policy signals remain unresolved."
     return {
         "score": round(score, 2),
-        "status": status,
+        "status": status_band,
         "requires_human_review": requires_human_review,
+        "review_reasons": review_reasons,
+        "explanation": explanation,
+        "breakdown": breakdown,
     }
 
 
@@ -403,16 +544,20 @@ def build_trust_intelligence_packet(
         artifact_refs,
         str(summary.get("status") or "unknown"),
     )
-    validation_signal = _derive_validation_signal(summary, latest_quality)
+    validation_signal = _derive_validation_signal(summary, latest_quality, experiment_rows)
     policy_traceability = _derive_policy_traceability_signal(summary)
     operator_readiness = _derive_operator_readiness_signal(summary, artifact_refs)
+    component_signals = {
+        "evidence_integrity": evidence_integrity,
+        "validation_signal": validation_signal,
+        "policy_traceability": policy_traceability,
+        "operator_readiness": operator_readiness,
+    }
     overall = _derive_overall_trust_signal(
-        {
-            "evidence_integrity": evidence_integrity,
-            "validation_signal": validation_signal,
-            "policy_traceability": policy_traceability,
-            "operator_readiness": operator_readiness,
-        }
+        summary=summary,
+        components=component_signals,
+        latest_quality=latest_quality,
+        runtime_observability=runtime_observability,
     )
 
     operator_guidance = _safe_dict(summary.get("operator_guidance"))
@@ -465,6 +610,7 @@ def build_trust_intelligence_packet(
             "severity": primary_routing.get("severity") or "-",
             "target_sla": primary_routing.get("target_sla") or "-",
             "escalation_class": primary_routing.get("escalation_class") or "-",
+            "review_reasons": _safe_list(overall.get("review_reasons")),
             "top_actions": [
                 {
                     "code": item.get("code"),
@@ -560,6 +706,8 @@ def build_trust_summary(packet: Mapping[str, Any]) -> dict[str, Any]:
         "trust_status": overall.get("status"),
         "trust_score": overall.get("score"),
         "requires_human_review": overall.get("requires_human_review"),
+        "human_review_reasons": _safe_list(overall.get("review_reasons")),
+        "trust_explanation": overall.get("explanation"),
         "latest_quality_status": latest_quality.get("status"),
         "latest_quality_score": latest_quality.get("composite_score"),
         "incident_owner_team": operator_next.get("owner_team"),
@@ -593,6 +741,7 @@ def render_trust_intelligence_packet(
         f"- trust_status: {overall.get('status', 'unknown')}",
         f"- trust_score: {overall.get('score', 0)}",
         f"- requires_human_review: {overall.get('requires_human_review', True)}",
+        f"- trust_explanation: {overall.get('explanation', '-')}",
         f"- latest_quality_source: {latest_quality.get('source', 'unavailable')}",
         f"- latest_quality_status: {latest_quality.get('status', 'unknown')}",
         f"- latest_quality_score: {latest_quality.get('composite_score', '-')}",
@@ -643,6 +792,14 @@ def render_trust_intelligence_packet(
             )
     else:
         lines.append("- top_actions: -")
+
+    review_reasons = [str(item) for item in _safe_list(overall.get("review_reasons")) if item]
+    if review_reasons:
+        lines.append("- human_review_reasons:")
+        for item in review_reasons:
+            lines.append(f"  - {item}")
+    else:
+        lines.append("- human_review_reasons: -")
 
     return "\n".join(lines)
 

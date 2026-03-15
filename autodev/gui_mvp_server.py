@@ -937,6 +937,116 @@ def _latest_trust_snapshot(runs_root: Path) -> dict[str, Any]:
     }
 
 
+def _trust_trends(runs_root: Path, window: int) -> dict[str, Any]:
+    trend_window = max(1, min(int(window), MAX_TREND_WINDOW))
+    if not runs_root.exists() or not runs_root.is_dir():
+        return {
+            "window": {"requested": int(window), "applied": trend_window},
+            "empty": True,
+            "message": "No runs root found.",
+            "summary": {
+                "runs_considered": 0,
+                "avg_trust_score": 0.0,
+                "review_required_count": 0,
+                "status_counts": {"high": 0, "moderate": 0, "low": 0, "unknown": 0},
+                "trend_direction": "flat",
+                "score_delta": 0.0,
+            },
+            "runs": [],
+            "warnings": [],
+        }
+
+    run_dirs = sorted((p for p in runs_root.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
+    windowed = run_dirs[:trend_window]
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    status_counts = {"high": 0, "moderate": 0, "low": 0, "unknown": 0}
+    score_total = 0.0
+    review_required_count = 0
+
+    for run_dir in windowed:
+        try:
+            snapshot = extract_autonomous_summary(str(run_dir))
+            packet = build_trust_intelligence_packet(run_dir, summary=snapshot)
+            summary = build_trust_summary(packet)
+        except Exception as exc:
+            warnings.append(f"{run_dir.name}: {exc}")
+            continue
+
+        trust_status = str(summary.get("trust_status") or "unknown").lower()
+        if trust_status not in status_counts:
+            trust_status = "unknown"
+        status_counts[trust_status] += 1
+        trust_score = float(summary.get("trust_score") or 0.0)
+        score_total += trust_score
+        if summary.get("requires_human_review") is True:
+            review_required_count += 1
+
+        latest_run = snapshot.get("latest_run") if isinstance(snapshot.get("latest_run"), dict) else {}
+        rows.append(
+            {
+                "run_id": str(latest_run.get("run_id") or run_dir.name),
+                "path": str(run_dir),
+                "completed_at": latest_run.get("completed_at"),
+                "updated_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+                "profile": latest_run.get("profile"),
+                "status": summary.get("status"),
+                "trust_status": trust_status,
+                "trust_score": round(trust_score, 2),
+                "requires_human_review": bool(summary.get("requires_human_review")),
+                "human_review_reasons": summary.get("human_review_reasons") if isinstance(summary.get("human_review_reasons"), list) else [],
+                "latest_quality_status": summary.get("latest_quality_status"),
+                "latest_quality_score": summary.get("latest_quality_score"),
+                "incident_owner_team": summary.get("incident_owner_team"),
+                "incident_severity": summary.get("incident_severity"),
+            }
+        )
+
+    if not rows:
+        return {
+            "window": {"requested": int(window), "applied": trend_window},
+            "empty": True,
+            "message": "No trust trend data available yet.",
+            "summary": {
+                "runs_considered": 0,
+                "avg_trust_score": 0.0,
+                "review_required_count": 0,
+                "status_counts": status_counts,
+                "trend_direction": "flat",
+                "score_delta": 0.0,
+            },
+            "runs": [],
+            "warnings": warnings,
+        }
+
+    newest_score = float(rows[0].get("trust_score") or 0.0)
+    oldest_score = float(rows[-1].get("trust_score") or 0.0)
+    score_delta = round(newest_score - oldest_score, 2)
+    if score_delta > 0.05:
+        trend_direction = "improving"
+    elif score_delta < -0.05:
+        trend_direction = "regressing"
+    else:
+        trend_direction = "flat"
+
+    return {
+        "window": {"requested": int(window), "applied": trend_window},
+        "empty": False,
+        "message": "",
+        "summary": {
+            "runs_considered": len(rows),
+            "avg_trust_score": round(score_total / len(rows), 2),
+            "review_required_count": review_required_count,
+            "status_counts": status_counts,
+            "trend_direction": trend_direction,
+            "score_delta": score_delta,
+            "latest_run_id": rows[0].get("run_id"),
+        },
+        "runs": rows,
+        "warnings": warnings,
+    }
+
+
 def _read_experiment_log(run_dir: Path, *, task_id: str | None = None) -> dict[str, Any]:
     """Read and parse experiment log JSONL from a run directory."""
     log_path = run_dir / ".autodev" / "experiment_log.jsonl"
@@ -2017,6 +2127,12 @@ class GuiRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/autonomous/trust/latest":
             self._json_response(_latest_trust_snapshot(self.config.runs_root))
+            return
+
+        if path == "/api/autonomous/trust/trends":
+            query = parse_qs(parsed.query)
+            window = _parse_trend_window(str((query.get("window") or [""])[0]))
+            self._json_response(_trust_trends(self.config.runs_root, window))
             return
 
         if path == "/api/runs":

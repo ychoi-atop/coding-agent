@@ -167,6 +167,124 @@ def _seed_completed_run(run_dir: Path) -> None:
     )
 
 
+def _seed_failed_review_run(run_dir: Path) -> None:
+    artifacts = run_dir / ".autodev"
+    _write_json(
+        artifacts / "autonomous_report.json",
+        {
+            "schema_version": "av3-002-v1",
+            "ok": False,
+            "run_id": "run-failed",
+            "request_id": "req-failed",
+            "profile": "enterprise",
+            "completed_at": "2026-03-15T00:00:00Z",
+            "status": "failed",
+            "preflight": {"status": "passed", "reason_codes": []},
+            "guard_decision": {"decision": "stop", "reason_code": "quality_gate_failed"},
+            "operator_guidance": {
+                "top": [
+                    {
+                        "code": "quality_gate_failed",
+                        "actions": ["Review failing validators and incident packet before retry."],
+                    }
+                ]
+            },
+            "incident_routing": {
+                "primary": {
+                    "owner_team": "Autonomy On-Call",
+                    "severity": "high",
+                    "target_sla": "1h",
+                    "escalation_class": "manual_triage",
+                }
+            },
+            "gate_results": {
+                "passed": False,
+                "gates": {
+                    "composite_quality": {
+                        "status": "failed",
+                        "composite_score": 42.0,
+                        "hard_blocked": True,
+                        "components": {
+                            "tests": 30.0,
+                            "lint": 40.0,
+                        },
+                    }
+                },
+                "fail_reasons": [{"code": "tests_failed"}],
+            },
+            "attempts": [],
+        },
+    )
+    _write_json(
+        artifacts / "autonomous_gate_results.json",
+        {
+            "attempts": [
+                {
+                    "iteration": 1,
+                    "gate_results": {
+                        "passed": False,
+                        "gates": {
+                            "composite_quality": {
+                                "status": "failed",
+                                "composite_score": 42.0,
+                                "hard_blocked": True,
+                                "components": {"tests": 30.0},
+                            }
+                        },
+                        "fail_reasons": [{"code": "tests_failed"}],
+                    },
+                }
+            ]
+        },
+    )
+    _write_json(
+        artifacts / "autonomous_guard_decisions.json",
+        {
+            "schema_version": "av3-002-v1",
+            "decisions": [{"decision": "stop", "reason_code": "quality_gate_failed"}],
+            "latest": {"decision": "stop", "reason_code": "quality_gate_failed"},
+        },
+    )
+    _write_json(
+        artifacts / "run_trace.json",
+        {
+            "run_id": "run-failed",
+            "request_id": "req-failed",
+            "profile": "enterprise",
+            "events": [{"event_type": "quality_score.computed"}],
+            "phases": [{"phase": "final_validation", "duration_ms": 2500}],
+            "llm_metrics": {
+                "validator": {
+                    "call_count": 1,
+                    "retry_count": 0,
+                }
+            },
+        },
+    )
+    _write_json(
+        artifacts / "run_metadata.json",
+        {
+            "result_ok": False,
+            "llm_usage": {"total_calls": 1},
+        },
+    )
+    _write_jsonl(
+        artifacts / "experiment_log.jsonl",
+        [
+            {
+                "task_id": "task-1",
+                "iteration": 1,
+                "attempt": 1,
+                "composite_score": 42.0,
+                "hard_blocked": True,
+                "decision": {"decision": "reverted", "reason_code": "quality_gate_failed"},
+                "components": {"tests": 30.0},
+                "validators_failed": ["pytest"],
+            }
+        ],
+    )
+
+
 def test_build_trust_intelligence_packet_from_runtime_artifacts(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-trust"
     _seed_completed_run(run_dir)
@@ -201,6 +319,24 @@ def test_persist_trust_intelligence_artifacts_writes_trust_and_xai_packets(tmp_p
     xai_payload = json.loads(xai_json.read_text(encoding="utf-8"))
     assert trust_payload["schema_version"] == "av3-trust-v1"
     assert xai_payload["schema_version"] == "av3-xai-v1"
+
+
+def test_trust_packet_includes_calibrated_review_reasons_for_failed_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-failed"
+    _seed_failed_review_run(run_dir)
+
+    summary = autonomous_mode.extract_autonomous_summary(str(run_dir))
+    packet = build_trust_intelligence_packet(run_dir, summary=summary)
+    overall = packet["trust_signals"]["overall"]
+    validation_signal = packet["trust_signals"]["validation_signal"]
+
+    assert overall["status"] == "low"
+    assert overall["requires_human_review"] is True
+    assert "quality_gate_hard_blocked" in overall["review_reasons"]
+    assert "run_status=failed" in overall["review_reasons"]
+    assert validation_signal["quality_score_normalized"] == 0.42
+    assert validation_signal["gate_pass_rate"] == 0.0
+    assert packet["operator_next"]["review_reasons"] == overall["review_reasons"]
 
 
 def test_trust_summary_cli_outputs_json_and_text(tmp_path: Path, capsys) -> None:
