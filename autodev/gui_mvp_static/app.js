@@ -2583,6 +2583,156 @@ function buildCompareTrustInspectButtons() {
   ].join('');
 }
 
+function summarizeTrustPacketForDiff(packet) {
+  if (!packet || typeof packet !== 'object') return {};
+  const summarySnapshot = packet.summary_snapshot && typeof packet.summary_snapshot === 'object'
+    ? packet.summary_snapshot
+    : {};
+  const decisionTrace = packet.decision_trace && typeof packet.decision_trace === 'object'
+    ? packet.decision_trace
+    : {};
+  const provenance = packet.provenance && typeof packet.provenance === 'object'
+    ? packet.provenance
+    : {};
+  return {
+    schema_version: packet.schema_version,
+    mode: packet.mode,
+    status: packet.status,
+    summary_snapshot: {
+      preflight_status: summarySnapshot.preflight_status,
+      gate_counts: summarySnapshot.gate_counts,
+      dominant_fail_codes: summarySnapshot.dominant_fail_codes,
+      guard_decision: summarySnapshot.guard_decision,
+      incident_owner_team: summarySnapshot.incident_owner_team,
+      incident_severity: summarySnapshot.incident_severity,
+      incident_target_sla: summarySnapshot.incident_target_sla,
+      incident_escalation_class: summarySnapshot.incident_escalation_class,
+      warnings: summarySnapshot.warnings,
+    },
+    trust_signals: packet.trust_signals || {},
+    latest_quality: packet.latest_quality || {},
+    runtime_observability: packet.runtime_observability || {},
+    decision_trace: {
+      latest_strategy: decisionTrace.latest_strategy,
+      guard_decision: decisionTrace.guard_decision,
+      dominant_fail_codes: decisionTrace.dominant_fail_codes,
+      incident_routing_primary: decisionTrace.incident_routing_primary,
+    },
+    operator_next: packet.operator_next || {},
+    provenance: {
+      run_trace_available: provenance.run_trace_available,
+      experiment_log_available: provenance.experiment_log_available,
+    },
+    warnings: packet.warnings || [],
+  };
+}
+
+function stringifyTrustDiffValue(value) {
+  if (value === undefined) return '<missing>';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
+function flattenTrustPacketDiffObject(value, prefix = '', rows = []) {
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      rows.push([prefix, '[]']);
+      return rows;
+    }
+    value.forEach((item, index) => {
+      const path = `${prefix}[${index}]`;
+      flattenTrustPacketDiffObject(item, path, rows);
+    });
+    return rows;
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (!entries.length) {
+      rows.push([prefix, '{}']);
+      return rows;
+    }
+    entries.forEach(([key, nested]) => {
+      const path = prefix ? `${prefix}.${key}` : key;
+      flattenTrustPacketDiffObject(nested, path, rows);
+    });
+    return rows;
+  }
+
+  rows.push([prefix, stringifyTrustDiffValue(value)]);
+  return rows;
+}
+
+function buildTrustPacketDiffRows(leftPacket, rightPacket) {
+  const leftRows = new Map(flattenTrustPacketDiffObject(summarizeTrustPacketForDiff(leftPacket)));
+  const rightRows = new Map(flattenTrustPacketDiffObject(summarizeTrustPacketForDiff(rightPacket)));
+  const keys = [...new Set([...leftRows.keys(), ...rightRows.keys()])].sort();
+
+  return keys
+    .map((path) => ({
+      path,
+      left: leftRows.has(path) ? leftRows.get(path) : '<missing>',
+      right: rightRows.has(path) ? rightRows.get(path) : '<missing>',
+    }))
+    .filter((row) => row.left !== row.right);
+}
+
+function renderCompareTrustPacketDiff(payload) {
+  const panel = el('compareTrustDiffPanel');
+  const emptyNode = el('compareTrustDiffEmpty');
+  const metaNode = el('compareTrustDiffMeta');
+  if (!panel || !emptyNode || !metaNode) return;
+
+  panel.innerHTML = '';
+
+  const leftPacket = payload?.left?.trust_packet;
+  const rightPacket = payload?.right?.trust_packet;
+  if (!leftPacket || !rightPacket) {
+    panel.classList.add('hidden');
+    emptyNode.classList.remove('hidden');
+    emptyNode.textContent = 'Trust packet field differences will appear here when both compared runs expose trust packets.';
+    metaNode.textContent = '';
+    return;
+  }
+
+  const rows = buildTrustPacketDiffRows(leftPacket, rightPacket);
+  if (!rows.length) {
+    panel.classList.add('hidden');
+    emptyNode.classList.remove('hidden');
+    emptyNode.textContent = 'No structural trust packet differences detected in the operator-facing packet subset.';
+    metaNode.textContent = '0 changed trust packet fields';
+    return;
+  }
+
+  const limited = rows.slice(0, 32);
+  panel.innerHTML = `
+    <div class="compare-trust-diff-head">
+      <div>Field path</div>
+      <div>Baseline</div>
+      <div>Candidate</div>
+    </div>
+  `;
+
+  limited.forEach((row) => {
+    const node = document.createElement('div');
+    node.className = 'compare-trust-diff-row';
+    node.innerHTML = `
+      <div class="compare-trust-diff-path">${escapeHtml(row.path || '-')}</div>
+      <div class="compare-trust-diff-value">${escapeHtml(String(row.left))}</div>
+      <div class="compare-trust-diff-value">${escapeHtml(String(row.right))}</div>
+    `;
+    panel.appendChild(node);
+  });
+
+  panel.classList.remove('hidden');
+  emptyNode.classList.add('hidden');
+  metaNode.textContent = rows.length > limited.length
+    ? `${rows.length} changed trust packet fields • showing first ${limited.length}`
+    : `${rows.length} changed trust packet fields`;
+}
+
 function renderCompareTrustDrilldown(payload) {
   const panel = el('compareTrustPanel');
   const emptyNode = el('compareTrustEmpty');
@@ -2594,6 +2744,7 @@ function renderCompareTrustDrilldown(payload) {
     panel.classList.add('hidden');
     emptyNode.classList.remove('hidden');
     emptyNode.textContent = 'Click a trust difference to inspect trust packets and operator actions for either run.';
+    renderCompareTrustPacketDiff(null);
     return;
   }
 
@@ -2640,6 +2791,8 @@ function renderCompareTrustDrilldown(payload) {
       </div>
       <div class="compare-trust-controls">
         <button type="button" data-compare-focus="${escapeHtml(sideKey)}">Focus ${escapeHtml(sideLabel.toLowerCase())}</button>
+        <button type="button" data-compare-open-trust-artifact="${escapeHtml(sideKey)}" data-compare-open-trust-format="json">Open packet JSON</button>
+        <button type="button" data-compare-open-trust-artifact="${escapeHtml(sideKey)}" data-compare-open-trust-format="markdown">Open packet Markdown</button>
       </div>
     `;
 
@@ -2671,6 +2824,7 @@ function renderCompareTrustDrilldown(payload) {
 
   panel.classList.remove('hidden');
   emptyNode.classList.add('hidden');
+  renderCompareTrustPacketDiff(payload);
 }
 
 function setCompareTrustFocus(sideKey, { scroll = false } = {}) {
@@ -2688,6 +2842,20 @@ async function openCompareRun(sideKey) {
   if (!runId) return;
   await selectRun(runId);
   activateTab('overview');
+}
+
+async function openCompareTrustArtifact(sideKey, format = 'json') {
+  const runId = state.comparePayload?.[sideKey]?.run_id;
+  if (!runId) return;
+  const normalizedFormat = String(format || 'json').toLowerCase() === 'markdown' ? 'markdown' : 'json';
+  const artifactPath = normalizedFormat === 'markdown'
+    ? '.autodev/autonomous_trust_intelligence.md'
+    : '.autodev/autonomous_trust_intelligence.json';
+  await selectRun(runId);
+  await openArtifactInViewer(artifactPath, {
+    source: `compare-trust-${sideKey}-${normalizedFormat}`,
+    autoFocus: true,
+  });
 }
 
 function renderComparison(payload, { source = state.compareSource, error = '' } = {}) {
@@ -4010,6 +4178,12 @@ function initCompareControls() {
       const openSide = target.getAttribute('data-compare-open-run') || '';
       if (openSide) {
         await openCompareRun(openSide);
+        return;
+      }
+      const artifactSide = target.getAttribute('data-compare-open-trust-artifact') || '';
+      if (artifactSide) {
+        const format = target.getAttribute('data-compare-open-trust-format') || 'json';
+        await openCompareTrustArtifact(artifactSide, format);
       }
     });
   }
